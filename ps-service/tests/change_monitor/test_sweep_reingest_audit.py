@@ -17,7 +17,7 @@ from api._fakes import (
     build_fake_change_check_dependencies,
     build_fake_pipeline_dependencies,
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from change_monitor._fakes import FakeAdapter, FakeQueryResult
 from change_monitor.test_trigger import (
@@ -47,6 +47,7 @@ _CONFIG = ServiceConfig(
     llm_interface_embed_model="azure/text-embedding-3-large",
     company_merge_capability_merge_threshold=0.83,
     company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+    company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
 )
 _NEW_VERSION = "32024R2847C01"
 _NEW_ID = f"CRA-{_NEW_VERSION}"

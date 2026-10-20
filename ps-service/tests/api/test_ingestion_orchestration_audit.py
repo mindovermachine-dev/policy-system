@@ -14,7 +14,7 @@ import re
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from api._audit_fakes import InMemoryAuditStore
 from api._fakes import build_fake_pipeline_dependencies
@@ -69,6 +69,7 @@ def _config() -> ServiceConfig:
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
     )
 
 

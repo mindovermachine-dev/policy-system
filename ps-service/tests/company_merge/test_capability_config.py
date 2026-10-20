@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ps_service.company_merge.capability_config import capability_thresholds
+from ps_service.company_merge.capability_config import capability_thresholds, role_thresholds
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
 from ps_service.company_merge.reviewable_kinds import ReviewThresholds
 
@@ -48,3 +48,19 @@ def test_review_above_merge_names_both_variables() -> None:
 
     assert _MERGE_VAR in str(raised.value)
     assert _REVIEW_VAR in str(raised.value)
+
+
+_ROLE_VAR = "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD"
+
+
+def test_role_thresholds_is_review_only() -> None:
+    assert role_thresholds(0.8) == ReviewThresholds(merge=None, review=0.8)
+
+
+def test_role_review_of_zero_is_accepted() -> None:
+    assert role_thresholds(0.0) == ReviewThresholds(merge=None, review=0.0)
+
+
+def test_missing_role_review_threshold_names_the_role_variable() -> None:
+    with pytest.raises(CompanyMergeConfigurationError, match=_ROLE_VAR):
+        role_thresholds(None)

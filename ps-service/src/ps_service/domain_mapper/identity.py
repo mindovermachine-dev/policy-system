@@ -4,6 +4,10 @@ Implements the identity formulas from `docs/artifacts/ps-domain-concepts.md`. Ev
 deterministic and side-effect free: the same inputs always yield the same node id, which is
 what lets re-runs `MERGE` onto existing nodes instead of duplicating them.
 
+`role_id` hashes the name it is given. Extraction passes the NORMALISED name
+(`role_names.normalise_role_name`: article dropped, last word singularised), so spellings of one
+actor share one id.
+
 `obligation_id(role_node_id, text)` is Role-scoped: the hash folds in the bearing Role, exactly
 as `role_id` folds in its defining RegulatoryInstrument. An Obligation is a weak entity of
 exactly one Role, so `Role -[:HAS]-> Obligation` is `1 : 0..*` structurally: two sources' duties

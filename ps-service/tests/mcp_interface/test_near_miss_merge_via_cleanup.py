@@ -379,6 +379,8 @@ def test_merge_of_a_review_that_is_not_a_capability_review_returns_an_error(
     env: _Env, test_only_reviewable_kind: ReviewableKind
 ) -> None:
     label = test_only_reviewable_kind.label
+    env.rig.seed_endpoint(label, "probe_a", name="Probe A")
+    env.rig.seed_endpoint(label, "probe_b", name="Probe B")
     env.rig.seed_near_miss_review(
         "review_probe", incoming_id="probe_a", existing_id="probe_b", kind=label
     )
@@ -509,7 +511,8 @@ def test_the_resolve_text_describes_the_cleanup_merge_and_its_marker() -> None:
 
     assert "tombstone" not in description
     assert "MERGED_INTO" not in description
-    assert "`MergedCapability` marker" in description
+    assert "`MergedCapability`" in description
+    assert "`MergedRole`" in description
     assert "ComplianceOfficer" in description
     assert "acknowledge_governance_change" in description
 

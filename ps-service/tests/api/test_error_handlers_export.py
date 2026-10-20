@@ -107,3 +107,12 @@ def test_export_unresolved_near_misses_error_exposes_count_and_review_ids() -> N
     assert exc.review_ids == ("review_a", "review_b")
     assert exc.instrument_id == "CRA-1.0"
     assert "2 unresolved near-miss reviews" in str(exc)
+
+
+def test_export_unresolved_near_misses_message_names_no_single_reviewable_kind() -> None:
+    """A review of any registered kind (Capability, Role, ...) can refuse an export."""
+    message = str(ExportUnresolvedNearMissesError("CRA-1.0", ("review_a",)))
+
+    assert "Capabilit" not in message
+    assert "Role" not in message
+    assert "1 unresolved near-miss review involves entities of this instrument" in message

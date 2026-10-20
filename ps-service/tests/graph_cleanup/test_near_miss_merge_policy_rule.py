@@ -27,11 +27,11 @@ from ps_service.graph_cleanup.errors import (
     GraphCleanupValidationError,
 )
 from ps_service.graph_cleanup.executors import execute_capability_merge
+from ps_service.graph_cleanup.service import CapabilityMergeApproval
 
 if TYPE_CHECKING:
     from graph_cleanup._gateway_fakes import CleanupReadGraph, CleanupRig
     from ps_service.company_merge.reviewable_kinds import ReviewableKind
-    from ps_service.graph_cleanup.service import CapabilityMergeApproval
 
 _REVIEW = "review_aaa"
 _OLD = "2020-01-01T00:00:00+00:00"
@@ -51,7 +51,7 @@ def _request(
     dependencies = replace(
         build_default_near_miss_review_dependencies(), open_single_tenant_graph=_open
     )
-    return run_request_near_miss_merge(
+    approval = run_request_near_miss_merge(
         _REVIEW,
         actor=OFFICER,
         acknowledge_governance_change=acknowledge,
@@ -60,6 +60,8 @@ def _request(
         dependencies=dependencies,
         store=store,
     )
+    assert isinstance(approval, CapabilityMergeApproval)  # a Capability review
+    return approval
 
 
 def _world(

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 __all__ = ["SerializedGraphReader", "UnansweredBaselineQueryError"]
 
 _NODE_COLUMNS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "role": ("Role", ("id", "name", "confidence")),
+    "role": ("Role", ("id", "name", "confidence", "embedding")),
     "requirement": ("Requirement", ("id", "text", "type", "confidence", "role_id")),
     "obligation": ("Obligation", ("id", "text", "confidence")),
     "capability": ("Capability", ("id", "name", "confidence", "description", "embedding")),

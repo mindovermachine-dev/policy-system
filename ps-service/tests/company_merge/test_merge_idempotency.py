@@ -49,7 +49,7 @@ from typing import cast
 
 from litellm.types.utils import Embedding, EmbeddingResponse
 
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.company_merge.models import MergeResult
 from ps_service.domain_mapper.identity import capability_id, obligation_id
@@ -260,6 +260,9 @@ class _FakeSingleTenantGraph:
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult(self._capability_index_rows())
+        if "-[:DEFINES]->(n:Role) RETURN n.id, n.name, n.embedding" in q:
+            assert params is not None
+            return _FakeQueryResult(self._defined_role_rows(cast("str", params["instrument_id"])))
         existence = _EXISTENCE_READ.match(q)
         if existence is not None:
             # the existing-node reads (`count_new_obligations`, the create-only and edge-endpoint
@@ -282,6 +285,21 @@ class _FakeSingleTenantGraph:
                 ]
             )
         return _FakeQueryResult([[0]])
+
+    def _defined_role_rows(self, instrument_id: str) -> list[object]:
+        """`[id, name, embedding]` of the Roles `instrument_id` `DEFINES` in the gateway graph."""
+        if self._gateway_graph is None:
+            return []
+        defined = {
+            key[4]
+            for key in self._gateway_graph.edges
+            if key[0] == "DEFINES" and key[2] == instrument_id and key[3] == "Role"
+        }
+        return [
+            [node_id, props.get("name"), props.get("embedding")]
+            for (label, node_id), props in self._gateway_graph.nodes.items()
+            if label == "Role" and node_id in defined
+        ]
 
     def _gateway_capabilities(self) -> dict[str, dict[str, object]]:
         """The Capability nodes the merge's gateway groups have written."""
@@ -395,7 +413,7 @@ def _idempotency_fixture(
 
     baseline = _FakeBaselineGraph(
         regulatory_instrument_properties={"id": _REGULATION_ID, "title": "Test Regulation"},
-        role_rows=[[role_id, "Operator", 0.9]],
+        role_rows=[[role_id, "Operator", 0.9, None]],
         requirement_rows=[[requirement_id, "Must report incidents.", "requirement", 0.9, role_id]],
         obligation_rows=[[obligation_node_id, obligation_text, 0.9]],
         capability_rows=[[incoming_capability_id, incoming_capability_name, 0.8, None]],
@@ -454,6 +472,7 @@ def test_second_identical_call_produces_field_for_field_identical_merge_result(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -465,16 +484,26 @@ def test_second_identical_call_produces_field_for_field_identical_merge_result(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
 
     assert isinstance(result_1, MergeResult)
-    # `new_obligation_count` is the DELTA a run makes: the first run creates the
-    # Obligation, the second finds it, so the counts differ and only the rest is compared whole.
+    # `new_obligation_count` and `new_role_count` are the DELTA a run makes: the first run creates
+    # the Obligation and the Role, the second finds them, so those counts differ and only the rest
+    # is compared whole.
     assert (result_1.new_obligation_count, result_2.new_obligation_count) == (1, 0)
-    assert replace(result_2, new_obligation_count=result_1.new_obligation_count) == result_1
+    assert (result_1.new_role_count, result_2.new_role_count) == (1, 0)
+    assert (
+        replace(
+            result_2,
+            new_obligation_count=result_1.new_obligation_count,
+            new_role_count=result_1.new_role_count,
+        )
+        == result_1
+    )
     assert result_2.obligation_ids == (existing_obligation_id,)
     assert result_2.capability_canonical_ids == (existing_capability_id,)
     assert result_2.near_misses == ()
@@ -521,6 +550,7 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -538,6 +568,7 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -586,6 +617,7 @@ def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -601,6 +633,7 @@ def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -663,6 +696,7 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -689,6 +723,7 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),

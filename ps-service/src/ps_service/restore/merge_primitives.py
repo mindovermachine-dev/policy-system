@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from ps_service.company_merge import graph_reader
-from ps_service.company_merge.capability_config import capability_thresholds
+from ps_service.company_merge.capability_config import capability_thresholds, role_thresholds
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
@@ -52,7 +52,7 @@ from ps_service.company_merge.pending_review import (
     drop_already_reviewed,
 )
 from ps_service.company_merge.redirects import compose_with_resolutions, resolve_redirects
-from ps_service.company_merge.reviewable_kinds import CAPABILITY
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ROLE
 from ps_service.graph_gateway.models import UpsertNode
 from ps_service.logging.facade import emit_log_entry
 from ps_service.restore.baseline_reader import SerializedGraphReader
@@ -65,7 +65,8 @@ if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.generated_values import ValueSource
     from ps_service.company_merge.governance_import import GovernanceImport
-    from ps_service.company_merge.models import BaselineGraph, BaselineNode
+    from ps_service.company_merge.models import BaselineGraph, BaselineNode, NearMissPair
+    from ps_service.company_merge.reviewable_kinds import ReviewThresholds
     from ps_service.export.models import SerializedGraph
     from ps_service.graph_gateway.models import Primitive
     from ps_service.logging.emitter import LogEmitter
@@ -183,7 +184,7 @@ def _read_known_ids_of_unresolved_endpoints(live: GraphHandle, unresolved: set[s
     return {cast("str", row[0]) for row in rows}
 
 
-def build_policy_system_leg(
+def build_policy_system_leg(  # noqa: PLR0913 -- the leg's collaborators and thresholds; no natural grouping
     baseline_graph: SerializedGraph,
     *,
     instrument_id: str,
@@ -191,6 +192,7 @@ def build_policy_system_leg(
     governance: GovernanceImport,
     merge_threshold: float | None,
     review_threshold: float | None,
+    role_review_threshold: float | None,
     emitter: LogEmitter | None,
     values: ValueSource = SYSTEM_VALUES,
 ) -> PolicySystemLeg:
@@ -221,6 +223,9 @@ def build_policy_system_leg(
         review_threshold: Minimum similarity at which a Capability near miss is recorded as a
             `PendingReview`; a pair scoring below it records none. `0.0` hides nothing. Required:
             `None` is an error, and so is a value above `merge_threshold`.
+        role_review_threshold: Minimum similarity at which a Role near miss (two Roles of this
+            instrument) is recorded as a `PendingReview`; a Role is never merged automatically.
+            `0.0` hides nothing. Required: `None` is an error.
         emitter: Log emitter for the leg's log entries; `None` uses the default emitter.
         values: Source of generated values (timestamps); defaults to the system clock.
 
@@ -232,8 +237,9 @@ def build_policy_system_leg(
         entries (dedup, redirect and `build_policy_system_leg` success); writes no graph.
 
     Raises:
-        CompanyMergeConfigurationError: `merge_threshold` or `review_threshold` is `None`, or the
-            review threshold is above the merge threshold; raised before either graph is read.
+        CompanyMergeConfigurationError: `merge_threshold`, `review_threshold` or
+            `role_review_threshold` is `None`, or the review threshold is above the merge
+            threshold; raised before either graph is read.
         RestoreOwnerRequiredError: the baseline carries governance content and `governance.owner`
             is `None`.
         ArtifactContentRejectedError: `instrument_id` matches no instrument of an artifact that
@@ -245,6 +251,7 @@ def build_policy_system_leg(
             or a read of `live` failed.
     """
     thresholds = capability_thresholds(merge_threshold, review_threshold)
+    role_review = role_thresholds(role_review_threshold)
     read = graph_reader.read_baseline_graph(SerializedGraphReader(baseline_graph), instrument_id)
     if governance.owner is None and (
         read.policy_nodes or read.standard_nodes or read.control_nodes
@@ -286,6 +293,9 @@ def build_policy_system_leg(
     # A pair that `live` already holds an unresolved review for is not recorded a second time;
     # ingest drops them with the same helper.
     new_near_misses = drop_already_reviewed(live, dedup_result.near_misses, kind=CAPABILITY)
+    new_role_near_misses = _new_role_near_misses(
+        baseline_graph, read, live, role_review, instrument_id, emitter
+    )
 
     overlay.add(
         build_role_and_requirement_primitives(
@@ -332,10 +342,11 @@ def build_policy_system_leg(
 
     # Last, so the reviews follow the content they refer to inside the same all-or-nothing leg.
     overlay.add(build_pending_review_primitives(new_near_misses, kind=CAPABILITY, values=values))
+    overlay.add(build_pending_review_primitives(new_role_near_misses, kind=ROLE, values=values))
     counts = {
         **classification_write_counts(read),
         **governance_count_fields(governance_counts),
-        "near_miss_reviews_created": len(new_near_misses),
+        "near_miss_reviews_created": len(new_near_misses) + len(new_role_near_misses),
     }
     emit_log_entry(
         component=_COMPONENT,
@@ -346,6 +357,47 @@ def build_policy_system_leg(
         emitter=emitter,
     )
     return PolicySystemLeg(primitives=tuple(overlay.primitives), counts=counts)
+
+
+def _new_role_near_misses(
+    baseline_graph: SerializedGraph,
+    read: BaselineGraph,
+    live: GraphHandle,
+    thresholds: ReviewThresholds,
+    instrument_id: str,
+    emitter: LogEmitter | None,
+) -> tuple[NearMissPair, ...]:
+    """Role pairs of this instrument at or above the review floor that `live` has not reviewed.
+
+    Scored offline from the Role embeddings the artifact carries, against the Roles `live`
+    already holds for the instrument and the artifact's own Roles; nothing is merged (a Role is
+    review-only) and nothing is written. A pair `live` already holds an unresolved review for is
+    dropped, as on ingest.
+
+    Args:
+        baseline_graph: The parsed artifact leg, the source of the Role embeddings.
+        read: The baseline projections, after redirects.
+        live: Read handle on `policy_system`.
+        thresholds: The Role review-only thresholds.
+        instrument_id: The restored instrument; scopes the Role pool.
+        emitter: Log emitter, or `None` for the default.
+
+    Returns:
+        The new Role near-miss pairs, in processing order.
+
+    Raises:
+        CompanyMergePersistenceError: a read of `live` failed.
+    """
+    result = resolve_capability_convergence_offline(
+        read.role_nodes,
+        incoming_embeddings=embeddings_by_label(baseline_graph, "Role"),
+        single_tenant_graph=live,
+        kind=ROLE,
+        thresholds=thresholds,
+        instrument_id=instrument_id,
+        emitter=emitter,
+    )
+    return drop_already_reviewed(live, result.near_misses, kind=ROLE)
 
 
 def _add_draft_governance(

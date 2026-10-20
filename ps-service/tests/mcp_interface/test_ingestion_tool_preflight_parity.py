@@ -63,7 +63,7 @@ _NOT_FOUND_MESSAGE = f"error: CELEX {_NONCURATED_CELEX!r} does not exist on Cell
 _CONFIG_INCOMPLETE_MESSAGE = (
     "error: ingestion configuration incomplete: llm_interface_model, "
     "llm_interface_embed_model, company_merge_capability_merge_threshold, "
-    "company_merge_capability_review_threshold not set"
+    "company_merge_capability_review_threshold, company_merge_role_review_threshold not set"
 )
 _LLM_UNAVAILABLE_MESSAGE = "error: LLM Interface is unavailable."
 _GRAPH_UNREACHABLE_MESSAGE = "error: the policy graph database is not reachable"
@@ -87,6 +87,7 @@ def _configure_incomplete_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
     monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
     monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -182,6 +183,21 @@ def test_unset_review_threshold_alone_returns_config_error_naming_it(
     assert _call(tool, _CELEX, _SHORT_NAME) == (
         "error: ingestion configuration incomplete: "
         "company_merge_capability_review_threshold not set"
+    )
+    assert fake.recorder.calls == []
+
+
+@pytest.mark.parametrize("tool", _TOOLS)
+def test_unset_role_review_threshold_alone_returns_config_error_naming_it(
+    tool: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.delenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", raising=False)
+    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
+    _use_fake_graph_openers_only(monkeypatch, fake.dependencies.graphs)
+
+    assert _call(tool, _CELEX, _SHORT_NAME) == (
+        "error: ingestion configuration incomplete: company_merge_role_review_threshold not set"
     )
     assert fake.recorder.calls == []
 

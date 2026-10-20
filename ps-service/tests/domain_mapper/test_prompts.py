@@ -22,6 +22,7 @@ from ps_service.domain_mapper.models import (
 from ps_service.domain_mapper.prompts import (
     CAPABILITY_DERIVATION_SYSTEM_PROMPT,
     CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT,
+    EXTRACTION_SYSTEM_PROMPT,
     parse_capability_response,
     parse_capability_reuse_verdict,
     parse_definitions_response,
@@ -43,6 +44,7 @@ def _valid_payload() -> dict[str, object]:
         "requirements": [
             {
                 "role_name": "Manufacturer",
+                "role_is_actor": True,
                 "text": "Conduct a cybersecurity risk assessment.",
                 "type": "requirement",
                 "letter_suffix": None,
@@ -77,6 +79,7 @@ def test_parse_extraction_response_multiple_candidates_all_populated() -> None:
         "requirements": [
             {
                 "role_name": "Manufacturer",
+                "role_is_actor": True,
                 "text": "Conduct a risk assessment.",
                 "type": "requirement",
                 "letter_suffix": "a",
@@ -84,6 +87,7 @@ def test_parse_extraction_response_multiple_candidates_all_populated() -> None:
             },
             {
                 "role_name": "Manufacturer",
+                "role_is_actor": True,
                 "text": "Not place unsafe products on the market.",
                 "type": "prohibition",
                 "letter_suffix": "b",
@@ -123,6 +127,7 @@ def test_parse_extraction_response_item_missing_confidence_raises_typed_error() 
         "requirements": [
             {
                 "role_name": "Manufacturer",
+                "role_is_actor": True,
                 "text": "Conduct a cybersecurity risk assessment.",
                 "type": "requirement",
                 "letter_suffix": None,
@@ -137,11 +142,94 @@ def test_parse_extraction_response_item_missing_confidence_raises_typed_error() 
     assert exc_info.value.error_kind == "invalid_requirement_item"
 
 
+def test_extraction_prompt_return_shape_asks_for_the_actor_flag() -> None:
+    assert '"role_is_actor": bool' in EXTRACTION_SYSTEM_PROMPT
+
+
+def test_extraction_prompt_defines_role_name_as_one_named_actor() -> None:
+    assert "ONE named duty-bearing actor" in EXTRACTION_SYSTEM_PROMPT
+    assert "never a list or an alternative of actors" in EXTRACTION_SYSTEM_PROMPT
+    assert '"importer or distributor"' in EXTRACTION_SYSTEM_PROMPT
+
+
+def test_extraction_prompt_splits_a_duty_on_several_actors_into_one_requirement_each() -> None:
+    assert "one requirement per independently-required duty AND per actor" in (
+        EXTRACTION_SYSTEM_PROMPT
+    )
+    assert "return one requirement per actor" in EXTRACTION_SYSTEM_PROMPT
+    assert 'letter_suffix "a", "b", "c"' in EXTRACTION_SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    "non_actor_example",
+    [
+        "the technical documentation",
+        "a fine or fee",
+        "an event",
+        "a product",
+        '"that body"',
+        '"the person referred to in paragraph 1"',
+        '"the offender"',
+    ],
+)
+def test_extraction_prompt_lists_what_is_not_an_actor(non_actor_example: str) -> None:
+    flattened = " ".join(EXTRACTION_SYSTEM_PROMPT.split())
+
+    assert "Set it to false when role_name is not such an actor" in flattened
+    assert non_actor_example in flattened
+
+
+def _item(**overrides: object) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "role_name": "Manufacturer",
+        "role_is_actor": True,
+        "text": "Conduct a cybersecurity risk assessment.",
+        "type": "requirement",
+        "letter_suffix": None,
+        "confidence": 0.9,
+    }
+    fields.update(overrides)
+    return fields
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_parse_extraction_response_carries_the_actor_flag_as_given(*, flag: bool) -> None:
+    payload = {"requirements": [_item(role_is_actor=flag)]}
+
+    (candidate,) = parse_extraction_response(json.dumps(payload), _UNIT)
+
+    assert candidate.role_is_actor is flag
+
+
+def test_parse_extraction_response_item_missing_the_actor_flag_raises_typed_error() -> None:
+    item = _item()
+    del item["role_is_actor"]
+
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_extraction_response(json.dumps({"requirements": [item]}), _UNIT)
+
+    assert exc_info.value.error_kind == "invalid_requirement_item"
+    assert "role_is_actor" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("flag", ["true", "yes", 1, 0, None, "false"])
+def test_parse_extraction_response_item_with_a_non_boolean_actor_flag_raises_typed_error(
+    flag: object,
+) -> None:
+    payload = {"requirements": [_item(role_is_actor=flag)]}
+
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_extraction_response(json.dumps(payload), _UNIT)
+
+    assert exc_info.value.error_kind == "invalid_requirement_item"
+
+
 def test_parse_extraction_response_item_invalid_type_raises_typed_error() -> None:
     payload = {
         "requirements": [
             {
                 "role_name": "Manufacturer",
+                "role_is_actor": True,
                 "text": "Conduct a cybersecurity risk assessment.",
                 "type": "not-a-real-type",
                 "letter_suffix": None,

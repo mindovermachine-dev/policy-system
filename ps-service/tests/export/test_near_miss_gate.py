@@ -149,6 +149,66 @@ def test_review_only_matches_ids_of_its_own_kind(test_only_reviewable_kind: Revi
     assert ids == ()
 
 
+def _baseline_with_roles(*role_ids: str) -> ExportRig:
+    export_rig = ExportRig(GatewayRig())
+    for role_id in role_ids:
+        ExportRig.seed_node(export_rig.baseline, "Role", role_id, {"name": "Operator"})
+    return export_rig
+
+
+def test_an_unresolved_role_review_on_the_incoming_side_is_returned() -> None:
+    export_rig = _baseline_with_roles("role_a", "role_b")
+    policy = ScriptedPolicyGraph([pending_review("review_role", kind="Role", incoming_id="role_a")])
+
+    ids = unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)
+
+    assert ids == ("review_role",)
+
+
+def test_an_unresolved_role_review_on_the_existing_side_is_returned() -> None:
+    export_rig = _baseline_with_roles("role_a", "role_b")
+    policy = ScriptedPolicyGraph(
+        [pending_review("review_role", kind="Role", nearest_existing_id="role_b")]
+    )
+
+    ids = unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)
+
+    assert ids == ("review_role",)
+
+
+def test_a_role_review_about_another_instruments_roles_does_not_block() -> None:
+    export_rig = _baseline_with_roles("role_a")
+    policy = ScriptedPolicyGraph(
+        [
+            pending_review(
+                "review_other",
+                kind="Role",
+                incoming_id="role_x",
+                nearest_existing_id="role_y",
+            )
+        ]
+    )
+
+    ids = unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)
+
+    assert ids == ()
+
+
+def test_a_capability_id_equal_to_a_role_id_does_not_cross_match() -> None:
+    export_rig = _baseline_with_roles("shared_id")
+    ExportRig.seed_node(export_rig.baseline, "Capability", "cap_a", {"name": "x"})
+    policy = ScriptedPolicyGraph(
+        [
+            pending_review("review_cap_names_role_id", kind="Capability", incoming_id="shared_id"),
+            pending_review("review_role_names_cap_id", kind="Role", incoming_id="cap_a"),
+        ]
+    )
+
+    ids = unresolved_near_miss_review_ids(export_rig.baseline_reader(), policy)
+
+    assert ids == ()
+
+
 def test_baseline_ids_are_read_once_per_registered_kind(
     test_only_reviewable_kind: ReviewableKind,
 ) -> None:
@@ -159,6 +219,7 @@ def test_baseline_ids_are_read_once_per_registered_kind(
 
     assert reader.statements == [
         "MATCH (n:Capability) RETURN n.id",
+        "MATCH (n:Role) RETURN n.id",
         f"MATCH (n:{test_only_reviewable_kind.label}) RETURN n.id",
     ]
 

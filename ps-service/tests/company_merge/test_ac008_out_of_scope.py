@@ -35,7 +35,7 @@ import pytest
 from company_merge._gateway_fakes import (
     MergeRig,  # noqa: TC001 -- pytest resolves the fixture annotation
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.governance_import import GovernanceImport
@@ -237,7 +237,7 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
 
     return _FakeBaselineGraph(
         regulatory_instrument_properties={"id": _REGULATION_ID, "title": "Test Regulation"},
-        role_rows=[[role_node_id, "Manufacturer", 0.9]],
+        role_rows=[[role_node_id, "Manufacturer", 0.9, None]],
         requirement_rows=[
             [requirement_node_id, "Must report incidents.", "requirement", 0.9, role_node_id]
         ],
@@ -271,7 +271,7 @@ def _internal_baseline_with_governance() -> _FakeBaselineGraph:
 
     return _FakeBaselineGraph(
         regulatory_instrument_properties={"id": _REGULATION_ID, "title": "Test Regulation"},
-        role_rows=[[role_node_id, "Manufacturer", 0.9]],
+        role_rows=[[role_node_id, "Manufacturer", 0.9, None]],
         requirement_rows=[
             [requirement_node_id, "Must report incidents.", "requirement", 0.9, role_node_id]
         ],
@@ -310,11 +310,11 @@ def test_dedupe_canonical_nodes_kind_parameter_is_a_reviewable_kind_spec() -> No
 @pytest.mark.parametrize(
     ("baseline_factory", "expected_kinds"),
     [
-        pytest.param(_internal_baseline_with_governance, ["Capability"], id="internal"),
-        pytest.param(_everything_new_baseline_graph, ["Capability"], id="external"),
+        pytest.param(_internal_baseline_with_governance, ["Capability", "Role"], id="internal"),
+        pytest.param(_everything_new_baseline_graph, ["Capability", "Role"], id="external"),
     ],
 )
-def test_merge_baseline_graph_calls_dedup_for_capability_only(
+def test_merge_baseline_graph_calls_dedup_for_capability_and_role_only(
     baseline_factory: typing.Callable[[], _FakeBaselineGraph],
     expected_kinds: list[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -330,12 +330,12 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
     wrapper's presence).
 
     Two cases: an internal-sourced baseline (`graph.policy_nodes`
-    non-empty) and an external-sourced one both record `["Capability"]` only
-    -- the governance tree is imported as drafts by
+    non-empty) and an external-sourced one both record `["Capability", "Role"]`
+    only -- Capability merges above its threshold, Role is review-only (near
+    misses cited, never merged). The governance tree is imported as drafts by
     `governance_import`, never deduped, so no Policy dedup pass exists on the
-    live path. Neither case ever records `"Role"`,
-    `"Requirement"`, `"Obligation"`, `"Standard"`, or `"Control"` (all
-    passthrough).
+    live path. Neither case ever records `"Requirement"`, `"Obligation"`,
+    `"Standard"`, or `"Control"` (all passthrough).
 
     `merge.py` calls `dedup.dedupe_canonical_nodes(...)` through the `dedup`
     module object (`from ps_service.company_merge import dedup, ...`), so
@@ -396,15 +396,18 @@ def test_merge_baseline_graph_calls_dedup_for_capability_only(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
         **merge_rig.merge_keywords(),
     )
 
     assert recorded_kinds == expected_kinds
-    # Capability carries the configured merge and review thresholds, built by the one guard.
-    assert recorded_thresholds == [ReviewThresholds(merge=_THRESHOLD, review=REVIEW_THRESHOLD)]
-    assert "Role" not in recorded_kinds
+    # Each kind carries the thresholds its own guard built: Capability both, Role review only.
+    assert recorded_thresholds == [
+        ReviewThresholds(merge=_THRESHOLD, review=REVIEW_THRESHOLD),
+        ReviewThresholds(merge=None, review=ROLE_REVIEW_THRESHOLD),
+    ]
     assert "Requirement" not in recorded_kinds
     assert "Obligation" not in recorded_kinds
     assert "Standard" not in recorded_kinds

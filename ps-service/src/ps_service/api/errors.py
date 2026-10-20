@@ -38,8 +38,8 @@ class IngestionConfigIncompleteError(ApiError):
     """The resolved `ServiceConfig` is missing a value the pipeline needs.
 
     One of `llm_interface_model`, `llm_interface_embed_model`,
-    `company_merge_capability_merge_threshold` or `company_merge_capability_review_threshold` is
-    `None`. Raised by the orchestration's config guard
+    `company_merge_capability_merge_threshold`, `company_merge_capability_review_threshold` or
+    `company_merge_role_review_threshold` is `None`. Raised by the orchestration's config guard
     before any graph or stage call. This is an operator problem, not a caller problem. Handled as
     HTTP 503; `str(exc)` is surfaced verbatim.
     """
@@ -216,11 +216,13 @@ class ExportUnresolvedNearMissesError(ApiError):
 
     Raised by `api.export_orchestration.run_export` after the instrument is found and before the
     `export.instrument` audit row is recorded, when at least one resolvable `PendingReview` in
-    `policy_system` names an id of a `Capability` in the instrument's `{short}_baseline` graph.
-    Review decisions live outside the exported graphs, so exporting now would publish Capabilities
-    that were never reviewed. The caller resolves the reviews (`near_misses_list`,
-    `near_misses_resolve`) and exports again. Handled as HTTP 409; `str(exc)` is the full message,
-    safe to surface verbatim, and is the one text the maintainer script also prints.
+    `policy_system` names an id of a node of a registered reviewable kind (Capability, Role) in the
+    instrument's `{short}_baseline` graph. Review decisions live outside the exported graphs, so
+    exporting now would publish nodes that were never reviewed. The message names no single kind,
+    because a review of any registered kind can refuse the export. The caller resolves the reviews
+    (`near_misses_list`, `near_misses_resolve`) and exports again. Handled as HTTP 409; `str(exc)`
+    is the full message, safe to surface verbatim, and is the one text the maintainer script
+    also prints.
 
     Attributes:
         instrument_id: The instrument whose export was refused.
@@ -239,7 +241,7 @@ class ExportUnresolvedNearMissesError(ApiError):
         noun, verb = ("review", "involves") if len(review_ids) == 1 else ("reviews", "involve")
         super().__init__(
             f"cannot export {instrument_id!r}: {len(review_ids)} unresolved near-miss {noun} "
-            f"{verb} its Capabilities ({', '.join(review_ids)}). "
+            f"{verb} entities of this instrument ({', '.join(review_ids)}). "
             "Resolve them (near_misses_list, near_misses_resolve) and export again."
         )
 

@@ -6,7 +6,9 @@ scope its candidates are drawn from, and the rule that decides what a close pair
 (`dedup`), review persistence and reading (`pending_review`) and the export gate
 (`export.near_miss_gate`) all read the spec; none of them names a label itself.
 
-`CAPABILITY` is registered when this module is imported. Another kind joins by calling
+`CAPABILITY` and `ROLE` are registered when this module is imported. A Role is compared per
+instrument and is review-only: a close pair of Roles is cited for a Compliance Officer and never
+merged automatically. Another kind joins by calling
 `register_reviewable_kind`. A `PendingReview` can only carry the label of a registered kind:
 `reviewable_kind` looks a stored label up and raises `UnknownReviewKindError` naming it otherwise.
 
@@ -33,6 +35,7 @@ from ps_service.company_merge.errors import (
 __all__ = [
     "CAPABILITY",
     "REVIEWABLE_KINDS",
+    "ROLE",
     "ReviewRule",
     "ReviewScope",
     "ReviewThresholds",
@@ -106,6 +109,7 @@ class ReviewThresholds:
 
 
 CAPABILITY: Final = ReviewableKind("Capability", "name", "global", "merge-above")
+ROLE: Final = ReviewableKind("Role", "name", "per-instrument", "review-only")
 
 REVIEWABLE_KINDS: dict[str, ReviewableKind] = {}
 """Registered specs by label; written only through `register_reviewable_kind`."""
@@ -152,7 +156,7 @@ def registered_reviewable_kinds() -> tuple[ReviewableKind, ...]:
     """Return every registered spec, in registration order.
 
     Returns:
-        The registered specs; always includes `CAPABILITY`.
+        The registered specs; always includes `CAPABILITY` and `ROLE`.
     """
     return tuple(REVIEWABLE_KINDS.values())
 
@@ -205,3 +209,4 @@ def require_thresholds(spec: ReviewableKind, thresholds: ReviewThresholds) -> No
 
 
 register_reviewable_kind(CAPABILITY)
+register_reviewable_kind(ROLE)

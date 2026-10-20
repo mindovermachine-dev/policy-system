@@ -36,6 +36,7 @@ from ps_service.domain_mapper.extraction import (
     extract_roles_and_requirements,
 )
 from ps_service.domain_mapper.graph_writer import persist_role_and_requirement_graph
+from ps_service.domain_mapper.identity import role_id
 from ps_service.domain_mapper.models import (
     DefinedTermCandidate,
     ExtractionUnit,
@@ -58,8 +59,10 @@ if TYPE_CHECKING:
     from domain_mapper._fakes import MakeEmitter, ReadLines
     from domain_mapper._gateway_fakes import BaselineRig
     from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.domain_mapper.models import ExtractionResult
     from ps_service.graph_gateway.models import GraphLogEntry
     from ps_service.llm_interface.client import CompletionCaller
+    from ps_service.logging.emitter import LogEmitter
 
 _REGULATION_ID = "CRA-1.0"
 
@@ -93,6 +96,7 @@ def test_extract_candidates_for_unit_returns_candidates_from_scripted_response(
             "requirements": [
                 {
                     "role_name": "Manufacturer",
+                    "role_is_actor": True,
                     "text": "Conduct a cybersecurity risk assessment.",
                     "type": "requirement",
                     "letter_suffix": None,
@@ -201,6 +205,7 @@ def _candidate(**overrides: object) -> RequirementCandidate:
         "unit_article_number": "13",
         "unit_paragraph_number": "1",
         "role_name": "Manufacturer",
+        "role_is_actor": True,
         "text": "Manufacturers shall conduct a cybersecurity risk assessment.",
         "type": "requirement",
         "letter_suffix": None,
@@ -228,6 +233,57 @@ def test_canonicalize_roles_collapses_same_role_name_onto_one_node() -> None:
     assert role_edges[0].role_node_id == role_nodes[0].id
     assert role_node_ids == {"Manufacturer": role_nodes[0].id}
     assert fallback_roles == ((role_nodes[0].id, "Manufacturer"),)
+
+
+def test_canonicalize_roles_collapses_spellings_of_one_actor_onto_one_role() -> None:
+    """Three spellings of one actor give one Role node and one DEFINES edge.
+
+    The map sends every raw spelling to that one id.
+    """
+    candidates = [
+        _candidate(unit_citation_ref="Art. 13(1)", role_name="Manufacturer"),
+        _candidate(unit_citation_ref="Art. 14(2)", role_name="manufacturers"),
+        _candidate(unit_citation_ref="Art. 15(3)", role_name="The manufacturer"),
+    ]
+
+    role_nodes, role_edges, role_node_ids, _fallback = _canonicalize_roles(
+        candidates, _REGULATION_ID, {}
+    )
+
+    assert len(role_nodes) == 1
+    assert len(role_edges) == 1
+    assert role_nodes[0].properties["name"] == "Manufacturer"
+    assert role_nodes[0].id == role_id("Manufacturer", _REGULATION_ID)
+    assert role_edges[0].source_ref == "Art. 13(1)"
+    assert role_node_ids == {
+        "Manufacturer": role_nodes[0].id,
+        "manufacturers": role_nodes[0].id,
+        "The manufacturer": role_nodes[0].id,
+    }
+
+
+def test_canonicalize_roles_names_the_role_after_its_first_spelling_without_article_or_plural() -> (
+    None
+):
+    candidates = [
+        _candidate(role_name="The Market surveillance authorities"),
+        _candidate(role_name="market surveillance authority"),
+    ]
+
+    role_nodes, _edges, _ids, _fallback = _canonicalize_roles(candidates, _REGULATION_ID, {})
+
+    assert [node.properties["name"] for node in role_nodes] == ["Market surveillance authority"]
+
+
+def test_canonicalize_roles_matches_a_defined_term_through_the_normalised_name() -> None:
+    candidates = [_candidate(role_name="The Manufacturers", unit_citation_ref="Art. 13(1)")]
+
+    _nodes, role_edges, _ids, fallback_roles = _canonicalize_roles(
+        candidates, _REGULATION_ID, {"manufacturer": "Art. 3(1)"}
+    )
+
+    assert role_edges[0].source_ref == "Art. 3(1)"
+    assert fallback_roles == ()
 
 
 def test_canonicalize_roles_produces_distinct_nodes_for_distinct_role_names() -> None:
@@ -541,6 +597,7 @@ def _requirements_json(
             "requirements": [
                 {
                     "role_name": role_name,
+                    "role_is_actor": True,
                     "text": text,
                     "type": "requirement",
                     "letter_suffix": letter_suffix,
@@ -617,6 +674,203 @@ def test_extract_roles_and_requirements_ac001_produces_role_and_requirement_edge
     expresses_source_refs = {entry_properties(call)["source_ref"] for call in expresses_calls}
     assert defines_source_refs == {_UNIT_MANUFACTURER.citation_ref, _UNIT_IMPORTER.citation_ref}
     assert expresses_source_refs == {_UNIT_MANUFACTURER.citation_ref, _UNIT_IMPORTER.citation_ref}
+
+
+def test_extract_roles_and_requirements_writes_one_role_for_three_spellings_of_one_actor(
+    make_emitter: MakeEmitter,
+    baseline_rig: BaselineRig,
+) -> None:
+    """The duties stated for "Manufacturer", "manufacturers" and "The manufacturer" are all
+    borne by the one Role written to the baseline graph.
+    """
+    emitter, _log_path = make_emitter()
+    units = tuple(
+        ExtractionUnit(
+            citation_ref=f"Art. {number}(1)",
+            text="The manufacturer shall act.",
+            article_number=str(number),
+            paragraph_number="1",
+            article_heading="Obligations of manufacturers",
+        )
+        for number in (13, 14, 15)
+    )
+    call_completion = _scripted_call_completion(
+        {
+            units[0].citation_ref: _requirements_json(role_name="Manufacturer", text="Assess."),
+            units[1].citation_ref: _requirements_json(role_name="manufacturers", text="Report."),
+            units[2].citation_ref: _requirements_json(
+                role_name="The manufacturer", text="Document."
+            ),
+        }
+    )
+
+    result = extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=_FakeAdapter(units),
+        native_graph=_FakeNativeGraph({"id": _REGULATION_ID}),
+        **baseline_rig.gateway_keywords(),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    (role_node_id,) = {result.role_node_ids[name] for name in result.role_node_ids}
+    assert len(baseline_rig.entries_named("Role")) == 1
+    assert len(baseline_rig.entries_named("DEFINES")) == 1
+    requirement_role_ids = {
+        entry_properties(entry)["role_id"] for entry in baseline_rig.entries_named("Requirement")
+    }
+    assert requirement_role_ids == {role_node_id}
+    assert len(result.requirement_ids) == 3
+    assert result.roles_minted == 1
+
+
+def _item_json(role_name: str, text: str, *, is_actor: bool) -> dict[str, object]:
+    return {
+        "role_name": role_name,
+        "role_is_actor": is_actor,
+        "text": text,
+        "type": "requirement",
+        "letter_suffix": None,
+        "confidence": 0.9,
+    }
+
+
+def _run_with_items(
+    unit: ExtractionUnit,
+    items: list[dict[str, object]],
+    *,
+    emitter: LogEmitter,
+    baseline_rig: BaselineRig,
+) -> ExtractionResult:
+    return extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=_FakeAdapter((unit,)),
+        native_graph=_FakeNativeGraph({"id": _REGULATION_ID}),
+        **baseline_rig.gateway_keywords(),
+        model="fake-model",
+        call_completion=_scripted_call_completion(
+            {unit.citation_ref: json.dumps({"requirements": items})}
+        ),
+        emitter=emitter,
+    )
+
+
+def test_a_non_actor_candidate_mints_no_role_requirement_or_edge(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    emitter, _log_path = make_emitter()
+
+    result = _run_with_items(
+        _UNIT_MANUFACTURER,
+        [
+            _item_json("The technical documentation", "Be kept up to date.", is_actor=False),
+            _item_json("Manufacturer", "Conduct a risk assessment.", is_actor=True),
+        ],
+        emitter=emitter,
+        baseline_rig=baseline_rig,
+    )
+
+    (role_entry,) = baseline_rig.entries_named("Role")
+    assert entry_properties(role_entry)["name"] == "Manufacturer"
+    assert len(baseline_rig.entries_named("DEFINES")) == 1
+    (requirement_entry,) = baseline_rig.entries_named("Requirement")
+    assert entry_properties(requirement_entry)["role_id"] == role_entry.identity
+    assert len(baseline_rig.entries_named("EXPRESSES")) == 1
+    assert set(result.role_node_ids) == {"Manufacturer"}
+    assert len(result.requirement_ids) == 1
+
+
+def test_a_dropped_candidate_is_logged_with_its_name_and_source_ref(
+    make_emitter: MakeEmitter, read_lines: ReadLines, baseline_rig: BaselineRig
+) -> None:
+    emitter, log_path = make_emitter()
+
+    _run_with_items(
+        _UNIT_MANUFACTURER,
+        [_item_json("that body", "Notify the authority.", is_actor=False)],
+        emitter=emitter,
+        baseline_rig=baseline_rig,
+    )
+    emitter.flush()
+
+    dropped = [
+        line for line in read_lines(log_path) if line.get("action") == "non_actor_role_dropped"
+    ]
+    assert len(dropped) == 1
+    assert dropped[0]["component"] == "domain_mapper"
+    assert dropped[0]["role_name"] == "that body"
+    assert dropped[0]["source_ref"] == _UNIT_MANUFACTURER.citation_ref
+
+
+def test_the_counts_separate_dropped_candidates_from_minted_roles(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    emitter, _log_path = make_emitter()
+
+    result = _run_with_items(
+        _UNIT_MANUFACTURER,
+        [
+            _item_json("A fine", "Be paid.", is_actor=False),
+            _item_json("The offender", "Be punished.", is_actor=False),
+            _item_json("Manufacturer", "Conduct a risk assessment.", is_actor=True),
+        ],
+        emitter=emitter,
+        baseline_rig=baseline_rig,
+    )
+
+    assert result.non_actor_roles_dropped == 2
+    assert result.roles_minted == 1
+    assert result.candidate_count == 3
+
+
+def test_a_unit_whose_candidates_are_all_non_actors_still_completes(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    emitter, _log_path = make_emitter()
+
+    result = _run_with_items(
+        _UNIT_MANUFACTURER,
+        [_item_json("the fee", "Be paid.", is_actor=False)],
+        emitter=emitter,
+        baseline_rig=baseline_rig,
+    )
+
+    assert baseline_rig.entries_named("Role") == []
+    assert baseline_rig.entries_named("Requirement") == []
+    assert len(baseline_rig.entries_named("RegulatoryInstrument")) == 1
+    assert result.requirement_ids == ()
+    assert (result.roles_minted, result.non_actor_roles_dropped) == (0, 1)
+
+
+def test_a_name_flagged_non_actor_in_one_unit_still_mints_where_it_is_an_actor(
+    make_emitter: MakeEmitter, baseline_rig: BaselineRig
+) -> None:
+    emitter, _log_path = make_emitter()
+    call_completion = _scripted_call_completion(
+        {
+            _UNIT_MANUFACTURER.citation_ref: json.dumps(
+                {"requirements": [_item_json("Importer", "Be named.", is_actor=False)]}
+            ),
+            _UNIT_IMPORTER.citation_ref: json.dumps(
+                {"requirements": [_item_json("Importer", "Verify conformity.", is_actor=True)]}
+            ),
+        }
+    )
+
+    result = extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=_FakeAdapter((_UNIT_MANUFACTURER, _UNIT_IMPORTER)),
+        native_graph=_FakeNativeGraph({"id": _REGULATION_ID}),
+        **baseline_rig.gateway_keywords(),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    assert (result.roles_minted, result.non_actor_roles_dropped) == (1, 1)
+    (requirement_entry,) = baseline_rig.entries_named("Requirement")
+    assert entry_properties(requirement_entry)["text"] == "Verify conformity."
 
 
 def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(

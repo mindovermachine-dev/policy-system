@@ -218,6 +218,7 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
     governance: GovernanceImport,
     merge_threshold: float,
     review_threshold: float,
+    role_review_threshold: float,
     audit_event_id: str,
     emitter: LogEmitter | None,
 ) -> dict[str, int]:
@@ -243,6 +244,7 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
             governance=governance,
             merge_threshold=merge_threshold,
             review_threshold=review_threshold,
+            role_review_threshold=role_review_threshold,
             emitter=emitter,
         )
         legs = content_legs
@@ -305,6 +307,7 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
     single_tenant_graph_name: str,
     merge_threshold: float,
     review_threshold: float,
+    role_review_threshold: float,
     actor: str,
     open_gateway: Callable[[], object],
     audit_event_id: str,
@@ -337,6 +340,8 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
         merge_threshold: Minimum Capability embedding similarity for convergence.
         review_threshold: Minimum similarity at which a Capability near miss is recorded for
             review; a pair below it records none. At most `merge_threshold`.
+        role_review_threshold: Minimum similarity at which a Role near miss is recorded for
+            review; a pair below it records none. A Role is never merged automatically.
         actor: The requesting client host (REST) or the fixed MCP caller label; recorded as `caller`
             in the audit log entries.
         open_gateway: Returns the process's Graph Write Gateway, or raises when there is none;
@@ -407,6 +412,7 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
             ),
             merge_threshold=merge_threshold,
             review_threshold=review_threshold,
+            role_review_threshold=role_review_threshold,
             audit_event_id=audit_event_id,
             emitter=emitter,
         )

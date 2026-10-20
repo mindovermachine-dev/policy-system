@@ -5,7 +5,7 @@
 **Actor:** An authenticated reviewer for keep-separate; a Compliance Officer (explicit
 `ComplianceOfficer` grant) for merge
 **Goal:** A Company Merge dedup candidate (`PendingReview`, of a node kind that has a
-review spec; today Capability) resolved by a human decision — the pair kept separate, or
+review spec; today Capability and Role) resolved by a human decision — the pair kept separate, or
 merged with the effect previewed, signed, audited, and reversible.
 **Realizes:** UC-1
 **Interaction class:** Review/resolve
@@ -24,7 +24,7 @@ merged with the effect previewed, signed, audited, and reversible.
 ## Preconditions
 
 - Caller is authenticated. Listing is read-only; resolving writes. Merging a Capability
-  pair needs the explicit `ComplianceOfficer` grant (SystemOwner and SystemAdmin do not
+  or Role pair needs the explicit `ComplianceOfficer` grant (SystemOwner and SystemAdmin do not
   imply it, and the local-test bypass does not satisfy it); keep-separate needs only
   authentication.
 - At least one unresolved review exists (an empty list is stated plainly, never implied).
@@ -40,12 +40,16 @@ merged with the effect previewed, signed, audited, and reversible.
 2. **Open one.** Selecting a review renders a **comparison artifact**: the two entities
    side by side, and the effect of each decision previewed explicitly before anything is
    asked — keep-separate deletes only the review record and touches neither entity;
-   merge is available for kinds that have a merge executor (today Capability), the CUC-07
+   merge is available for kinds that have a merge executor (Capability and Role), the CUC-07
    Capability merge: the loser is deleted behind a `MergedCapability`
    marker naming the winner, its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges
    move to the winner, and the review record is deleted in the same write. The preview
    names the winner (the Capability with the earlier `created_at`; a tie goes to the
-   incoming node), the edge counts and the Policy case. The controls live on the
+   incoming node), the edge counts and the Policy case. A **Role** review is two Roles of
+   one instrument and merges through the Role merge (`merge-roles`, same `ComplianceOfficer`
+   gate and passkey approval): the absorbed Role is deleted behind a `MergedRole` marker, its
+   Obligations move to the survivor, and `unmerge` reverses it. A Role has no governing
+   Policy, so no governance acknowledgment applies. The controls live on the
    artifact; chat advises, the click is the user's.
 3. **Keep separate.** No ceremony: the decision executes at once, is audited at the
    request, and the artifact shows the review closed with both entities untouched.

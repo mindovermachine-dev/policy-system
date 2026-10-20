@@ -30,10 +30,10 @@ from company_merge._seed_merge_graphs import (
     OneHotEmbeddingCaller,
     SingleTenantStore,
 )
-from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD
+from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge import dedup, graph_reader
 from ps_service.company_merge.merge import merge_baseline_graph
-from ps_service.company_merge.reviewable_kinds import CAPABILITY, ReviewThresholds
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ROLE, ReviewThresholds
 
 if TYPE_CHECKING:
     from company_merge._gateway_fakes import MergeRig
@@ -64,6 +64,19 @@ def reference_graph(
             single_tenant_graph=reads,
             model=EMBED_MODEL,
             thresholds=ReviewThresholds(merge=MERGE_THRESHOLD),
+            call_embedding=embeddings,
+            emitter=emitter,
+        )
+        # The Role comparison writes nothing of its own here (no pair is near), but it draws
+        # embeddings from the shared one-hot caller in the same order the production merge does, so
+        # the Capability vectors written below stay identical on both sides.
+        dedup.dedupe_canonical_nodes(
+            read.role_nodes,
+            kind=ROLE,
+            single_tenant_graph=reads,
+            model=EMBED_MODEL,
+            thresholds=ReviewThresholds(review=ROLE_REVIEW_THRESHOLD),
+            instrument_id=step.instrument_id,
             call_embedding=embeddings,
             emitter=emitter,
         )
@@ -114,6 +127,7 @@ def production_run(
             embed_model=EMBED_MODEL,
             merge_threshold=MERGE_THRESHOLD,
             review_threshold=NO_FLOOR_REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             call_embedding=embeddings,
             emitter=emitter,
             values=values,

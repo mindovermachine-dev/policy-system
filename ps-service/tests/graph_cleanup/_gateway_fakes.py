@@ -58,6 +58,9 @@ POLICY = "pol_1"
 _ENDPOINT_LABELS = {"REQUIRES": "Obligation", "COVERS": "PracticeArea", "MITIGATED_BY": "RiskPath"}
 """The node label each capability-unmerge endpoint read looks for."""
 
+_SIDES_READ = re.compile(
+    r"^MATCH \(r:PendingReview \{id: \$review_id\}\) OPTIONAL MATCH \(a:(\w+) "
+)
 _WRITE_KEYWORD = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DETACH|DROP)\b")
 
 
@@ -99,7 +102,7 @@ class CleanupReadGraph:
             graph_reader._INSTRUMENT_EXISTS_QUERY: self._instrument_exists,
             graph_reader._REQUIREMENTS_EXIST_QUERY: self._requirements_exist,
             graph_reader._CAPABILITIES_EXIST_QUERY: self._capabilities_exist,
-            pending_review._REVIEW_MERGE_SIDES_QUERY: self._review_merge_sides,
+            pending_review._REVIEW_KIND_QUERY: self._pending_review,
             pending_review._GET_REVIEW_QUERY: self._get_review,
         }
         for _rel_type, query in graph_reader._ENDPOINT_QUERIES:
@@ -124,6 +127,11 @@ class CleanupReadGraph:
         if _WRITE_KEYWORD.search(q):
             raise AssertionError(f"the cleanup read double refuses a write statement: {q}")
         read = self._reads.get(q)
+        sides = _SIDES_READ.match(q)
+        if read is None and sides is not None:
+            # the per-kind side read, as `pending_review._sides_query` builds it for one label
+            assert q == pending_review._sides_query(sides.group(1))
+            read = self._review_sides(sides.group(1))
         if read is None:
             raise AssertionError(f"not a cleanup read statement the double was taught: {q}")
         for marker, nth, flip in self._flips:
@@ -189,27 +197,27 @@ class CleanupReadGraph:
             return []
         return [[review["kind"], review["incoming_id"], review["nearest_existing_id"]]]
 
-    def _review_merge_sides(self, params: dict[str, object]) -> list[object]:
-        """The near-miss review's kind and ids, and whether each side is a live Capability."""
-        review = self._graph.nodes.get(("PendingReview", cast("str", params["review_id"])))
-        if review is None:
-            return []
-        sides = [
-            self._graph.nodes.get(("Capability", cast("str", review[key])))
-            for key in ("incoming_id", "nearest_existing_id")
-        ]
-        live = sides
-        return [
-            [
-                review["kind"],
-                review["incoming_id"],
-                review["nearest_existing_id"],
-                live[0] is not None,
-                live[1] is not None,
-                live[0].get("created_at") if live[0] else None,
-                live[1].get("created_at") if live[1] else None,
+    def _review_sides(self, label: str) -> Callable[[dict[str, object]], list[object]]:
+        """The read of a review's two sides under `label`: liveness and `created_at` of each."""
+
+        def _read(params: dict[str, object]) -> list[object]:
+            review = self._graph.nodes.get(("PendingReview", cast("str", params["review_id"])))
+            if review is None:
+                return []
+            live = [
+                self._graph.nodes.get((label, cast("str", review[key])))
+                for key in ("incoming_id", "nearest_existing_id")
             ]
-        ]
+            return [
+                [
+                    live[0] is not None,
+                    live[1] is not None,
+                    live[0].get("created_at") if live[0] else None,
+                    live[1].get("created_at") if live[1] else None,
+                ]
+            ]
+
+        return _read
 
     def _governed_by(self) -> list[tuple[str, str]]:
         """`(capability id, policy id)` of every `GOVERNED_BY` edge, in insertion order."""

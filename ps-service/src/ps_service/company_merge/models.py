@@ -346,9 +346,13 @@ class MergeResult:
             cleanup merge absorbed included (each resolves to its survivor), because the run
             summary counts every Capability the baseline matched.
         near_misses: Capability near-miss pairs surfaced for review.
-        pending_review_count: Number of `PendingReview` nodes this call persisted: one per near
-            miss that had no unresolved review yet, so at most `len(near_misses)` and 0 on a
-            re-run over unchanged input.
+        pending_review_count: Number of `PendingReview` nodes this call persisted, Capability and
+            Role together: one per near miss that had no unresolved review yet, so 0 on a re-run
+            over unchanged input.
+        role_near_miss_count: The Role share of `pending_review_count`: `Role` reviews this call
+            persisted. 0 on a re-run, since an already reviewed pair is not raised again.
+        new_role_count: Roles of the instrument the Role comparison treated as new (not already
+            held under the same id). Roles are never merged, so this is the number minted.
         new_capability_count: Capabilities the dedup pass minted (`match_kind == "new"`).
         matched_capability_count: Capabilities resolved onto an existing node (`exact` or
             `semantic`), plus the Capabilities a cleanup-merge marker redirected.
@@ -368,6 +372,8 @@ class MergeResult:
     capability_canonical_ids: tuple[str, ...]
     near_misses: tuple[NearMissPair, ...]
     pending_review_count: int = 0
+    role_near_miss_count: int = 0
+    new_role_count: int = 0
     new_capability_count: int = 0
     matched_capability_count: int = 0
     new_obligation_count: int = 0

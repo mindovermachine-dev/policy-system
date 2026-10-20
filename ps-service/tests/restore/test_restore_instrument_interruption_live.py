@@ -16,7 +16,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.models import SerializedGraph, SerializedNode
@@ -111,6 +111,7 @@ def test_interruption_before_the_submit_leaves_every_live_target_untouched(
                     single_tenant_graph_name=single_tenant_graph_name,
                     merge_threshold=_MERGE_THRESHOLD,
                     review_threshold=REVIEW_THRESHOLD,
+                    role_review_threshold=ROLE_REVIEW_THRESHOLD,
                     actor="test-actor",
                     open_gateway=lambda: interrupted,
                     audit_event_id=live.audit_event_id,

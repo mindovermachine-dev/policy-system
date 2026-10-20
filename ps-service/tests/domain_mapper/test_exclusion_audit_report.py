@@ -168,6 +168,7 @@ def test_full_pipeline_end_to_end_over_three_fixture_units(make_emitter: MakeEmi
                 "requirements": [
                     {
                         "role_name": "Manufacturer",
+                        "role_is_actor": True,
                         "text": "Conduct a cybersecurity risk assessment.",
                         "type": "requirement",
                         "letter_suffix": None,

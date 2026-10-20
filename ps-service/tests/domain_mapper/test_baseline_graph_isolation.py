@@ -68,6 +68,7 @@ def _requirements_json(*, role_name: str, text: str, confidence: float = 0.9) ->
             "requirements": [
                 {
                     "role_name": role_name,
+                    "role_is_actor": True,
                     "text": text,
                     "type": "requirement",
                     "letter_suffix": None,

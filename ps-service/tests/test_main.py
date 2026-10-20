@@ -263,6 +263,7 @@ def _complete_config(**overrides: object) -> ServiceConfig:
         "llm_interface_embed_model": "azure/text-embedding-3-small",
         "company_merge_capability_merge_threshold": 0.85,
         "company_merge_capability_review_threshold": 0.5,
+        "company_merge_role_review_threshold": 0.8,
         "auth_issuer": "https://issuer.example.com",
         "auth_audience": "https://api.example.com",
         "authz_bootstrap_owner_subject": "first-owner-subject",
@@ -2239,6 +2240,22 @@ def test_ready_stays_not_ready_when_only_the_review_threshold_is_unset() -> None
     }
 
 
+def test_ready_stays_not_ready_when_only_the_role_review_threshold_is_unset() -> None:
+    """The Role review threshold is an ingestion-required field: unset keeps `/ready` at
+    `not_ready`.
+    """
+    incomplete_app = create_app(_complete_config(company_merge_role_review_threshold=None))
+
+    with TestClient(incomplete_app) as client:
+        response = _ready_detail(client)
+
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": [],
+        "gated_graphs": [],
+    }
+
+
 def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
     """Regression guard: a fully-set config still reaches `ready` (proves the
     gate lets a complete config through, independent of the
@@ -2260,6 +2277,7 @@ def test_startup_config_incompleteness_emits_a_warning_log_entry_naming_missing_
             llm_interface_model=None,
             company_merge_capability_merge_threshold=None,
             company_merge_capability_review_threshold=None,
+            company_merge_role_review_threshold=None,
         )
     )
 
@@ -2284,6 +2302,7 @@ def test_startup_config_incompleteness_emits_a_warning_log_entry_naming_missing_
             "llm_interface_model",
             "company_merge_capability_merge_threshold",
             "company_merge_capability_review_threshold",
+            "company_merge_role_review_threshold",
         ]
     ]
 

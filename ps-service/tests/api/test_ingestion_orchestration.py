@@ -16,7 +16,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from api._fakes import (
     FakeGraphHandle,
@@ -44,6 +44,8 @@ from ps_service.api.ingestion_orchestration import (
     _classify_stage_failure,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _derive_short_name,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _execute_catalog_stages,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _extraction_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _internal_ingestion_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _is_already_merged,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _merge_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _OpenGraphs,  # pyright: ignore[reportPrivateUsage] — internal helper under test
@@ -67,6 +69,7 @@ from ps_service.domain_mapper.errors import (
 )
 from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
 from ps_service.ingestion.adapters.errors import CellarFetchError, CellarNotFoundError
+from ps_service.ingestion.adapters.internal_seed.persist import InternalIngestResult
 from ps_service.ingestion.falkordb_client import FalkorDBConnectionError
 from ps_service.ingestion.models import IngestResult
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
@@ -194,6 +197,7 @@ def _complete_config() -> ServiceConfig:
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
     )
 
 
@@ -436,6 +440,22 @@ def test_unset_review_threshold_raises_503_naming_it_before_any_stage_runs() -> 
     assert fake.recorder.order == []
 
 
+def test_unset_role_review_threshold_raises_503_naming_it_before_any_stage_runs() -> None:
+    fake = build_fake_pipeline_dependencies()
+
+    with pytest.raises(IngestionConfigIncompleteError) as raised:
+        run_catalog_ingestion_pipeline(
+            _ENTRY,
+            config=replace(_complete_config(), company_merge_role_review_threshold=None),
+            run_id="run-5",
+            caller="127.0.0.1",
+            dependencies=fake.dependencies,
+        )
+
+    assert "company_merge_role_review_threshold" in str(raised.value)
+    assert fake.recorder.order == []
+
+
 def test_merge_stage_receives_the_configured_merge_and_review_thresholds(
     make_emitter: MakeEmitter,
 ) -> None:
@@ -445,6 +465,7 @@ def test_merge_stage_receives_the_configured_merge_and_review_thresholds(
         _complete_config(),
         company_merge_capability_merge_threshold=0.9,
         company_merge_capability_review_threshold=0.4,
+        company_merge_role_review_threshold=0.7,
     )
 
     run_catalog_ingestion_pipeline(
@@ -459,6 +480,7 @@ def test_merge_stage_receives_the_configured_merge_and_review_thresholds(
     merge_kwargs = next(call.kwargs for call in fake.recorder.calls if call.stage == "merge")
     assert merge_kwargs["merge_threshold"] == 0.9
     assert merge_kwargs["review_threshold"] == 0.4
+    assert merge_kwargs["role_review_threshold"] == 0.7
 
 
 def test_unsafe_stage_exception_is_sanitized_to_generic_reason(
@@ -1227,6 +1249,7 @@ class _StageOrderMerge:
         embed_model: str,
         merge_threshold: float | None,
         review_threshold: float | None,
+        role_review_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
     ) -> MergeResult:
@@ -1525,6 +1548,105 @@ def test_merge_stage_summary_counts_default_to_zero() -> None:
 
     assert (summary["new_obligations"], summary["new_capabilities"]) == (0, 0)
     assert summary["matched_capabilities"] == 0
+
+
+def test_merge_summary_reports_the_role_near_misses_raised() -> None:
+    result = MergeResult(
+        regulatory_instrument_id="ri-summary-5",
+        obligation_ids=(),
+        capability_canonical_ids=(),
+        near_misses=(),
+        pending_review_count=3,
+        role_near_miss_count=2,
+    )
+
+    summary = _merge_summary(result)
+
+    assert summary["role_near_misses"] == 2
+    assert summary["pending_reviews"] == 3
+
+
+def test_merge_summary_role_near_misses_default_to_zero() -> None:
+    result = MergeResult(
+        regulatory_instrument_id="ri-summary-6",
+        obligation_ids=(),
+        capability_canonical_ids=(),
+        near_misses=(),
+    )
+
+    assert _merge_summary(result)["role_near_misses"] == 0
+
+
+def test_extraction_summary_reports_roles_minted_and_non_actor_candidates_dropped() -> None:
+    result = ExtractionResult(
+        regulatory_instrument_id="ri-summary-7",
+        role_node_ids={"Manufacturer": "role_m", "manufacturers": "role_m", "Importer": "role_i"},
+        requirement_ids=("req_1",),
+        candidate_count=1,
+        skipped_unit_count=0,
+        requirement_id_collisions=(),
+        roles_minted=2,
+        non_actor_roles_dropped=3,
+    )
+
+    summary = _extraction_summary(result)
+
+    assert summary["roles_minted"] == 2
+    assert summary["non_actor_roles_dropped"] == 3
+
+
+def test_extraction_summary_counts_a_role_once_however_many_spellings_map_to_it() -> None:
+    result = ExtractionResult(
+        regulatory_instrument_id="ri-summary-7b",
+        role_node_ids={"Manufacturer": "role_m", "manufacturers": "role_m", "Importer": "role_i"},
+        requirement_ids=("req_1",),
+        candidate_count=3,
+        skipped_unit_count=0,
+        requirement_id_collisions=(),
+        roles_minted=2,
+    )
+
+    assert _extraction_summary(result)["roles"] == 2
+
+
+def test_extraction_summary_keeps_the_roles_key_and_defaults_the_new_counts_to_zero() -> None:
+    result = ExtractionResult(
+        regulatory_instrument_id="ri-summary-8",
+        role_node_ids={},
+        requirement_ids=(),
+        candidate_count=0,
+        skipped_unit_count=0,
+        requirement_id_collisions=(),
+    )
+
+    summary = _extraction_summary(result)
+
+    assert (summary["roles"], summary["roles_minted"], summary["non_actor_roles_dropped"]) == (
+        0,
+        0,
+        0,
+    )
+
+
+def test_internal_ingestion_summary_reports_roles_minted_and_zero_non_actor_drops() -> None:
+    result = InternalIngestResult(
+        regulatory_instrument_id="ENGPRAC-1.0",
+        role_count=4,
+        requirement_count=0,
+        obligation_count=0,
+        capability_count=0,
+        policy_count=0,
+        standard_count=0,
+        control_count=0,
+        practice_area_count=0,
+        risk_path_count=0,
+    )
+
+    summary = _internal_ingestion_summary(result)
+
+    assert summary["roles"] == 4
+    assert summary["roles_minted"] == 4
+    assert summary["non_actor_roles_dropped"] == 0
 
 
 # --- reject redundant re-ingestion of an already-merged instrument -----------------

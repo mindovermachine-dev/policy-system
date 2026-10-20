@@ -31,6 +31,7 @@ from company_merge._review_floor_fixtures import (
     seed_existing,
 )
 from company_merge._seed_merge_graphs import BaselineGraphReader
+from company_merge._thresholds import ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.merge import MergeResult, merge_baseline_graph
 from ps_service.company_merge.pending_review import list_pending_reviews
 from ps_service.export.near_miss_gate import unresolved_near_miss_review_ids
@@ -56,6 +57,7 @@ def _merge(
         embed_model=EMBED_MODEL,
         merge_threshold=merge,
         review_threshold=review,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=ByNameEmbedding(extra_vectors),
         emitter=emitter,  # pyright: ignore[reportArgumentType]
         **rig.merge_keywords(),

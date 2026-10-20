@@ -24,7 +24,7 @@ from company_merge._seed_merge_graphs import (
     ingest_seed,
     parse_seed,
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.errors import (
     CompanyMergePersistenceError,
     GovernanceOwnerRequiredError,
@@ -87,6 +87,7 @@ def _merge(
         embed_model=EMBED_MODEL,
         merge_threshold=MERGE_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding or OneHotEmbeddingCaller(),
         emitter=emitter,
         governance=governance,

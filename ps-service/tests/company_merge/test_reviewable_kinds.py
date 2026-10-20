@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from company_merge._kinds import UNREGISTERED_KIND
+from ps_service.company_merge import pending_review
 from ps_service.company_merge.errors import (
     CompanyMergeConfigurationError,
     CompanyMergeValidationError,
@@ -13,6 +14,7 @@ from ps_service.company_merge.errors import (
 from ps_service.company_merge.reviewable_kinds import (
     CAPABILITY,
     REVIEWABLE_KINDS,
+    ROLE,
     ReviewableKind,
     ReviewThresholds,
     register_reviewable_kind,
@@ -35,8 +37,8 @@ def test_an_unknown_kind_error_is_a_validation_error() -> None:
     assert issubclass(UnknownReviewKindError, CompanyMergeValidationError)
 
 
-def test_capability_is_the_only_registered_kind_in_production() -> None:
-    assert registered_reviewable_kinds() == (CAPABILITY,)
+def test_capability_and_role_are_the_registered_kinds_in_production() -> None:
+    assert registered_reviewable_kinds() == (CAPABILITY, ROLE)
     assert reviewable_kind("Capability") is CAPABILITY
     assert (CAPABILITY.label, CAPABILITY.text_property) == ("Capability", "name")
     assert (CAPABILITY.scope, CAPABILITY.rule) == ("global", "merge-above")
@@ -68,7 +70,7 @@ def test_a_registered_kind_is_found_by_its_label(monkeypatch: pytest.MonkeyPatch
     register_reviewable_kind(_MERGE_ABOVE)
 
     assert reviewable_kind("Widget") is _MERGE_ABOVE
-    assert registered_reviewable_kinds() == (CAPABILITY, _MERGE_ABOVE)
+    assert registered_reviewable_kinds() == (CAPABILITY, ROLE, _MERGE_ABOVE)
 
 
 def test_test_only_kind_fixture_registers_the_kind(
@@ -138,3 +140,11 @@ def test_review_only_accepts_a_review_threshold_alone() -> None:
 
 def test_thresholds_default_to_none() -> None:
     assert ReviewThresholds() == ReviewThresholds(merge=None, review=None)
+
+
+def test_the_pending_review_docstring_names_every_registered_kind() -> None:
+    """The module docstring must not drift from the kinds that really exist."""
+    doc = pending_review.__doc__ or ""
+    missing = [kind.label for kind in registered_reviewable_kinds() if kind.label not in doc]
+
+    assert missing == []

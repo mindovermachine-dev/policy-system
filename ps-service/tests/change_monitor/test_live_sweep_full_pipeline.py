@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
 from api._audit_fakes import RecordedAuditRow
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from litellm.types.utils import Choices, Embedding, EmbeddingResponse, Message, ModelResponse
 
 from ps_service.api.catalog import CatalogEntry
@@ -186,6 +186,7 @@ class _StubLlm:
                 "requirements": [
                     {
                         "role_name": _ROLE,
+                        "role_is_actor": True,
                         "text": text,
                         "type": "requirement",
                         "letter_suffix": None,
@@ -442,6 +443,7 @@ def _build_world(
         llm_interface_embed_model="azure/stub-embed",
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
     )
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)

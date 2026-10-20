@@ -23,7 +23,7 @@ from company_merge._live_merge_assertions import (
     _snapshot_node_properties,  # pyright: ignore[reportPrivateUsage]
 )
 from company_merge._seed_merge_graphs import OneHotEmbeddingCaller
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import capability_id, obligation_id, requirement_id, role_id
 from ps_service.graph_gateway.connection import connect_from_config, select_graph
@@ -191,6 +191,7 @@ def merged_graph_run(
                 embed_model="fake-embed-model",
                 merge_threshold=MERGE_THRESHOLD,
                 review_threshold=REVIEW_THRESHOLD,
+                role_review_threshold=ROLE_REVIEW_THRESHOLD,
                 call_embedding=embed,
                 emitter=emitter,
             )

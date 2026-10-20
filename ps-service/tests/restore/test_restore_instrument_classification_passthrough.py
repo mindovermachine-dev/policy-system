@@ -19,7 +19,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.governance_import import GovernanceImport
@@ -91,6 +91,7 @@ def _build(
         governance=GovernanceImport(),
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=None,
     )
 

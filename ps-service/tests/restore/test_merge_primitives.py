@@ -17,7 +17,7 @@ import pytest
 from company_merge._gateway_fakes import MergeRig, stepped_values
 from company_merge._kinds import UNREGISTERED_KIND
 from company_merge._seed_merge_graphs import SingleTenantStore
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.company_merge import merge as company_merge_merge
 from ps_service.company_merge.errors import (
@@ -125,6 +125,7 @@ def _build(
         governance=governance or GovernanceImport(owner=_OWNER),
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=None,
         values=stepped_values(),
     )
@@ -438,6 +439,7 @@ def test_governance_content_without_an_owner_is_refused_before_any_read() -> Non
             governance=GovernanceImport(owner=None),
             merge_threshold=_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=None,
             values=stepped_values(),
         )
@@ -517,6 +519,7 @@ def test_a_manifest_id_matching_no_instrument_in_the_artifact_is_rejected(rig: M
             governance=GovernanceImport(owner=_OWNER),
             merge_threshold=_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=None,
             values=stepped_values(),
         )
@@ -544,11 +547,33 @@ def test_an_unset_review_threshold_raises_naming_the_variable_before_any_graph_c
             governance=GovernanceImport(owner=_OWNER),
             merge_threshold=_THRESHOLD,
             review_threshold=None,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=None,
             values=stepped_values(),
         )
 
     assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in str(raised.value)
+
+
+def test_an_unset_role_review_threshold_raises_naming_the_variable_before_any_graph_call() -> None:
+    class _NoReads:
+        def query(self, q: str, params: dict[str, object] | None = None) -> object:
+            raise AssertionError(f"a read reached the graph: {q}")
+
+    with pytest.raises(CompanyMergeConfigurationError) as raised:
+        build_policy_system_leg(
+            _external(),
+            instrument_id=_INSTRUMENT,
+            live=cast("GraphHandle", _NoReads()),
+            governance=GovernanceImport(owner=_OWNER),
+            merge_threshold=_THRESHOLD,
+            review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=None,
+            emitter=None,
+            values=stepped_values(),
+        )
+
+    assert "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD" in str(raised.value)
 
 
 def test_a_review_threshold_above_the_merge_threshold_raises_naming_both() -> None:
@@ -560,6 +585,7 @@ def test_a_review_threshold_above_the_merge_threshold_raises_naming_both() -> No
             governance=GovernanceImport(owner=_OWNER),
             merge_threshold=_THRESHOLD,
             review_threshold=_THRESHOLD + 0.05,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=None,
             values=stepped_values(),
         )
@@ -582,6 +608,7 @@ def test_the_leg_raises_a_near_miss_review_only_for_a_pair_at_or_above_its_revie
         governance=GovernanceImport(owner=_OWNER),
         merge_threshold=_THRESHOLD,
         review_threshold=review_threshold,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=None,
         values=stepped_values(),
     )

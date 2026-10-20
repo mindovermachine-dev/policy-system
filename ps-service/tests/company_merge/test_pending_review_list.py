@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from company_merge._kinds import UNREGISTERED_KIND
-from ps_service.company_merge.errors import StalePendingReviewError, UnknownReviewKindError
+from ps_service.company_merge.errors import UnknownReviewKindError
 from ps_service.company_merge.models import PendingReviewRecord
-from ps_service.company_merge.pending_review import list_pending_reviews, read_review_merge_sides
+from ps_service.company_merge.pending_review import list_pending_reviews
 from ps_service.config import load_config
 from ps_service.graph_gateway.connection import connect_from_config, select_graph
 
@@ -160,18 +160,6 @@ def test_the_list_query_filters_on_existence_alone_not_on_a_status() -> None:
 
     assert "status" not in graph.calls[0].query
     assert "coalesce" not in graph.calls[0].query
-
-
-def test_review_naming_an_absorbed_capability_is_reported_stale_by_the_merge_sides_read() -> None:
-    """An absorbed Capability is deleted: the optional match yields null for that side."""
-    graph = _FakeGraph(
-        rows=[["Capability", "cap_absorbed", "cap_survivor", False, True, None, "2026-01-01"]]
-    )
-
-    with pytest.raises(StalePendingReviewError):
-        read_review_merge_sides(graph, "review_aaa")
-
-    assert "status" not in graph.calls[0].query
 
 
 # --- falkordb_live: the list and the merge must agree ---------

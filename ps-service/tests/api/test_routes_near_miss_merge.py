@@ -281,6 +281,8 @@ def test_merge_of_a_review_that_is_not_a_capability_review_is_refused_with_409(
     env: _Env, test_only_reviewable_kind: ReviewableKind
 ) -> None:
     label = test_only_reviewable_kind.label
+    env.rig.seed_endpoint(label, "probe_a", name="Probe A")
+    env.rig.seed_endpoint(label, "probe_b", name="Probe B")
     env.rig.seed_near_miss_review(
         "review_probe", incoming_id="probe_a", existing_id="probe_b", kind=label
     )

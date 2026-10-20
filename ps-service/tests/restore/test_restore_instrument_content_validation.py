@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.export.models import SerializedGraph, SerializedNode
 from ps_service.restore.errors import ArtifactContentRejectedError
@@ -91,6 +91,7 @@ def test_baseline_only_content_violation_is_rejected_before_any_db_call(
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
             merge_threshold=0.9,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             actor=_ACTOR,
             open_gateway=never_open_gateway,
             audit_event_id=UNUSED_EVENT_ID,
@@ -112,6 +113,7 @@ def test_content_violation_emits_started_then_failed_audit_entries(
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
             merge_threshold=0.9,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             actor=_ACTOR,
             open_gateway=never_open_gateway,
             audit_event_id=UNUSED_EVENT_ID,
@@ -152,6 +154,7 @@ def test_baseline_with_a_merged_capability_is_rejected_before_any_db_call(
             single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
             merge_threshold=0.9,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             actor=_ACTOR,
             open_gateway=never_open_gateway,
             audit_event_id=UNUSED_EVENT_ID,

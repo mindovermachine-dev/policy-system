@@ -71,31 +71,46 @@ with "applies to" or "shall mean". A sentence whose grammatical subject is \
 "This Regulation"/"This Directive" itself, not a real-world actor, is never a \
 requirement.
 
-role_name: the substantive duty-bearing actor -- the one the text actually \
-assigns the duty to, in specific named-role terms (e.g. "Manufacturer", \
-"Data Controller"), never a generic umbrella term like "economic operator" if \
-a more specific role is discernible from context. If the text is phrased as a \
-Directive-style wrapper ("Member States shall ensure that <entity> \
-shall..."), attribute the duty to <entity>, not "Member States" -- Member \
-States are not the substantive duty-bearer.
+role_name: ONE named duty-bearing actor -- the single substantive actor the \
+text actually assigns the duty to, in specific named-role terms (e.g. \
+"Manufacturer", "Data Controller"), never a generic umbrella term like \
+"economic operator" if a more specific role is discernible from context. It \
+is exactly one actor, never a list or an alternative of actors (not \
+"importer or distributor", not "The Commission or ENISA"). If the text is \
+phrased as a Directive-style wrapper ("Member States shall ensure that \
+<entity> shall..."), attribute the duty to <entity>, not "Member States" -- \
+Member States are not the substantive duty-bearer.
 
-Granularity: one requirement per independently-required duty. If the \
-paragraph bundles more than one independent duty with no existing letter to \
-distinguish them, invent trailing letters "a", "b", "c"... in the order the \
-duties appear, and set letter_suffix to that letter (null if the paragraph \
-is not split). If the paragraph already contains a cumulative lettered \
-checklist where each point is independently required, split each point into \
-its own requirement. If instead it is a disjunctive list ("one of the \
-following..."), keep it as ONE requirement -- splitting a disjunctive list \
-would manufacture a false competing duty.
+role_is_actor: true only when role_name is a real-world actor that can bear a \
+duty -- a person, organisation, authority or body named by its role in the \
+text. Set it to false when role_name is not such an actor: a document or \
+record ("the technical documentation"), a fine or fee, an event, a product, \
+or a back-reference that names nobody ("that body", "the person referred to \
+in paragraph 1", "the offender"). Always include it, for every requirement, \
+unconditionally.
+
+Granularity: one requirement per independently-required duty AND per actor. \
+If one duty is imposed on several actors ("manufacturers, importers and \
+distributors shall..."), return one requirement per actor, each with its own \
+role_name (split it as you would a bundled duty: letter_suffix "a", "b", "c" \
+in the order the actors appear). If the paragraph bundles more than one \
+independent duty with no existing letter to distinguish them, invent \
+trailing letters "a", "b", "c"... in the order the duties appear, and set \
+letter_suffix to that letter (null if the paragraph is not split). If the \
+paragraph already contains a cumulative lettered checklist where each point \
+is independently required, split each point into its own requirement. If \
+instead it is a disjunctive list ("one of the following..."), keep it as ONE \
+requirement -- splitting a disjunctive list would manufacture a false \
+competing duty.
 
 confidence: your own certainty, 0.0-1.0, that this is genuinely an operative \
 requirement/prohibition/recommendation (not a borderline case). Always \
 include it, for every requirement, unconditionally.
 
 Return strict JSON with a top-level "requirements" key: {"requirements": \
-[{"role_name": str, "text": str, "type": "requirement"|"prohibition"|\
-"recommendation", "letter_suffix": str|null, "confidence": float}]}. Return \
+[{"role_name": str, "role_is_actor": bool, "text": str, "type": \
+"requirement"|"prohibition"|"recommendation", "letter_suffix": str|null, \
+"confidence": float}]}. Return \
 {"requirements": []} if the text has no operative duty."""
 
 
@@ -119,7 +134,8 @@ def parse_extraction_response(text: str, unit: ExtractionUnit) -> list[Requireme
             (`"missing_requirements_key"`), has a non-list `"requirements"` value
             (`"non_list_requirements"`), contains a non-object item (`"non_object_item"`), or
             contains an item that fails `RequirementCandidate` validation, for example a missing
-            `confidence`, which is never defaulted (`"invalid_requirement_item"`).
+            `confidence` or `role_is_actor`, neither of which is ever defaulted, or a
+            `role_is_actor` that is not a JSON boolean (`"invalid_requirement_item"`).
     """
     try:
         payload = json.loads(text)
@@ -153,7 +169,8 @@ def _build_candidate(item: object, unit: ExtractionUnit) -> RequirementCandidate
     Raises:
         DomainMapperExtractionError: Naming `unit.citation_ref`, when `item` is not an object
             (`error_kind="non_object_item"`) or fails validation (`"invalid_requirement_item"`);
-            a missing or invalid field such as `confidence` is a typed error, never a default.
+            a missing or invalid field such as `confidence` or `role_is_actor` is a typed error,
+            never a default.
     """
     if not isinstance(item, dict):
         raise DomainMapperExtractionError(

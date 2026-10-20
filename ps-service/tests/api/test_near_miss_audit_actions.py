@@ -11,6 +11,7 @@ from ps_service.api.near_miss_audit_actions import (
     NearMissResolveDetails,
 )
 from ps_service.audit import is_known_resource_type, resolve_details_model
+from ps_service.company_merge.reviewable_kinds import ROLE
 
 
 def _valid(**overrides: object) -> dict[str, object]:
@@ -38,6 +39,12 @@ def test_details_accept_a_kind_that_is_not_capability() -> None:
     details = NearMissResolveDetails.model_validate(_valid(kind="ProbeItem"))
 
     assert details.kind == "ProbeItem"
+
+
+def test_details_accept_the_role_kind_taken_from_its_spec() -> None:
+    details = NearMissResolveDetails.model_validate(_valid(kind=ROLE.label))
+
+    assert details.kind == "Role"
 
 
 def test_details_refuse_an_empty_kind() -> None:

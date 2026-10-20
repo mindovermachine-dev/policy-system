@@ -24,7 +24,7 @@ from company_merge._seed_merge_graphs import (
     OneHotEmbeddingCaller,
     SingleTenantStore,
 )
-from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD
+from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.dedup import (
     dedupe_canonical_nodes,
     resolve_capability_convergence_offline,
@@ -275,6 +275,7 @@ def test_merge_baseline_graph_persists_one_review_per_near_miss_with_the_pair_an
         embed_model=EMBED_MODEL,
         merge_threshold=MERGE_THRESHOLD,
         review_threshold=NO_FLOOR_REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=OneHotEmbeddingCaller(),
         emitter=emitter,
         **merge_rig.merge_keywords(),

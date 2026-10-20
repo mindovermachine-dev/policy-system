@@ -40,8 +40,9 @@ from company_merge._seed_merge_graphs import (
     EMBED_MODEL,
     MERGE_THRESHOLD,
     BaselineGraphReader,
+    OneHotEmbeddingCaller,
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge import graph_reader, graph_writer
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.merge import merge_baseline_graph
@@ -149,6 +150,8 @@ def _run_production(
             embed_model=EMBED_MODEL,
             merge_threshold=MERGE_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
+            call_embedding=OneHotEmbeddingCaller(),
             emitter=emitter,
             **rig.merge_keywords(),
         )

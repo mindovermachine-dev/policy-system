@@ -1,13 +1,13 @@
-"""Backfill graph embeddings on exported Capability and Policy nodes.
+"""Backfill graph embeddings on exported Role, Capability and Policy nodes.
 
-`backfill_capability_embeddings` computes and stores an embedding on every Capability node (and,
-for `internal` sources, every Policy node) of the baseline graph that does not already carry one.
-The cost of embedding calls is paid once, at curation time, so restoring an instrument never
-needs a live LLM provider. All embeddings are computed first, then one group of embedding-only
-`UpsertNode` primitives is submitted through the Graph Write Gateway on the source instance's
-baseline graph, anchored to the audit row that Export recorded. If no node lacks an embedding
-nothing is submitted, so a re-run adds no log entry; if an embedding call fails nothing has
-been written.
+`backfill_capability_embeddings` computes and stores an embedding on every Role and Capability
+node (and, for `internal` sources, every Policy node) of the baseline graph that does not already
+carry one. The cost of embedding calls is paid once, at curation time, so restoring an
+instrument never needs a live LLM provider. All embeddings are computed first, then one group
+of embedding-only `UpsertNode` primitives is submitted through the Graph Write Gateway on the
+source instance's baseline graph, anchored to the audit row that Export recorded. If no node
+lacks an embedding nothing is submitted, so a re-run adds no log entry; if an embedding call
+fails nothing has been written.
 
 `ps_service.export.export_instrument.export_instrument` calls it before either graph is
 serialized, so the exported artifacts include the embeddings.
@@ -38,17 +38,18 @@ __all__ = ["backfill_capability_embeddings"]
 _COMPONENT = "export"
 _ACTION = "backfill_embeddings"
 
-# The property each label's embedding text is computed from: Capability has no `title` and Policy
-# has no `name` (see docs/artifacts/ps-domain-concepts.md), so the mapping is a fixed per-label
-# literal, never adapter-sourced.
-_TEXT_PROPERTY_BY_LABEL: dict[str, str] = {"Capability": "name", "Policy": "title"}
+# The property each label's embedding text is computed from: Role and Capability have no `title`
+# and Policy has no `name` (see docs/artifacts/ps-domain-concepts.md), so the mapping is a fixed
+# per-label literal, never adapter-sourced.
+_TEXT_PROPERTY_BY_LABEL: dict[str, str] = {"Role": "name", "Capability": "name", "Policy": "title"}
 
 # Labels that receive embeddings, keyed by `source_type`: an `external` source's ingestion
 # pipeline stops at Capability, while an `internal` source also carries Policy nodes (authored
-# through Ingestion's internal-seed adapter).
+# through Ingestion's internal-seed adapter). Role names are embedded for both, so a restore can
+# score Role near misses without a live embedding provider.
 _EMBEDDABLE_LABELS_BY_SOURCE_TYPE: dict[Literal["external", "internal"], tuple[str, ...]] = {
-    "external": ("Capability",),
-    "internal": ("Capability", "Policy"),
+    "external": ("Role", "Capability"),
+    "internal": ("Role", "Capability", "Policy"),
 }
 
 
@@ -104,9 +105,9 @@ def backfill_capability_embeddings(
     """Compute and store an embedding on every embeddable node that lacks one.
 
     The baseline graph is first required to hold everything committed to its log, because an
-    earlier pending group would make the read below stale. Every Capability node (and, for
+    earlier pending group would make the read below stale. Every Role and Capability node (and, for
     `source_type="internal"`, every Policy node) whose `embedding` property is unset is then
-    read, and one embedding is computed per node from its `name` (Capability) or `title`
+    read, and one embedding is computed per node from its `name` (Role, Capability) or `title`
     (Policy). All embeddings are computed before anything is submitted, so a failed embedding
     call has written nothing. Finally one group of embedding-only `UpsertNode` primitives is
     submitted on `baseline_graph_name` and the graph is required to have applied it. With
@@ -119,8 +120,8 @@ def backfill_capability_embeddings(
             for the caught-up checks. Non-empty.
         submitter: Graph Write Gateway submitter used for the group and the caught-up checks.
         audit_event_id: Id of the audit row Export recorded; the group is anchored to it.
-        source_type: `"external"` backfills Capability nodes only; `"internal"` backfills
-            Capability and Policy nodes.
+        source_type: `"external"` backfills Role and Capability nodes; `"internal"` backfills
+            Role, Capability and Policy nodes.
         model: Embedding model name passed to `RouteEmbedding`.
         call_embedding: Embedding provider callable; `None` uses the default provider caller.
         emitter: Log emitter for the outcome entry and the embedding-call entries; `None` uses

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant
@@ -158,6 +158,7 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
         provisioned_graph_log,
         company_merge_capability_merge_threshold=_MERGE_THRESHOLD,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
     )
     db = connect_from_config(config)
 

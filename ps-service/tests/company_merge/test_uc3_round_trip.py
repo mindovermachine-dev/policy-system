@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter
     from company_merge._gateway_fakes import MergeRig
 
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import (
@@ -386,7 +386,7 @@ def _engineering_practices_baseline() -> _ScriptedBaselineGraph:
             "title": "Engineering Practices",
             "source_type": "internal",
         },
-        role_rows=[[role_node_id, "Software Engineer", 0.9]],
+        role_rows=[[role_node_id, "Software Engineer", 0.9, None]],
         requirement_rows=[
             [
                 requirement_node_id,
@@ -431,6 +431,7 @@ def test_uc3_capability_policy_standard_control_query_returns_real_rows(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         governance=GovernanceImport(owner=("sub-1", "https://issuer.example")),
         **merge_rig.merge_keywords(),

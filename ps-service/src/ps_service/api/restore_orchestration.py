@@ -108,6 +108,7 @@ class RestoreStage(Protocol):
         single_tenant_graph_name: str,
         merge_threshold: float,
         review_threshold: float,
+        role_review_threshold: float,
         actor: str,
         open_gateway: Callable[[], object],
         audit_event_id: str,
@@ -124,6 +125,8 @@ class RestoreStage(Protocol):
                 1.
             review_threshold: Minimum similarity at which a Capability near miss is recorded for
                 review, in 0 to ``merge_threshold``.
+            role_review_threshold: Minimum similarity at which a Role near miss is recorded for
+                review, in 0 to 1.
             actor: The requesting client host, recorded as the caller in audit log entries.
             open_gateway: Returns the Graph Write Gateway, or raises when the service has none. The
                 routine calls it only after the artifact verified.
@@ -194,6 +197,7 @@ class CatalogRestoreStage(Protocol):
         single_tenant_graph_name: str,
         merge_threshold: float,
         review_threshold: float,
+        role_review_threshold: float,
         actor: str,
         open_gateway: Callable[[], object],
         audit_event_id: str,
@@ -211,6 +215,8 @@ class CatalogRestoreStage(Protocol):
                 1.
             review_threshold: Minimum similarity at which a Capability near miss is recorded for
                 review, in 0 to ``merge_threshold``.
+            role_review_threshold: Minimum similarity at which a Role near miss is recorded for
+                review, in 0 to 1.
             actor: The requesting client host (REST) or the fixed MCP caller label, recorded as the
                 caller in audit log entries.
             open_gateway: Returns the Graph Write Gateway, or raises when the service has none. The
@@ -347,16 +353,16 @@ def _to_restore_artifact(request_body: RestorationRequest) -> RestoreArtifact:
 # --- config-completeness guard -------------------------------------------
 
 
-def _require_merge_review_thresholds(config: ServiceConfig) -> tuple[float, float]:
-    """Validate the Capability merge and review thresholds and return them.
+def _require_merge_review_thresholds(config: ServiceConfig) -> tuple[float, float, float]:
+    """Validate the Capability merge and review thresholds and the Role review threshold.
 
     The restore replays convergence with the same settings that live ingestion uses, validated by
-    the same ``capability_thresholds`` guard. A missing setting, or a review threshold above the
-    merge threshold, is reported as stage ``configuration`` and raised before the restore routine
-    runs.
+    the same ``capability_thresholds`` and ``role_thresholds`` guards. A missing setting, or a
+    review threshold above the merge threshold, is reported as stage ``configuration`` and raised
+    before the restore routine runs.
 
     Returns:
-        The validated ``(merge_threshold, review_threshold)``.
+        The validated ``(merge_threshold, review_threshold, role_review_threshold)``.
 
     Raises:
         RestoreStageFailedError: A setting is missing or inconsistent (502, stage
@@ -364,6 +370,7 @@ def _require_merge_review_thresholds(config: ServiceConfig) -> tuple[float, floa
     """
     from ps_service.company_merge.capability_config import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         capability_thresholds,
+        role_thresholds,
     )
     from ps_service.company_merge.errors import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         CompanyMergeConfigurationError,
@@ -374,9 +381,14 @@ def _require_merge_review_thresholds(config: ServiceConfig) -> tuple[float, floa
             config.company_merge_capability_merge_threshold,
             config.company_merge_capability_review_threshold,
         )
+        role = role_thresholds(config.company_merge_role_review_threshold)
     except CompanyMergeConfigurationError as exc:
         raise RestoreStageFailedError(stage=_CONFIGURATION_STAGE, reason=str(exc)) from exc
-    return cast("float", thresholds.merge), cast("float", thresholds.review)
+    return (
+        cast("float", thresholds.merge),
+        cast("float", thresholds.review),
+        cast("float", role.review),
+    )
 
 
 # --- failure classification -----------------------------------------------
@@ -477,17 +489,18 @@ def _perform_restore(
     dependencies: _RestoreInfra,
     audit_event_id: str,
     invoke: Callable[
-        [float, float, ReadOnlyDatabase, str, Callable[[], object], str], RestoreOutcome
+        [float, float, float, ReadOnlyDatabase, str, Callable[[], object], str], RestoreOutcome
     ],
     emitter: LogEmitter | None,
 ) -> RestorationAcceptedResponse:
     """Run the restore routine through ``invoke`` and translate its failures into API errors.
 
     Shared by the upload and catalog paths: the artifact differs, the failure translation does not.
-    ``invoke`` receives ``(merge_threshold, review_threshold, db, single_tenant_graph_name,
-    open_gateway, audit_event_id)`` and calls the path's own restore routine. ``open_gateway``
-    looks up the gateway lazily, inside the routine and after the artifact verified, so a corrupt
-    artifact is still rejected with 422 when no gateway is installed.
+    ``invoke`` receives ``(merge_threshold, review_threshold, role_review_threshold, db,
+    single_tenant_graph_name, open_gateway, audit_event_id)`` and calls the path's own restore
+    routine. ``open_gateway`` looks up the gateway lazily, inside the routine and after the
+    artifact verified, so a corrupt artifact is still rejected with 422 when no gateway is
+    installed.
 
     Args:
         instrument_id: The instrument being restored, used in failure logging.
@@ -502,8 +515,8 @@ def _perform_restore(
         A :class:`RestorationAcceptedResponse` naming the completed stages.
 
     Raises:
-        RestoreStageFailedError: The Capability merge threshold is unset, or the routine failed
-            for any reason other than those below (502).
+        RestoreStageFailedError: The Capability merge threshold or the Role review threshold is
+            unset, or the routine failed for any reason other than those below (502).
         RestoreArtifactRejectedError: The artifact fails checksum or schema-version verification
             (422).
         GraphWriteUnavailableError: The gateway lookup found no gateway (503); passed through
@@ -515,7 +528,9 @@ def _perform_restore(
         Opens the database handle, runs the restore routine (graph writes through the gateway), and
         emits a failure log entry for an unsafe-to-show error.
     """
-    merge_threshold, review_threshold = _require_merge_review_thresholds(config)
+    merge_threshold, review_threshold, role_review_threshold = _require_merge_review_thresholds(
+        config
+    )
     db = dependencies.open_db(config)
     graph_name = dependencies.single_tenant_graph_name(config)
 
@@ -524,7 +539,13 @@ def _perform_restore(
 
     try:
         outcome = invoke(
-            merge_threshold, review_threshold, db, graph_name, open_gateway, audit_event_id
+            merge_threshold,
+            review_threshold,
+            role_review_threshold,
+            db,
+            graph_name,
+            open_gateway,
+            audit_event_id,
         )
     except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
         raise RestoreArtifactRejectedError(str(exc)) from exc
@@ -680,13 +701,14 @@ def run_restoration(
             actor=actor,
             dependencies=dependencies,
             audit_event_id=audit_event_id,
-            invoke=lambda merge, review, db, graph_name, open_gateway, event_id: (
+            invoke=lambda merge, review, role_review, db, graph_name, open_gateway, event_id: (
                 dependencies.restore(
                     artifact,
                     db=db,
                     single_tenant_graph_name=graph_name,
                     merge_threshold=merge,
                     review_threshold=review,
+                    role_review_threshold=role_review,
                     actor=actor,
                     open_gateway=open_gateway,
                     audit_event_id=event_id,
@@ -796,13 +818,14 @@ def run_restoration_from_catalog_source(
             actor=actor,
             dependencies=dependencies,
             audit_event_id=audit_event_id,
-            invoke=lambda merge, review, db, graph_name, open_gateway, event_id: (
+            invoke=lambda merge, review, role_review, db, graph_name, open_gateway, event_id: (
                 dependencies.restore(
                     artifact,
                     db=db,
                     single_tenant_graph_name=graph_name,
                     merge_threshold=merge,
                     review_threshold=review,
+                    role_review_threshold=role_review,
                     actor=actor,
                     open_gateway=open_gateway,
                     audit_event_id=event_id,

@@ -18,7 +18,7 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 import ps_service.restore.merge_primitives as merge_primitives_module
 from ps_service.export.falkordb_connection import graph_query_handle
@@ -132,6 +132,7 @@ def test_build_step_failure_leaves_the_log_and_every_graph_untouched(
                     single_tenant_graph_name=single_tenant_graph_name,
                     merge_threshold=_MERGE_THRESHOLD,
                     review_threshold=REVIEW_THRESHOLD,
+                    role_review_threshold=ROLE_REVIEW_THRESHOLD,
                     actor=_ACTOR,
                     open_gateway=live.open_gateway,
                     audit_event_id=live.audit_event_id,
@@ -238,6 +239,7 @@ def test_near_miss_reviews_are_all_or_nothing_with_the_restored_content(
                     single_tenant_graph_name=single_tenant_graph_name,
                     merge_threshold=_MERGE_THRESHOLD,
                     review_threshold=REVIEW_THRESHOLD,
+                    role_review_threshold=ROLE_REVIEW_THRESHOLD,
                     actor=_ACTOR,
                     open_gateway=_open_gateway,
                     audit_event_id=live.audit_event_id,

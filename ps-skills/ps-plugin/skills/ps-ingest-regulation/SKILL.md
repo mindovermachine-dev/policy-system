@@ -150,6 +150,10 @@ a PS Service connector. From here on, "the PS Service connector" means the
      4. merge — <summary>
    ```
 
+   When a stage summary carries `roles_minted`, `non_actor_roles_dropped` or
+   `role_near_misses`, report them as given; `role_near_misses` are Role reviews
+   to resolve with `ps-near-miss-review`.
+
    On `outcome: "already_ingested"` (legacy celex-less node only), report instead that nothing new ran —
    never render a `Stages:` block, since none ran:
 

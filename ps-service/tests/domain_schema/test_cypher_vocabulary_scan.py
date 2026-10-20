@@ -222,6 +222,7 @@ def test_scan_flags_an_unknown_label_in_a_copied_source_tree(tmp_path: Path) -> 
 _DYNAMIC_SITES: dict[str, int] = {
     "company_merge/dedup.py": 4,  # the global and the per-instrument index reads
     "company_merge/graph_writer.py": 2,  # the existing-id and embedding-state reads
+    "company_merge/pending_review.py": 2,  # the per-kind side read (both sides); validated label
     "domain_mapper/graph_writer.py": 1,  # the existing-node read, fixed labels only
     "export/embeddings.py": 2,  # the missing-embedding read; the write is the gateway
     "export/near_miss_gate.py": 1,  # the per-kind id read; the label is a validated spec label

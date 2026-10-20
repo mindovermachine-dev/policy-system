@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +51,10 @@ class RequirementCandidate(BaseModel):
         unit_article_number: Article number of that unit.
         unit_paragraph_number: Paragraph number of that unit.
         role_name: Name of the Role bearing the duty; non-empty.
+        role_is_actor: Whether `role_name` names ONE real duty-bearing actor (as opposed to a
+            document, fee, event, product or a back-reference such as "that body"). Required,
+            never defaulted, and a strict boolean: a candidate with `False` is dropped before any
+            Role, Requirement or Obligation is written.
         text: The duty statement; non-empty.
         type: Whether the duty is a requirement, a prohibition or a recommendation.
         letter_suffix: Sub-paragraph letter when the unit holds several duties, else `None`.
@@ -63,6 +67,7 @@ class RequirementCandidate(BaseModel):
     unit_article_number: str
     unit_paragraph_number: str
     role_name: str = Field(min_length=1)
+    role_is_actor: StrictBool
     text: str = Field(min_length=1)
     type: Literal["requirement", "prohibition", "recommendation"]
     letter_suffix: str | None
@@ -154,13 +159,17 @@ class ExtractionResult:
 
     Attributes:
         regulatory_instrument_id: The instrument the call extracted from.
-        role_node_ids: Mapping of Role name to Role node id, for derivation's use.
+        role_node_ids: Mapping of every raw Role name spelling seen to its Role node id, for
+            derivation's use; several spellings may share one id.
         requirement_ids: Ids of the Requirements written, in document order; empty when none.
         candidate_count: Number of Requirement candidates the LLM returned across all units.
         skipped_unit_count: Units whose LLM response was malformed; they are logged, not raised.
         requirement_id_collisions: Disambiguated ids minted when two candidates produced the
             same base id with different text. Surfaced here and as an `outcome="collision"` log
             entry, never raised.
+        roles_minted: Distinct Role nodes the call wrote (several raw names may share one id).
+        non_actor_roles_dropped: Candidates whose `role_name` was not an actor, so no Role,
+            Requirement or Obligation was written for them; 0 when the call drops none.
     """
 
     regulatory_instrument_id: str
@@ -169,6 +178,8 @@ class ExtractionResult:
     candidate_count: int
     skipped_unit_count: int  # units whose LLM response was malformed — logged, not raised
     requirement_id_collisions: tuple[str, ...]
+    roles_minted: int = 0
+    non_actor_roles_dropped: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -371,6 +371,7 @@ class MergeStage(Protocol):
         embed_model: str,
         merge_threshold: float | None,
         review_threshold: float | None,
+        role_review_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: LogEmitter | None = None,
         governance: GovernanceImport | None = None,
@@ -390,6 +391,8 @@ class MergeStage(Protocol):
             merge_threshold: Cosine similarity at or above which a semantic match is
                 accepted; ``None`` is a configuration error.
             review_threshold: Cosine similarity at or above which a Capability near miss is
+                raised for review; ``None`` is a configuration error.
+            role_review_threshold: Cosine similarity at or above which a Role near miss is
                 raised for review; ``None`` is a configuration error.
             call_embedding: Embedding caller; ``None`` uses the default.
             emitter: Log emitter; ``None`` uses the default.
@@ -495,12 +498,14 @@ class _ResolvedPipelineConfig:
         embed_model: Embedding model identifier for the merge's duplicate comparison.
         merge_threshold: Cosine similarity at or above which two Capabilities merge.
         review_threshold: Cosine similarity at or above which a Capability near miss is raised.
+        role_review_threshold: Cosine similarity at or above which a Role near miss is raised.
     """
 
     chat_model: str
     embed_model: str
     merge_threshold: float
     review_threshold: float
+    role_review_threshold: float
 
 
 def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
@@ -518,14 +523,22 @@ def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
     Raises:
         IngestionConfigIncompleteError: If ``llm_interface_model``,
             ``llm_interface_embed_model``, or
-            ``company_merge_capability_merge_threshold`` or
-            ``company_merge_capability_review_threshold`` is ``None``.
+            ``company_merge_capability_merge_threshold``,
+            ``company_merge_capability_review_threshold`` or
+            ``company_merge_role_review_threshold`` is ``None``.
     """
     chat_model = config.llm_interface_model
     embed_model = config.llm_interface_embed_model
     threshold = config.company_merge_capability_merge_threshold
     review_threshold = config.company_merge_capability_review_threshold
-    if chat_model is None or embed_model is None or threshold is None or review_threshold is None:
+    role_review_threshold = config.company_merge_role_review_threshold
+    if (
+        chat_model is None
+        or embed_model is None
+        or threshold is None
+        or review_threshold is None
+        or role_review_threshold is None
+    ):
         missing = ", ".join(missing_ingestion_config_fields(config))
         message = f"ingestion configuration incomplete: {missing} not set"
         raise IngestionConfigIncompleteError(message)
@@ -534,6 +547,7 @@ def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
         embed_model=embed_model,
         merge_threshold=threshold,
         review_threshold=review_threshold,
+        role_review_threshold=role_review_threshold,
     )
 
 
@@ -1000,10 +1014,12 @@ def _ingestion_summary(result: IngestResult) -> dict[str, int]:
 def _extraction_summary(result: ExtractionResult) -> dict[str, int]:
     """Summarise an ``ExtractionResult`` as small integer counts."""
     return {
-        "roles": len(result.role_node_ids),
+        "roles": len(set(result.role_node_ids.values())),
         "requirements": len(result.requirement_ids),
         "candidates": result.candidate_count,
         "skipped_units": result.skipped_unit_count,
+        "roles_minted": result.roles_minted,
+        "non_actor_roles_dropped": result.non_actor_roles_dropped,
     }
 
 
@@ -1023,14 +1039,16 @@ def _merge_summary(result: MergeResult) -> dict[str, int]:
     ``new_obligations``, ``new_capabilities`` and ``matched_capabilities`` are the net-new and
     matched facts ``company_merge`` computed (never approximations); the ingestion audit rows
     carry these three counts. ``obligations`` and ``canonical_capabilities`` are the totals
-    processed, ``pending_reviews`` counts the near-miss reviews opened. Consumers iterate
-    the mapping generically, so a new key is additive.
+    processed, ``pending_reviews`` counts the near-miss reviews opened (Capability and Role),
+    ``role_near_misses`` is the Role share of those. Consumers iterate the mapping generically,
+    so a new key is additive.
     """
     return {
         "obligations": len(result.obligation_ids),
         "canonical_capabilities": len(result.capability_canonical_ids),
         "near_misses": len(result.near_misses),
         "pending_reviews": result.pending_review_count,
+        "role_near_misses": result.role_near_miss_count,
         "new_obligations": result.new_obligation_count,
         "new_capabilities": result.new_capability_count,
         "matched_capabilities": result.matched_capability_count,
@@ -1428,6 +1446,7 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
                 embed_model=resolved.embed_model,
                 merge_threshold=resolved.merge_threshold,
                 review_threshold=resolved.review_threshold,
+                role_review_threshold=resolved.role_review_threshold,
             ),
             emitter=emitter,
         )
@@ -1777,9 +1796,15 @@ def _resolve_and_run(
 
 
 def _internal_ingestion_summary(result: InternalIngestResult) -> dict[str, int]:
-    """Summarise an ``InternalIngestResult`` as small integer counts."""
+    """Summarise an ``InternalIngestResult`` as small integer counts.
+
+    An internal seed skips extraction, so no non-actor candidate can be dropped:
+    ``non_actor_roles_dropped`` is 0 by construction.
+    """
     return {
         "roles": result.role_count,
+        "roles_minted": result.role_count,
+        "non_actor_roles_dropped": 0,
         "requirements": result.requirement_count,
         "obligations": result.obligation_count,
         "capabilities": result.capability_count,
@@ -2037,6 +2062,7 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
                     embed_model=resolved.embed_model,
                     merge_threshold=resolved.merge_threshold,
                     review_threshold=resolved.review_threshold,
+                    role_review_threshold=resolved.role_review_threshold,
                     emitter=emitter,
                     governance=GovernanceImport(owner=owner),
                 ),

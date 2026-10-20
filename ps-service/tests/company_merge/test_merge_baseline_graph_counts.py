@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.company_merge.models import MergeResult
 from ps_service.domain_mapper.identity import obligation_id
@@ -87,7 +87,7 @@ class _Baseline:
         if "(n:Obligation) RETURN" in q:
             return _Result([[oid, text, 0.9] for oid, text in self._obligations])
         if "n.name, n.confidence" in q:
-            return _Result([[_ROLE, "Operator", 0.9]])
+            return _Result([[_ROLE, "Operator", 0.9, None]])
         if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
             return _Result([[_InstrumentNode({"id": "REG-C", "title": "Counts"})]])
         return _Result([])
@@ -165,6 +165,7 @@ def _merge(
         embed_model="fake-embed-model",
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,  # pyright: ignore[reportArgumentType]
         **merge_rig.merge_keywords(),
     )

@@ -80,7 +80,8 @@ addition to FalkorDB.
 
 Requires a running FalkorDB with `cra_baseline`, `gdpr_baseline`, `nis2_baseline` and
 `policy_system` reachable, the PS state Postgres, and
-`PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`, `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` and
+`PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`, `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD`,
+`PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD` and
 `PS_LLMINTERFACE_EMBED_MODEL` resolvable through `ps_service.config.load_config()`.
 """
 
@@ -377,6 +378,7 @@ class _MergeSettings:
     config: ServiceConfig
     merge_threshold: float
     review_threshold: float
+    role_review_threshold: float
     embed_model: str
 
 
@@ -397,6 +399,13 @@ def _resolve_merge_config() -> _MergeSettings | int:
             file=sys.stderr,
         )
         return 1
+    if config.company_merge_role_review_threshold is None:
+        print(
+            "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD is not set -- resolve it via "
+            "ServiceConfig before running a live merge.",
+            file=sys.stderr,
+        )
+        return 1
     if config.llm_interface_embed_model is None:
         print(
             "PS_LLMINTERFACE_EMBED_MODEL is not set -- resolve it via ServiceConfig before "
@@ -408,6 +417,7 @@ def _resolve_merge_config() -> _MergeSettings | int:
         config=config,
         merge_threshold=config.company_merge_capability_merge_threshold,
         review_threshold=config.company_merge_capability_review_threshold,
+        role_review_threshold=config.company_merge_role_review_threshold,
         embed_model=config.llm_interface_embed_model,
     )
 
@@ -462,6 +472,7 @@ def _run_all_regulations(
                     embed_model=settings.embed_model,
                     merge_threshold=settings.merge_threshold,
                     review_threshold=settings.review_threshold,
+                    role_review_threshold=settings.role_review_threshold,
                     emitter=emitter,
                 )
         except Exception as exc:  # noqa: BLE001 -- record and stop, never continue past a failed regulation

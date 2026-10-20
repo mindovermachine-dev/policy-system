@@ -71,7 +71,7 @@ from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own two real-token tests can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from litellm.types.utils import Choices, Embedding, EmbeddingResponse, Message, ModelResponse
 from mcp.types import CallToolResult, TextContent
@@ -206,6 +206,7 @@ def _configure_complete_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.83")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
+    monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", str(ROLE_REVIEW_THRESHOLD))
 
 
 def _call_ingest_regulation(celex: str, short_name: str) -> CallToolResult:
@@ -315,6 +316,10 @@ _PROVENANCE_READ_RE = re.compile(
 _EDGE_READ_RE = re.compile(
     r"^MATCH \(s:(?P<source_label>\w+)\)-\[:(?P<rel>\w+)\]->\(t:(?P<target_label>\w+)\) "
     r"RETURN s\.id, t\.id$"
+)
+_DEFINED_NODES_READ_RE = re.compile(
+    r"^MATCH \(:RegulatoryInstrument \{id: \$instrument_id\}\)-\[:DEFINES\]->"
+    r"\(n:(?P<label>\w+)\) RETURN n\.id, n\.(?P<prop>\w+), n\.embedding$"
 )
 _RI_SCOPED_READ_QUERY = "MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r"
 _DERIVATION_READ_QUERY = (
@@ -447,6 +452,22 @@ class _MiniGraph:
                     [target_id, edge_properties.get(prop)]
                     for (source_id, target_id), edge_properties in self._edges.get(key, {}).items()
                     if source_id == wanted_source
+                ]
+            )
+        if match := _DEFINED_NODES_READ_RE.match(q):
+            # the per-instrument candidate pool: the nodes the instrument DEFINES.
+            key = ("DEFINES", "RegulatoryInstrument", match["label"])
+            defined_ids = [
+                target_id
+                for (source_id, target_id) in self._edges.get(key, {})
+                if source_id == params["instrument_id"]
+            ]
+            nodes = self._nodes.get(match["label"], {})
+            return _FakeQueryResult(
+                [
+                    [i, nodes[i].get(match["prop"]), nodes[i].get("embedding")]
+                    for i in defined_ids
+                    if i in nodes
                 ]
             )
         if match := _EDGE_READ_RE.match(q):
@@ -726,6 +747,7 @@ def _fake_call_completion(*, fail_capability_derivation: bool = False) -> Comple
                         "requirements": [
                             {
                                 "role_name": "Manufacturer",
+                                "role_is_actor": True,
                                 "text": _FIXTURE_UNIT.text,
                                 "type": "requirement",
                                 "letter_suffix": None,
@@ -921,6 +943,7 @@ def _use_real_pipeline_stages(
         embed_model: str,
         merge_threshold: float | None,
         review_threshold: float | None,
+        role_review_threshold: float | None,
         call_embedding: EmbeddingCaller | None = None,
         emitter: object = None,
         governance: GovernanceImport | None = None,
@@ -937,6 +960,7 @@ def _use_real_pipeline_stages(
             embed_model=embed_model,
             merge_threshold=merge_threshold,
             review_threshold=review_threshold,
+            role_review_threshold=role_review_threshold,
             call_embedding=_fake_call_embedding,
             emitter=emitter,  # pyright: ignore[reportArgumentType]
             governance=governance,
@@ -1527,6 +1551,7 @@ def _rest_app_config() -> ServiceConfig:
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         authentik_api_token="test-authentik-token",
         authentik_base_url="https://authentik.example.com",
@@ -1644,6 +1669,7 @@ def test_ingestion_config_incomplete_returns_named_error_before_any_stage_runs(
     monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
     monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", raising=False)
     monkeypatch.delenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", raising=False)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     fake = build_fake_pipeline_dependencies(rid="cra-1.0")
@@ -1655,7 +1681,7 @@ def test_ingestion_config_incomplete_returns_named_error_before_any_stage_runs(
     assert _text(result) == (
         "error: ingestion configuration incomplete: llm_interface_model, "
         "llm_interface_embed_model, company_merge_capability_merge_threshold, "
-        "company_merge_capability_review_threshold not set"
+        "company_merge_capability_review_threshold, company_merge_role_review_threshold not set"
     )
     assert fake.recorder.calls == []
 

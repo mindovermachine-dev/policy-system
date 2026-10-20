@@ -12,14 +12,15 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import pytest
 from company_merge._gateway_fakes import POLICY_SYSTEM, RigReadHandle
 from company_merge._seed_merge_graphs import BaselineGraphReader, OneHotEmbeddingCaller
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig, close_all_rigs
+from litellm.types.utils import Embedding, EmbeddingResponse
 
 from api._fakes import (
     build_fake_pipeline_dependencies,
@@ -29,11 +30,13 @@ from api._fakes import (
 )
 from api._gateway_fakes import RecordingSystemAudit, override_gateway
 from ps_service.api.dependencies import get_principal, provide_pipeline_dependencies
+from ps_service.api.errors import IngestionConfigIncompleteError
 from ps_service.api.ingestion_orchestration import GraphOpeners, run_internal_ingestion_pipeline
 from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.merge import merge_baseline_graph
+from ps_service.company_merge.pending_review import list_pending_reviews
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
@@ -54,6 +57,7 @@ if TYPE_CHECKING:
     from ps_service.company_merge.governance_import import GovernanceImport
     from ps_service.company_merge.models import MergeResult
     from ps_service.ingestion.graph_submission import GroupSubmitter
+    from ps_service.llm_interface.client import EmbeddingCaller
     from ps_service.logging import LogEmitter
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -111,6 +115,7 @@ def _app_config() -> ServiceConfig:
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         authentik_api_token="test-authentik-token",
         authentik_base_url="https://authentik.example.com",
@@ -138,7 +143,9 @@ def _client_with_fake(
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineDependencies:
+def _real_stage_dependencies(
+    rig: GatewayRig, store: RigReadHandle, embedder: EmbeddingCaller | None = None
+) -> PipelineDependencies:
     """Fake dependencies whose internal stages are the REAL ones, over in-memory graphs.
 
     ``internal_ingestion`` is the real ``ingest_internal_regulatory_instrument`` writing through
@@ -149,7 +156,7 @@ def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineD
     stages stay fakes -- an internal request never reaches them.
     """
     base = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-1.0").dependencies
-    embedder = OneHotEmbeddingCaller()
+    embedder = embedder or OneHotEmbeddingCaller()
 
     def _merge(
         regulatory_instrument_id: str,
@@ -163,6 +170,7 @@ def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineD
         embed_model: str,
         merge_threshold: float | None,
         review_threshold: float | None,
+        role_review_threshold: float | None,
         emitter: LogEmitter | None = None,
         governance: GovernanceImport | None = None,
     ) -> MergeResult:
@@ -177,6 +185,7 @@ def _real_stage_dependencies(rig: GatewayRig, store: RigReadHandle) -> PipelineD
             embed_model=embed_model,
             merge_threshold=merge_threshold,
             review_threshold=review_threshold,
+            role_review_threshold=role_review_threshold,
             call_embedding=embedder,
             emitter=emitter,
             governance=governance,
@@ -239,6 +248,118 @@ def test_post_ingestions_internal_runs_real_pipeline(configured_logging: Path) -
     assert merge_summary["governance_standards"] == 21
     assert merge_summary["governance_controls"] == 39
     assert merge_summary["governance_status_overridden"] == 0
+
+
+class _NearRoleEmbedding(OneHotEmbeddingCaller):
+    """One-hot for every text, except two Role names that score 0.8 against each other."""
+
+    _NEAR: ClassVar[dict[str, tuple[float, float]]] = {
+        "Service Owner": (1.0, 0.0),
+        "Engineering Manager": (0.8, 0.6),
+    }
+
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        near = self._NEAR.get(inputs[0])
+        if near is None:
+            return super().__call__(model=model, inputs=inputs, timeout=timeout)
+        vector = [0.0] * 512
+        vector[510], vector[511] = near
+        return EmbeddingResponse(
+            model=model, data=[Embedding(embedding=vector, index=0, object="embedding")]
+        )
+
+
+def test_an_internal_seed_with_two_near_roles_raises_one_role_near_miss(
+    make_emitter: MakeEmitter,
+) -> None:
+    """The internal-seed pipeline runs the same Role comparison as the external one."""
+    emitter, _ = make_emitter()
+    rig = GatewayRig()
+    store = RigReadHandle(rig.graphs.open(POLICY_SYSTEM))
+    dependencies = _real_stage_dependencies(rig, store, _NearRoleEmbedding())
+
+    outcome = run_internal_ingestion_pipeline(
+        _REAL_SEED_DOCUMENT,
+        config=replace(_app_config(), company_merge_role_review_threshold=0.8),
+        run_id="run-role-near",
+        caller="test",
+        dependencies=dependencies,
+        gateway=rig.gateway,
+        system_audit=RecordingSystemAudit(rig),
+        owner=("owner-1", "https://idp"),
+        emitter=emitter,
+    )
+
+    reviews = list_pending_reviews(store)
+    assert [
+        (r.kind, r.incoming_text, r.nearest_existing_text) for r in reviews if r.kind == "Role"
+    ] == [("Role", "Engineering Manager", "Service Owner")]
+    internal_summary, merge_summary = (report.summary for report in outcome.stages)
+    assert internal_summary["roles_minted"] == 6
+    assert internal_summary["non_actor_roles_dropped"] == 0
+    assert merge_summary["role_near_misses"] == 1
+    assert merge_summary["pending_reviews"] == len(reviews)  # Capability and Role reviews together
+
+
+def test_an_internal_seed_with_distinct_roles_raises_no_role_near_miss(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    rig = GatewayRig()
+    store = RigReadHandle(rig.graphs.open(POLICY_SYSTEM))
+
+    outcome = run_internal_ingestion_pipeline(
+        _REAL_SEED_DOCUMENT,
+        config=replace(_app_config(), company_merge_role_review_threshold=0.8),
+        run_id="run-role-distinct",
+        caller="test",
+        dependencies=_real_stage_dependencies(rig, store),
+        gateway=rig.gateway,
+        system_audit=RecordingSystemAudit(rig),
+        owner=("owner-1", "https://idp"),
+        emitter=emitter,
+    )
+
+    assert [r for r in list_pending_reviews(store) if r.kind == "Role"] == []
+    assert outcome.stages[1].summary["role_near_misses"] == 0
+
+
+def test_the_internal_pipeline_hands_the_configured_role_threshold_to_the_merge() -> None:
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    rig = GatewayRig()
+
+    run_internal_ingestion_pipeline(
+        _REAL_SEED_DOCUMENT,
+        config=replace(_app_config(), company_merge_role_review_threshold=0.66),
+        run_id="run-role-threshold",
+        caller="test",
+        dependencies=fake.dependencies,
+        gateway=rig.gateway,
+        system_audit=RecordingSystemAudit(rig),
+        owner=("owner-1", "https://idp"),
+    )
+
+    merge_call = next(call for call in fake.recorder.calls if call.stage == "merge")
+    assert merge_call.kwargs["role_review_threshold"] == 0.66
+
+
+def test_an_unset_role_threshold_refuses_the_internal_pipeline_before_any_stage() -> None:
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    rig = GatewayRig()
+
+    with pytest.raises(IngestionConfigIncompleteError, match="company_merge_role_review_threshold"):
+        run_internal_ingestion_pipeline(
+            _REAL_SEED_DOCUMENT,
+            config=replace(_app_config(), company_merge_role_review_threshold=None),
+            run_id="run-role-unset",
+            caller="test",
+            dependencies=fake.dependencies,
+            gateway=rig.gateway,
+            system_audit=RecordingSystemAudit(rig),
+            owner=("owner-1", "https://idp"),
+        )
+
+    assert fake.recorder.order == []
 
 
 def test_post_ingestions_internal_runs_stages_in_order() -> None:

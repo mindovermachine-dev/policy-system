@@ -22,7 +22,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.graph_gateway.models import MutationGroup, UpsertNode
@@ -207,6 +207,7 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
                 single_tenant_graph_name=single_tenant_graph_name,
                 merge_threshold=_MERGE_THRESHOLD,
                 review_threshold=REVIEW_THRESHOLD,
+                role_review_threshold=ROLE_REVIEW_THRESHOLD,
                 actor=_ACTOR,
                 open_gateway=lambda: rival,
                 audit_event_id=live.audit_event_id,
@@ -267,6 +268,7 @@ def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurr
                     single_tenant_graph_name=single_tenant_graph_name,
                     merge_threshold=_MERGE_THRESHOLD,
                     review_threshold=REVIEW_THRESHOLD,
+                    role_review_threshold=ROLE_REVIEW_THRESHOLD,
                     actor=_ACTOR,
                     open_gateway=lambda: rival,
                     audit_event_id=live.audit_event_id,

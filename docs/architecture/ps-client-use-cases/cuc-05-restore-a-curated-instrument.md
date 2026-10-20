@@ -52,7 +52,7 @@ here.
    owned by the restorer: chat says so plainly, and each Policy proceeds through
    CUC-10's propose and a different person's approval before it governs anything.
    Restore records near-miss reviews the way ingestion does (CUC-06) for the node kinds
-   that have a review spec, today Capability, applies the same review threshold (a pair
+   that have a review spec, today Capability and Role (each against its own threshold), applies the same review threshold (a pair
    below it raises no review), and skips a pair that is already under review.
 
 ## Artifacts

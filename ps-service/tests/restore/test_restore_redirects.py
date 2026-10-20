@@ -13,7 +13,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.company_merge.errors import (
     CompanyMergePersistenceError,
@@ -141,6 +141,7 @@ def _build(
         governance=GovernanceImport(),
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=None,
     )
     return tuple(p for p in leg.primitives if isinstance(p, UpsertNode | UpsertEdge))
@@ -394,6 +395,7 @@ def test_restore_counts_no_skipped_embedding_for_an_absorbed_capability(
         governance=GovernanceImport(),
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
     )
     emitter.flush()

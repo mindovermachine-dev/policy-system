@@ -1,10 +1,12 @@
 """Export's artifacts through the gateway equal the legacy export's.
 
 `_golden_export.json` was captured from the legacy path: the real legacy
-`export_instrument` driven over the ENGPRAC-1.0 baseline (embeddings stripped from every Capability
-and Policy node) and native artifacts, with a deterministic embedder and a stateful FalkorDB fake.
-These tests run the migrated path, `run_export` over the gateway rig with the same input and the
-same embedder, and compare artifact bytes and checksums. The manifest's `exported_at` is excluded.
+`export_instrument` driven over the ENGPRAC-1.0 baseline (embeddings stripped from every Role,
+Capability and Policy node) and native artifacts, with a deterministic embedder and a stateful
+FalkorDB fake. These tests run the migrated path, `run_export` over the gateway rig with the same
+input and the same embedder, and compare artifact bytes and checksums. The golden values were
+re-captured when Role names started to be embedded at export, so they include every Role's vector.
+The manifest's `exported_at` is excluded.
 
 The live tier (`-m falkordb_live`, `-m postgres_live`) is the anchor for the real FalkorDB reply
 and the Postgres log; what a fast test can prove is that nothing in Export's own path (the vector
@@ -83,7 +85,7 @@ def test_run_export_matches_the_pre_migration_golden_export(
     """Baseline.json, native.json and both sha256 equal the legacy export's."""
     rig = ExportRig(gateway.rig, short_name="ENGPRAC")
     rig.seed_artifact(
-        rig.baseline, _load("baseline.json"), strip_embeddings_of=("Capability", "Policy")
+        rig.baseline, _load("baseline.json"), strip_embeddings_of=("Role", "Capability", "Policy")
     )
     rig.seed_artifact(rig.native, _load("native.json"))
     deps = ExportDependencies(

@@ -88,6 +88,11 @@ class ServiceConfig:
             near miss to be raised for review (`PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD`);
             at least 0.0 and at most 1.0, and not above the merge threshold when both are set.
             `0.0` hides nothing. `None` when unset. Required only when a merge runs.
+        company_merge_role_review_threshold: Minimum embedding similarity for a Role near miss
+            to be raised for review (`PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD`); at least 0.0 and
+            at most 1.0. Review-only: a Role is never merged automatically, so there is no Role
+            merge threshold. `0.0` hides nothing. `None` when unset. Required only when a merge
+            runs.
         is_local_test_bypass_active: Whether authentication is bypassed and every request
             runs as `LOCAL_TEST_PRINCIPAL_ID` (`PS_SERVICE_LOCAL_TEST_BYPASS`); default `False`.
         max_request_body_bytes: Largest accepted request body, checked against the
@@ -166,6 +171,7 @@ class ServiceConfig:
     falkordb_port: int = _DEFAULT_FALKORDB_PORT
     company_merge_capability_merge_threshold: float | None = None
     company_merge_capability_review_threshold: float | None = None
+    company_merge_role_review_threshold: float | None = None
     is_local_test_bypass_active: bool = False
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
@@ -205,6 +211,7 @@ INGESTION_REQUIRED_CONFIG_FIELDS = (
     "llm_interface_embed_model",
     "company_merge_capability_merge_threshold",
     "company_merge_capability_review_threshold",
+    "company_merge_role_review_threshold",
 )
 
 
@@ -326,11 +333,18 @@ def _parse_merge_threshold(raw: str) -> float:
     return threshold
 
 
-def _parse_review_threshold(raw: str) -> float:
-    """Parse `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD`, failing closed on any invalid value.
+def _parse_review_threshold(raw: str, variable: str) -> float:
+    """Parse a review-threshold environment variable, failing closed on any invalid value.
 
     Unlike the merge threshold, `0.0` is valid: it is the floor that hides nothing. NaN passes
     every comparison as false, so it is rejected explicitly. Only called when the env var is set.
+
+    Args:
+        raw: The raw environment value.
+        variable: The environment variable name, used in the error messages.
+
+    Returns:
+        The threshold, between 0.0 and 1.0 inclusive.
 
     Raises:
         ServiceConfigurationError: `raw` is not a float, or is outside 0.0 to 1.0 inclusive.
@@ -338,15 +352,16 @@ def _parse_review_threshold(raw: str) -> float:
     try:
         threshold = float(raw)
     except ValueError as exc:
-        message = f"PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD must be a float, got {raw!r}"
+        message = f"{variable} must be a float, got {raw!r}"
         raise ServiceConfigurationError(message) from exc
     if math.isnan(threshold) or not (0.0 <= threshold <= 1.0):
-        message = (
-            "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD must be at least 0.0 and at "
-            f"most 1.0, got {threshold}"
-        )
+        message = f"{variable} must be at least 0.0 and at most 1.0, got {threshold}"
         raise ServiceConfigurationError(message)
     return threshold
+
+
+_CAPABILITY_REVIEW_VARIABLE = "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD"
+_ROLE_REVIEW_VARIABLE = "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD"
 
 
 def _load_capability_thresholds() -> tuple[float | None, float | None]:
@@ -362,9 +377,13 @@ def _load_capability_thresholds() -> tuple[float | None, float | None]:
         ServiceConfigurationError: A value is invalid, or review is above merge.
     """
     merge_raw = os.environ.get("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD")
-    review_raw = os.environ.get("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD")
+    review_raw = os.environ.get(_CAPABILITY_REVIEW_VARIABLE)
     merge = _parse_merge_threshold(merge_raw) if merge_raw is not None else None
-    review = _parse_review_threshold(review_raw) if review_raw is not None else None
+    review = (
+        _parse_review_threshold(review_raw, _CAPABILITY_REVIEW_VARIABLE)
+        if review_raw is not None
+        else None
+    )
     if merge is not None and review is not None and review > merge:
         message = (
             f"PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD ({review}) must not exceed "
@@ -372,6 +391,19 @@ def _load_capability_thresholds() -> tuple[float | None, float | None]:
         )
         raise ServiceConfigurationError(message)
     return merge, review
+
+
+def _load_role_review_threshold() -> float | None:
+    """Read and validate the Role review threshold from the environment.
+
+    Returns:
+        The threshold, or `None` when `PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD` is unset.
+
+    Raises:
+        ServiceConfigurationError: The value is invalid.
+    """
+    raw = os.environ.get(_ROLE_REVIEW_VARIABLE)
+    return _parse_review_threshold(raw, _ROLE_REVIEW_VARIABLE) if raw is not None else None
 
 
 def _parse_max_request_body_bytes(raw: str) -> int:
@@ -827,6 +859,7 @@ def load_config() -> ServiceConfig:
     company_merge_capability_merge_threshold, company_merge_capability_review_threshold = (
         _load_capability_thresholds()
     )
+    company_merge_role_review_threshold = _load_role_review_threshold()
 
     is_local_test_bypass_active = _parse_local_test_bypass(
         os.environ.get("PS_SERVICE_LOCAL_TEST_BYPASS")
@@ -972,6 +1005,7 @@ def load_config() -> ServiceConfig:
         falkordb_port=falkordb_port,
         company_merge_capability_merge_threshold=company_merge_capability_merge_threshold,
         company_merge_capability_review_threshold=company_merge_capability_review_threshold,
+        company_merge_role_review_threshold=company_merge_role_review_threshold,
         is_local_test_bypass_active=is_local_test_bypass_active,
         max_request_body_bytes=max_request_body_bytes,
         query_timeout_ms=query_timeout_ms,

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.errors import RestoreArtifactRejectedError, RestoreStageFailedError
@@ -120,6 +120,7 @@ class _RestoreCall:
     single_tenant_graph_name: str
     merge_threshold: float
     review_threshold: float
+    role_review_threshold: float
     actor: str
     owner: tuple[str, str] | None = None
 
@@ -138,6 +139,7 @@ class _FakeRestoreStage:
         single_tenant_graph_name: str,
         merge_threshold: float,
         review_threshold: float,
+        role_review_threshold: float,
         actor: str,
         open_gateway: Callable[[], object] | None = None,
         audit_event_id: str = "",
@@ -152,6 +154,7 @@ class _FakeRestoreStage:
                 single_tenant_graph_name,
                 merge_threshold,
                 review_threshold,
+                role_review_threshold,
                 actor,
                 owner,
             )
@@ -184,14 +187,19 @@ def _config() -> ServiceConfig:
         logging_dir=None,
         company_merge_capability_merge_threshold=0.8,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
     )
 
 
-def test_run_restoration_hands_the_restore_both_configured_thresholds() -> None:
+def test_run_restoration_hands_the_restore_its_configured_thresholds() -> None:
     from dataclasses import replace
 
     stage = _FakeRestoreStage()
-    config = replace(_config(), company_merge_capability_review_threshold=0.3)
+    config = replace(
+        _config(),
+        company_merge_capability_review_threshold=0.3,
+        company_merge_role_review_threshold=0.7,
+    )
 
     run_restoration(
         _valid_request(),
@@ -201,7 +209,11 @@ def test_run_restoration_hands_the_restore_both_configured_thresholds() -> None:
     )
 
     (call,) = stage.calls
-    assert (call.merge_threshold, call.review_threshold) == (0.8, 0.3)
+    assert (call.merge_threshold, call.review_threshold, call.role_review_threshold) == (
+        0.8,
+        0.3,
+        0.7,
+    )
 
 
 def test_run_restoration_success_returns_accepted_response_shape() -> None:
@@ -396,6 +408,25 @@ def test_run_restoration_raises_stage_failed_naming_the_review_variable_when_uns
     assert raised.value.stage == "configuration"
     assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in str(raised.value)
     assert opened == []
+    assert stage.calls == []
+
+
+def test_run_restoration_raises_stage_failed_naming_an_unset_role_review_threshold() -> None:
+    from dataclasses import replace
+
+    stage = _FakeRestoreStage()
+    config = replace(_config(), company_merge_role_review_threshold=None)
+
+    with pytest.raises(RestoreStageFailedError) as raised:
+        run_restoration(
+            _valid_request(),
+            config=config,
+            actor="x",
+            dependencies=_build_dependencies(stage),
+        )
+
+    assert raised.value.stage == "configuration"
+    assert "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD" in str(raised.value)
     assert stage.calls == []
 
 

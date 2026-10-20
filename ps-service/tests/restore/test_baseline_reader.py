@@ -138,6 +138,23 @@ def test_provenance_edges_hang_off_the_requested_instrument_only() -> None:
     ]
 
 
+def test_a_role_embedding_the_artifact_carries_is_read_and_an_absent_one_reads_as_none() -> None:
+    graph = SerializedGraph(
+        nodes=(
+            _node("Role", "role_1", name="r", confidence=0.9, embedding=[0.25, 0.5]),
+            _node("Role", "role_2", name="s", confidence=0.9),
+        ),
+        edges=(),
+    )
+
+    read = graph_reader.read_baseline_graph(SerializedGraphReader(graph), "X-1")
+
+    by_id = {node.id: node for node in read.role_nodes}
+    assert by_id["role_1"].embedding == (0.25, 0.5)
+    assert by_id["role_1"].properties == {"name": "r", "confidence": 0.9}
+    assert by_id["role_2"].embedding is None
+
+
 def test_an_absent_optional_property_reads_as_missing() -> None:
     graph = SerializedGraph(
         nodes=(_node("Requirement", "req_1", text="t", type="obligation", confidence=0.5),),

@@ -14,7 +14,7 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from api._fakes import (
     FakeIngestionAdapter,
@@ -63,6 +63,7 @@ def _config(*, complete: bool = True) -> ServiceConfig:
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
     )
 
 
@@ -154,6 +155,26 @@ def test_runner_checks_the_pipeline_config_before_opening_any_graph_or_running_a
     assert opened == []
     assert pipeline.recorder.calls == []
     assert pipeline.native.calls == pipeline.baseline.calls == pipeline.single_tenant.calls == []
+
+
+def test_runner_refuses_an_amendment_re_ingest_when_only_the_role_threshold_is_unset() -> None:
+    pipeline = build_fake_pipeline_dependencies()
+    config = dataclasses.replace(_config(), company_merge_role_review_threshold=None)
+
+    with pytest.raises(IngestionConfigIncompleteError, match="company_merge_role_review_threshold"):
+        _runner(pipeline, config)(stages=_ALL, run_id=_RUN_ID, on_stage_complete=lambda _s: None)
+
+    assert pipeline.recorder.calls == []
+
+
+def test_runner_hands_the_configured_role_threshold_to_the_merge_of_an_amendment() -> None:
+    pipeline = build_fake_pipeline_dependencies()
+    config = dataclasses.replace(_config(), company_merge_role_review_threshold=0.72)
+
+    _runner(pipeline, config)(stages=_ALL, run_id=_RUN_ID, on_stage_complete=lambda _s: None)
+
+    merge_call = next(call for call in pipeline.recorder.calls if call.stage == "merge")
+    assert merge_call.kwargs["role_review_threshold"] == 0.72
 
 
 def test_runner_clears_the_run_status_entry_on_success_and_on_failure(

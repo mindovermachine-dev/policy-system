@@ -14,7 +14,8 @@ queries must round-trip against:
 - RegulatoryInstrument: an open, variable properties set (title, jurisdiction, effective_date,
   source_type, ...), read back as `dict(node.properties)` with `id` included, through this
   module's own `_RegulatoryInstrumentNode` structural Protocol.
-- Role: properties are `name`/`confidence` only.
+- Role: properties are `name`/`confidence`, and the cached `embedding` when one exists (a curated
+  artifact carries it from the export; an ingest baseline does not).
 - Requirement: properties are `text`/`type`/`confidence`/`role_id`; `role_id` is bookkeeping, not
   an Edge Catalog relationship, and is carried through unchanged when present.
 - Obligation: properties are `text`/`confidence` only; there is no `source_ref` because
@@ -57,7 +58,7 @@ if TYPE_CHECKING:
 _REGULATORY_INSTRUMENT_QUERY = (
     "MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n"
 )
-_ROLE_QUERY = "MATCH (n:Role) RETURN n.id, n.name, n.confidence"
+_ROLE_QUERY = "MATCH (n:Role) RETURN n.id, n.name, n.confidence, n.embedding"
 _REQUIREMENT_QUERY = "MATCH (n:Requirement) RETURN n.id, n.text, n.type, n.confidence, n.role_id"
 _OBLIGATION_QUERY = "MATCH (n:Obligation) RETURN n.id, n.text, n.confidence"
 _CAPABILITY_QUERY = (
@@ -265,16 +266,22 @@ def _read_regulatory_instrument_properties(
 
 
 def _read_role_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every Role node with its `name` and `confidence`."""
+    """Read every Role node with its `name`, `confidence` and cached `embedding` if any.
+
+    `embedding` is `None` when the Role has none (an ingest baseline never carries one; a curated
+    artifact does, from the export's backfill); it is never `()` and absence never raises.
+    """
     result = baseline_graph.query(_ROLE_QUERY)
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[BaselineNode] = []
     for row in rows:
-        node_id, name, confidence = row
+        node_id, name, confidence, embedding = row
+        raw_embedding = cast("list[float] | None", embedding)
         nodes.append(
             BaselineNode(
                 id=cast("str", node_id),
                 properties={"name": cast("str", name), "confidence": cast("float", confidence)},
+                embedding=tuple(raw_embedding) if raw_embedding is not None else None,
             )
         )
     return tuple(nodes)

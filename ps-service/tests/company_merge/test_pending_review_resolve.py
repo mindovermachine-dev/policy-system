@@ -150,6 +150,25 @@ def test_resolve_rejects_a_review_whose_kind_has_no_spec_naming_the_kind(
     assert read_lines(log_path) == []
 
 
+def test_keep_separate_of_a_role_review_deletes_only_the_review(
+    merge_rig: MergeRig, make_emitter: MakeEmitter
+) -> None:
+    emitter, _log_path = make_emitter()
+    graph = merge_rig.policy_system
+    graph.seed_node(("Role",), "role_in", {"name": "Market surveillance authorities"})
+    graph.seed_node(("Role",), "role_ex", {"name": "Market surveillance authority"})
+    graph.seed_node(("PendingReview",), _REVIEW_ID, {**_review_properties(), "kind": "Role"})
+    roles_before = {key: dict(props) for key, props in graph.nodes.items() if key[0] == "Role"}
+
+    outcome = resolve_review(
+        merge_rig.legacy, _REVIEW_ID, "keep-separate", target=_target(merge_rig), emitter=emitter
+    )
+
+    assert outcome == ResolveOutcome(review_id=_REVIEW_ID, decision="keep-separate")
+    assert ("PendingReview", _REVIEW_ID) not in graph.nodes
+    assert {key: dict(props) for key, props in graph.nodes.items()} == roles_before
+
+
 def test_resolving_a_review_of_the_test_only_kind_deletes_it(
     merge_rig: MergeRig, make_emitter: MakeEmitter, test_only_reviewable_kind: ReviewableKind
 ) -> None:

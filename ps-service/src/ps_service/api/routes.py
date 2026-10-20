@@ -697,18 +697,22 @@ async def resolve_near_miss(
 
     ``decision="merge"`` does not merge synchronously. It needs a verified caller who holds the
     ``ComplianceOfficer`` role (no admin override), previews the merge and creates a pending passkey
-    approval: the graph-cleanup ``merge-capabilities`` approval, bound to the pair, the previewed
-    state and the review id. Signing it merges the two Capabilities in one audited graph write and
-    deletes the review. The survivor is the Capability with the earlier ``created_at``. The absorbed
-    one is deleted behind a ``MergedCapability`` marker naming the survivor, and its
-    ``REQUIRES``, ``COVERS`` and ``MITIGATED_BY`` edges move to the survivor. A Capability keeps at
+    approval of the review's kind (``merge-capabilities`` for a Capability review, ``merge-roles``
+    for a Role review), bound to the pair, the previewed state and the review id. Signing it merges
+    the two entities in one audited graph write and deletes the review. A Capability review's
+    survivor is the Capability with the earlier ``created_at``; a Role carries no ``created_at``,
+    so a Role review's survivor is the incoming Role. The absorbed one is deleted behind a
+    ``MergedCapability`` or ``MergedRole`` marker naming the survivor; a Capability's ``REQUIRES``,
+    ``COVERS`` and ``MITIGATED_BY`` edges, or a Role's Obligations, move to the survivor. A
+    Capability keeps at
     most one governing Policy: when exactly one of the two is governed (``preview.policy_case``
     2) the response carries ``acknowledgment_required`` and no approval until the request repeats
     with ``acknowledge_governance_change=true``. Two Capabilities governed by different Policies are
-    refused (409) before any approval; release one with ``release-capability-governance`` first.
-    The response carries ``preview``, ``pending_approval_id``, ``approval_url`` and ``expires_at``;
-    ``winner_id`` and ``loser_id`` stay empty until ``GET /near-misses/approvals/{id}`` reports
-    them.
+    refused (409) before any approval; release one with ``release-capability-governance`` first. A
+    Role has no governing Policy, so ``acknowledge_governance_change=true`` on a Role review is
+    refused (409). The response carries ``preview``, ``pending_approval_id``, ``approval_url`` and
+    ``expires_at``; ``winner_id`` and ``loser_id`` stay empty until
+    ``GET /near-misses/approvals/{id}`` reports them.
 
     Args:
         review_id: The review to resolve (path parameter).
@@ -737,10 +741,11 @@ async def resolve_near_miss(
             (403). Nothing is written.
         AuthorizationStoreUnavailableError: ``decision="merge"`` and the access-role store cannot be
             reached (503).
-        PendingReviewNotFoundError: The review does not exist or was already resolved, or its
-            Capabilities no longer exist (404).
-        NearMissMergeRefusedError: ``merge`` of a review whose kind has no merge, or of two
-            Capabilities governed by different Policies (409). No approval was created.
+        PendingReviewNotFoundError: The review does not exist or was already resolved, or one of
+            its nodes no longer exists (404).
+        NearMissMergeRefusedError: ``merge`` of a review whose kind has no merge, of two
+            Capabilities governed by different Policies, or of a Role review with
+            ``acknowledge_governance_change=true`` (409). No approval was created.
         ReviewKindUnsupportedError: The review has a kind with no registered spec (409, naming the
             kind). Nothing was audited, written or approved.
         GraphWriteUnavailableError: ``keep-separate`` and the service has no Graph Write Gateway

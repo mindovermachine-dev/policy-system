@@ -204,6 +204,8 @@ spec:
               value: {{ .Values.psService.companyMerge.capabilityMergeThreshold | quote }}
             - name: PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD
               value: {{ .Values.psService.companyMerge.capabilityReviewThreshold | quote }}
+            - name: PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD
+              value: {{ .Values.psService.companyMerge.roleReviewThreshold | quote }}
             - name: PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS
               value: {{ .Values.psService.graphGateway.driftCheckIntervalSeconds | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS

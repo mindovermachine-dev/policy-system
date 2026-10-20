@@ -12,7 +12,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.export.falkordb_connection import graph_query_handle
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
@@ -106,6 +106,7 @@ def test_restore_instrument_installs_native_leg_with_original_content(
                 single_tenant_graph_name=single_tenant_graph_name,
                 merge_threshold=_MERGE_THRESHOLD,
                 review_threshold=REVIEW_THRESHOLD,
+                role_review_threshold=ROLE_REVIEW_THRESHOLD,
                 actor=_ACTOR,
                 open_gateway=live.open_gateway,
                 audit_event_id=live.audit_event_id,

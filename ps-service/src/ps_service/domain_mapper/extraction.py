@@ -30,6 +30,7 @@ from ps_service.domain_mapper.prompts import (
     parse_definitions_response,
     parse_extraction_response,
 )
+from ps_service.domain_mapper.role_names import normalise_role_name
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import LogEmitter, emit_log_entry
@@ -83,16 +84,18 @@ def extract_roles_and_requirements(  # noqa: PLR0913 -- one stage seam: the nati
        a `DomainMapperExtractionError` for one unit is caught and logged
        (`outcome="error"`, `entity_id=unit.citation_ref`), and that unit contributes no
        candidates.
-    4. Run the definitions pass (`_build_defined_terms_map`) over the definitions-headed units,
+    4. Drop the candidates whose `role_name` is flagged as not an actor
+       (`_drop_non_actor_candidates`), logging each, so they mint nothing.
+    5. Run the definitions pass (`_build_defined_terms_map`) over the definitions-headed units,
        then deduplicate Roles deterministically (`_canonicalize_roles`). Each Role's
        `DEFINES.source_ref` is the citation of its formal definition, falling back to the first
        duty occurrence's `unit_citation_ref` when no matching defined term exists.
-    5. Build Requirement nodes and edges (`_build_requirement_graph`), disambiguating id
+    6. Build Requirement nodes and edges (`_build_requirement_graph`), disambiguating id
        collisions without raising.
-    6. Validate, build and submit the instrument, Roles, `DEFINES`, Requirements and `EXPRESSES`
+    7. Validate, build and submit the instrument, Roles, `DEFINES`, Requirements and `EXPRESSES`
        as ONE Graph Write Gateway group on `baseline_graph_name` under `audit_event_id`. Every
        edge endpoint is in the group, so extraction reads nothing from the baseline graph.
-    7. Emit one `outcome="collision"` log entry per disambiguated id, one
+    8. Emit one `outcome="collision"` log entry per disambiguated id, one
        `outcome="definitions_fallback"` entry per Role whose `DEFINES.source_ref` fell back, and
        one `outcome="succeeded"` entry for the whole call. `run_id` is whatever the caller
        already bound, or `None`; no run context is bound here.
@@ -110,8 +113,9 @@ def extract_roles_and_requirements(  # noqa: PLR0913 -- one stage seam: the nati
         emitter: Log emitter; `None` uses the default.
 
     Returns:
-        The `ExtractionResult` with the Role ids, Requirement ids, candidate and skipped-unit
-        counts and any collision ids; all counts are zero when the instrument has no units.
+        The `ExtractionResult` with the Role ids, Requirement ids, candidate, skipped-unit,
+        minted-Role and dropped-non-actor counts and any collision ids; all counts are zero when
+        the instrument has no units.
 
     Raises:
         DomainMapperExtractionError: The RegulatoryInstrument node is absent from
@@ -134,15 +138,19 @@ def extract_roles_and_requirements(  # noqa: PLR0913 -- one stage seam: the nati
         units, model=model, call_completion=call_completion, emitter=emitter
     )
 
+    actor_candidates, non_actor_roles_dropped = _drop_non_actor_candidates(
+        candidates, emitter=emitter
+    )
+
     defined_terms = _build_defined_terms_map(
         units, model=model, call_completion=call_completion, emitter=emitter
     )
 
     role_nodes, role_edges, role_node_ids, fallback_roles = _canonicalize_roles(
-        candidates, regulatory_instrument_id, defined_terms
+        actor_candidates, regulatory_instrument_id, defined_terms
     )
     requirement_nodes, requirement_edges, collided_ids = _build_requirement_graph(
-        candidates, regulatory_instrument_id, role_node_ids
+        actor_candidates, regulatory_instrument_id, role_node_ids
     )
 
     persist_role_and_requirement_graph(
@@ -189,6 +197,8 @@ def extract_roles_and_requirements(  # noqa: PLR0913 -- one stage seam: the nati
         candidate_count=len(candidates),
         skipped_unit_count=skipped_unit_count,
         requirement_id_collisions=collided_ids,
+        roles_minted=len(set(role_node_ids.values())),
+        non_actor_roles_dropped=non_actor_roles_dropped,
     )
 
 
@@ -265,6 +275,43 @@ def _extract_all_candidates(
                 emitter=emitter,
             )
     return candidates, skipped_unit_count
+
+
+def _drop_non_actor_candidates(
+    candidates: list[RequirementCandidate], *, emitter: LogEmitter | None
+) -> tuple[list[RequirementCandidate], int]:
+    """Split off the candidates whose `role_name` the model flagged as not an actor.
+
+    A flagged candidate (a document, fee, event, product or back-reference rather than a
+    duty-bearing actor) must not mint a Role, a Requirement or, later, an Obligation, so it is
+    removed before `_canonicalize_roles`. Each drop is logged with the candidate's name and its
+    source location; the actors keep their order.
+
+    Args:
+        candidates: Every candidate the LLM returned, in unit-then-response order.
+        emitter: Log emitter; `None` uses the default.
+
+    Returns:
+        `(actor_candidates, dropped_count)`.
+
+    Side Effects:
+        Emits one `non_actor_role_dropped` log entry per dropped candidate, carrying `role_name`
+        and `source_ref` (the unit's citation).
+    """
+    actors: list[RequirementCandidate] = []
+    for candidate in candidates:
+        if candidate.role_is_actor:
+            actors.append(candidate)
+            continue
+        emit_log_entry(
+            component=_COMPONENT,
+            action="non_actor_role_dropped",
+            entity_id=candidate.unit_citation_ref,
+            outcome="dropped",
+            extra={"role_name": candidate.role_name, "source_ref": candidate.unit_citation_ref},
+            emitter=emitter,
+        )
+    return actors, len(candidates) - len(actors)
 
 
 def _extract_candidates_for_unit(
@@ -472,17 +519,20 @@ def _canonicalize_roles(
 ]:
     """Deduplicate Role candidates into Role nodes and `DEFINES` edges, deterministically.
 
-    Candidates sharing a `role_name` collapse onto one Role node, because `role_id()` is a pure
-    function of `role_name` and `regulatory_instrument_id`. The first candidate, in the order of
-    `candidates` (unit-then-response order, which the caller must supply), whose `role_name`
-    produces a given id fixes that Role's `confidence` and its `DEFINES` edge's `source_ref`,
-    as `_build_requirement_graph` does for Requirement-id collisions.
+    Each `role_name` is first normalised with `normalise_role_name` (whitespace, one leading
+    article, a plural last word), then `role_id()` is applied to the normalised name, so
+    "Manufacturer", "manufacturers" and "The manufacturer" collapse onto one Role node. The first
+    candidate, in the order of `candidates` (unit-then-response order, which the caller must
+    supply), whose normalised name produces a given id fixes that Role's `name` (its normalised
+    spelling), `confidence` and its `DEFINES` edge's `source_ref`, as `_build_requirement_graph`
+    does for Requirement-id collisions.
 
-    For that first candidate, `role_name` is normalized with `_normalize_term` and looked up in
-    `defined_terms`. A hit sets `source_ref` to the defining `citation_ref`; a miss falls back to
-    `candidate.unit_citation_ref` and records `(node_id, role_name)` in the returned
-    `fallback_roles`, so the orchestrator can log `outcome="definitions_fallback"`. The function
-    reports what happened and the orchestrator logs it.
+    For that first candidate, the normalised name is further normalized with `_normalize_term`
+    and looked up in `defined_terms`. A hit sets `source_ref` to the defining `citation_ref`; a
+    miss falls back to `candidate.unit_citation_ref` and records `(node_id, role_name)` (the
+    normalised name) in the returned `fallback_roles`, so the orchestrator can log
+    `outcome="definitions_fallback"`. The function reports what happened and the orchestrator
+    logs it.
 
     Pure: no LLM call, logging or I/O, so it can be tested with hand-written fakes.
 
@@ -494,9 +544,9 @@ def _canonicalize_roles(
 
     Returns:
         `(role_nodes, role_edges, role_node_ids, fallback_roles)`. `role_node_ids` maps every
-        distinct `role_name` spelling seen to its Role node id, including spellings that collapse
-        onto an id another spelling already produced, so `_build_requirement_graph` can look up
-        any candidate's `role_name`.
+        distinct raw `role_name` spelling seen to its Role node id, including spellings that
+        collapse onto an id another spelling already produced, so `_build_requirement_graph` can
+        look up any candidate's `role_name`.
     """
     role_nodes: list[RoleNode] = []
     role_edges: list[RoleDefinesEdge] = []
@@ -505,7 +555,8 @@ def _canonicalize_roles(
     fallback_roles: list[tuple[str, str]] = []
 
     for candidate in candidates:
-        node_id = role_id(candidate.role_name, regulatory_instrument_id)
+        role_name = normalise_role_name(candidate.role_name)
+        node_id = role_id(role_name, regulatory_instrument_id)
         role_node_ids[candidate.role_name] = node_id
         if node_id in seen_role_node_ids:
             continue
@@ -513,15 +564,15 @@ def _canonicalize_roles(
         role_nodes.append(
             RoleNode(
                 id=node_id,
-                properties={"name": candidate.role_name, "confidence": candidate.confidence},
+                properties={"name": role_name, "confidence": candidate.confidence},
             )
         )
-        matched_citation_ref = defined_terms.get(_normalize_term(candidate.role_name))
+        matched_citation_ref = defined_terms.get(_normalize_term(role_name))
         if matched_citation_ref is not None:
             source_ref = matched_citation_ref
         else:
             source_ref = candidate.unit_citation_ref
-            fallback_roles.append((node_id, candidate.role_name))
+            fallback_roles.append((node_id, role_name))
         role_edges.append(RoleDefinesEdge(role_node_id=node_id, source_ref=source_ref))
 
     return tuple(role_nodes), tuple(role_edges), role_node_ids, tuple(fallback_roles)

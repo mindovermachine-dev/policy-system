@@ -112,6 +112,7 @@ def _one_candidate_json() -> str:
             "requirements": [
                 {
                     "role_name": "Manufacturer",
+                    "role_is_actor": True,
                     "text": "Conduct a cybersecurity risk assessment.",
                     "type": "requirement",
                     "letter_suffix": None,

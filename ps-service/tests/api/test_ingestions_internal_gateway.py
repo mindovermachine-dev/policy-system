@@ -15,7 +15,7 @@ import dataclasses
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi import Request
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig
@@ -86,6 +86,7 @@ def _config() -> ServiceConfig:
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         authentik_api_token="test-authentik-token",
         authentik_base_url="https://authentik.example.com",

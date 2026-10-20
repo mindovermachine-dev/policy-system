@@ -55,6 +55,21 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD")].value
           value: "0.3"
 
+  # 0.80 is provisional until the Role threshold is calibrated against a real instrument.
+  - it: PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD comes from values, default "0.8"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD")].value
+          value: "0.8"
+
+  - it: PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD follows psService.companyMerge.roleReviewThreshold
+    set:
+      psService.companyMerge.roleReviewThreshold: 0.6
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD")].value
+          value: "0.6"
+
   # The retired key is spelled with a YAML escape (\x59 is the capital Y) so a repo-wide search for
   # the old name stays empty. Setting it must change nothing and the old env var must not render.
   - it: the retired merge-threshold values key is not read and its env var is not rendered

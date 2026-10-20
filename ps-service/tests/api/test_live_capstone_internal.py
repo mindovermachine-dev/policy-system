@@ -77,7 +77,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant
@@ -247,6 +247,8 @@ def capstone(
         monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.85")
     if not os.environ.get("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
+    if not os.environ.get("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD"):
+        monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", str(ROLE_REVIEW_THRESHOLD))
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _DISPOSABLE_GRAPH)
 
     # Built after the env above is set: layers the provisioned state Postgres (graph log and audit

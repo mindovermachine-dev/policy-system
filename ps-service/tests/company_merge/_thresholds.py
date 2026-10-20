@@ -13,3 +13,7 @@ REVIEW_THRESHOLD = 0.0
 # near miss at a zero or arbitrarily low score, or compare against the frozen no-floor reference
 # writer, state it by name so they do not depend on the shared REVIEW_THRESHOLD value.
 NO_FLOOR_REVIEW_THRESHOLD = 0.0
+
+# Role review floor for tests that build a full service config but are not about Role near
+# misses: `1.0` is the strictest valid floor, so only a pair of identical vectors would clear it.
+ROLE_REVIEW_THRESHOLD = 1.0

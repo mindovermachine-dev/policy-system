@@ -1,20 +1,24 @@
 """`merge_baseline_graph` -- fold one regulation's baseline graph into the single-tenant graph.
 
 It wires together `graph_reader.read_baseline_graph`, `redirects.resolve_redirects`,
-`dedup.dedupe_canonical_nodes` (Capability), `governance_import.import_draft_governance` and the
-`graph_writer` functions. Every write is submitted through the Graph Write Gateway.
+`dedup.dedupe_canonical_nodes` (Capability, and Role review-only),
+`governance_import.import_draft_governance` and the `graph_writer` functions. Every write is
+submitted through the Graph Write Gateway.
 
 Flow:
 
 0. If either Capability threshold is `None`, or the review threshold is above the merge threshold
-   (`capability_thresholds`), raise `CompanyMergeConfigurationError` before any graph call of any
-   kind, including `graph_reader.read_baseline_graph`.
+   (`capability_thresholds`), or the Role review threshold is `None` (`role_thresholds`), raise
+   `CompanyMergeConfigurationError` before any graph call of any kind, including
+   `graph_reader.read_baseline_graph`.
 1. Read the regulation's `{short}_baseline` graph.
 2. Drop nodes that a cleanup merge absorbed and map each to its terminal survivor
    (`redirects.resolve_redirects`); a cycle or a dangling terminal raises here, before any dedup
    embedding call and before any write.
-3. Dedupe Capability nodes against the single-tenant graph. Obligation is Role-scoped (a weak
-   entity of exactly one Role, never deduped across sources), so there is no Obligation dedup pass.
+3. Dedupe Capability nodes against the single-tenant graph. Then compare the instrument's Role
+   nodes for near misses (review-only: a Role is never merged or rewired here, so Role ids are
+   written exactly as read). Obligation is Role-scoped (a weak entity of exactly one Role, never
+   deduped across sources), so there is no Obligation dedup pass.
 4. Persist RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` as one gateway group (a
    Role/Requirement the graph already holds is left out of the group, so it keeps its properties)
    and Obligation (create-only); persist canonical Capability nodes for every
@@ -41,10 +45,11 @@ Flow:
    `outcome=match_kind`, one per `NearMissPair` with `outcome="near_miss"`), drop the near misses
    that already have an unresolved review (`drop_already_reviewed`, shared with restore), persist
    a `PendingReview` node for each remaining one and log the created / already-reviewed counts.
+   Role near misses go through the same steps with kind `Role`.
 10. Return `MergeResult`.
 
-If the dedup pass raises (`LlmProviderError` from an embedding call), the exception propagates
-unchanged and nothing has been written yet, because every write follows the dedup pass.
+If either dedup pass raises (`LlmProviderError` from an embedding call), the exception propagates
+unchanged and nothing has been written yet, because every write follows both dedup passes.
 
 Dedup is not exposed as its own public action: `dedupe_canonical_nodes` only runs as part of this
 orchestration.
@@ -63,19 +68,20 @@ from ps_service.company_merge import (
     graph_writer,
     redirects,
 )
-from ps_service.company_merge.capability_config import capability_thresholds
+from ps_service.company_merge.capability_config import capability_thresholds, role_thresholds
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
 from ps_service.company_merge.governance_import import GovernanceImport, governance_count_fields
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.models import MergeResult
 from ps_service.company_merge.pending_review import drop_already_reviewed, persist_pending_reviews
-from ps_service.company_merge.reviewable_kinds import CAPABILITY
+from ps_service.company_merge.reviewable_kinds import CAPABILITY, ROLE
 from ps_service.logging import LogEmitter, emit_log_entry
 
 if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.generated_values import ValueSource
-    from ps_service.company_merge.models import BaselineGraph, DedupResult
+    from ps_service.company_merge.models import BaselineGraph, DedupResult, NearMissPair
+    from ps_service.company_merge.reviewable_kinds import ReviewThresholds
     from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import EmbeddingCaller
 
@@ -151,6 +157,106 @@ def _log_dedup_decisions(dedup_result: DedupResult, *, emitter: LogEmitter | Non
         )
 
 
+def _dedupe_roles(
+    graph: BaselineGraph,
+    *,
+    regulatory_instrument_id: str,
+    single_tenant_graph: GraphHandle,
+    embed_model: str,
+    thresholds: ReviewThresholds,
+    call_embedding: EmbeddingCaller | None,
+    emitter: LogEmitter | None,
+) -> DedupResult:
+    """Compare the baseline's Roles against the instrument's Roles; cite near pairs, merge none.
+
+    Role is a review-only kind, so every resolution is `exact` or `new` and no Role id is
+    rewritten. Runs before any write: an embedding failure leaves the graph untouched.
+
+    Args:
+        graph: The baseline whose Role nodes are compared.
+        regulatory_instrument_id: The instrument whose Roles form the candidate pool.
+        single_tenant_graph: Read handle on the single-tenant graph.
+        embed_model: Embedding model name.
+        thresholds: The Role thresholds (review only).
+        call_embedding: Embedding caller, or `None` for the default.
+        emitter: Log emitter, or `None` for the default.
+
+    Returns:
+        The `DedupResult` for the Role nodes.
+
+    Raises:
+        LlmProviderError: An embedding call failed; nothing has been written.
+    """
+    return dedup.dedupe_canonical_nodes(
+        graph.role_nodes,
+        kind=ROLE,
+        single_tenant_graph=single_tenant_graph,
+        model=embed_model,
+        thresholds=thresholds,
+        instrument_id=regulatory_instrument_id,
+        call_embedding=call_embedding,
+        emitter=emitter,
+    )
+
+
+def _persist_role_reviews(
+    target: GraphWriteTarget,
+    single_tenant_graph: GraphHandle,
+    near_misses: tuple[NearMissPair, ...],
+    *,
+    regulatory_instrument_id: str,
+    values: ValueSource,
+    emitter: LogEmitter | None,
+) -> int:
+    """Persist a `Role` `PendingReview` for every Role near miss without an unresolved review.
+
+    Args:
+        target: The gateway target of the single-tenant graph.
+        single_tenant_graph: Read handle used to find the already-reviewed pairs.
+        near_misses: The Role near-miss pairs the Role dedup pass cited.
+        regulatory_instrument_id: The instrument, for the log entries.
+        values: Source of the generated review ids and timestamps.
+        emitter: Log emitter, or `None` for the default.
+
+    Returns:
+        The number of reviews this call persisted; 0 when every pair already had one.
+
+    Side Effects:
+        Submits one gateway group when there is a new review, and emits one log entry per Role
+        near miss plus one for the persisted / already-reviewed counts.
+    """
+    for near_miss in near_misses:
+        emit_log_entry(
+            component=_COMPONENT,
+            action=_DEDUP_ACTION,
+            entity_id=near_miss.incoming_id,
+            outcome="near_miss",
+            extra={
+                "kind": ROLE.label,
+                "role_name": near_miss.incoming_text,
+                "nearest_role_name": near_miss.nearest_existing_text,
+                "similarity": near_miss.similarity,
+            },
+            emitter=emitter,
+        )
+    new_near_misses = drop_already_reviewed(single_tenant_graph, near_misses, kind=ROLE)
+    persist_pending_reviews(target, new_near_misses, kind=ROLE, values=values)
+    if near_misses:
+        emit_log_entry(
+            component=_COMPONENT,
+            action=_PERSIST_REVIEWS_ACTION,
+            entity_id=regulatory_instrument_id,
+            outcome="succeeded",
+            extra={
+                "kind": ROLE.label,
+                "created": len(new_near_misses),
+                "already_reviewed": len(near_misses) - len(new_near_misses),
+            },
+            emitter=emitter,
+        )
+    return len(new_near_misses)
+
+
 def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway seam and the merge's own options; no natural grouping
     regulatory_instrument_id: str,
     *,
@@ -163,6 +269,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     embed_model: str,
     merge_threshold: float | None,
     review_threshold: float | None,
+    role_review_threshold: float | None,
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
     governance: GovernanceImport | None = None,
@@ -192,6 +299,9 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         review_threshold: Cosine similarity at or above which a Capability near miss is raised
             for review; a pair scoring below it raises none. `0.0` hides nothing. Required:
             `None` is an error, and so is a value above `merge_threshold`.
+        role_review_threshold: Cosine similarity at or above which a Role near miss (two Roles of
+            this instrument) is raised for review; a pair scoring below it raises none. `0.0`
+            hides nothing. A Role is never merged here. Required: `None` is an error.
         call_embedding: Embedding caller for the dedup pass, or `None` for the default.
         emitter: Log emitter, or `None` for the default.
         governance: Carries the ingesting caller's `owner` for the Policy/Standard/Control tree of
@@ -203,12 +313,13 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
 
     Returns:
         A `MergeResult` with the baseline's Obligation ids, the Capability canonical ids, the
-        near-miss pairs, the pending-review count and the new/matched/governance counts.
+        near-miss pairs, the pending-review count (Capability and Role reviews together), the
+        Role near-miss and new Role counts and the new/matched/governance counts.
 
     Raises:
-        CompanyMergeConfigurationError: `merge_threshold` or `review_threshold` is `None`, or the
-            review threshold is above the merge threshold; raised before either graph receives a
-            call.
+        CompanyMergeConfigurationError: `merge_threshold`, `review_threshold` or
+            `role_review_threshold` is `None`, or the review threshold is above the merge
+            threshold; raised before either graph receives a call.
         GovernanceOwnerRequiredError: The baseline carries a governance tree and `governance`
             has no owner; raised before any governance write.
         LlmProviderError: An embedding call in the dedup pass failed; nothing has been written.
@@ -220,11 +331,12 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     Side Effects:
         Submits gateway groups to the single-tenant graph (Role/Requirement/Obligation/Capability
         nodes, governance drafts, PracticeArea/RiskPath nodes, rewired edges, embedding
-        backfills, `PendingReview` nodes) and to the baseline graph (incoming embedding
-        backfills). The graph's legacy edges are stamped before its first group. Emits log
+        backfills, Capability and Role `PendingReview` nodes) and to the baseline graph (incoming
+        embedding backfills). The graph's legacy edges are stamped before its first group. Emits log
         entries for the run and for each dedup decision.
     """
     thresholds = capability_thresholds(merge_threshold, review_threshold)
+    role_review_thresholds = role_thresholds(role_review_threshold)
 
     targets = _MergeTargets(
         single_tenant=GraphWriteTarget(submitter, single_tenant_graph_name, audit_event_id),
@@ -248,6 +360,19 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         call_embedding=call_embedding,
         emitter=emitter,
     )
+
+    # Review-only: cites near Role pairs and never rewrites a Role id. It runs here, before any
+    # write, so an embedding failure leaves the graph untouched.
+    role_dedup = _dedupe_roles(
+        graph,
+        regulatory_instrument_id=regulatory_instrument_id,
+        single_tenant_graph=single_tenant_graph,
+        embed_model=embed_model,
+        thresholds=role_review_thresholds,
+        call_embedding=call_embedding,
+        emitter=emitter,
+    )
+    new_role_count = sum(1 for r in role_dedup.resolutions if r.match_kind == "new")
 
     # Read before any write so the count is the delta the passthrough below makes (ids a cleanup
     # merge absorbed were dropped just above).
@@ -360,6 +485,7 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
             "new_obligations": new_obligation_count,
             "new_capabilities": new_capability_count,
             "matched_capabilities": matched_capability_count,
+            "new_roles": new_role_count,
             **governance_counts,
         },
         emitter=emitter,
@@ -385,6 +511,15 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         emitter=emitter,
     )
 
+    new_role_review_count = _persist_role_reviews(
+        targets.single_tenant,
+        single_tenant_graph,
+        role_dedup.near_misses,
+        regulatory_instrument_id=regulatory_instrument_id,
+        values=values,
+        emitter=emitter,
+    )
+
     return MergeResult(
         regulatory_instrument_id=regulatory_instrument_id,
         obligation_ids=tuple(node.id for node in graph.obligation_nodes),
@@ -393,7 +528,9 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
             *redirected_capability_ids,
         ),
         near_misses=capability_dedup.near_misses,
-        pending_review_count=len(new_near_misses),
+        pending_review_count=len(new_near_misses) + new_role_review_count,
+        role_near_miss_count=new_role_review_count,
+        new_role_count=new_role_count,
         new_capability_count=new_capability_count,
         matched_capability_count=matched_capability_count,
         new_obligation_count=new_obligation_count,

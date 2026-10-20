@@ -214,6 +214,7 @@ class _RecordingMergeFn:
         embed_model: str,
         merge_threshold: float,
         review_threshold: float,
+        role_review_threshold: float,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> object:
@@ -499,6 +500,37 @@ def test_review_threshold_unset_exits_1_naming_it_with_zero_merge_calls(
     assert approval_path.exists()
 
 
+def test_role_review_threshold_unset_exits_1_naming_it_with_zero_merge_calls(
+    cli_module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
+    monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", "0.5")
+    monkeypatch.delenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", raising=False)
+    monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
+    approval_path = _write_approval_file(tmp_path)
+    provider, _provider_calls = _make_graph_provider(
+        cli_module,
+        baseline_rows_by_short=_CLEAN_BASELINE_ROWS,
+        single_tenant_graph=_FakeSingleTenantGraph(),
+    )
+    merge_fn = _RecordingMergeFn()
+
+    exit_code = cli_module.main(
+        _base_argv(approval_path=approval_path, report_path=tmp_path / "report.json"),
+        graph_provider=provider,
+        merge_fn=merge_fn,
+        clock=_fixed_clock,
+    )
+
+    assert exit_code == 1
+    assert merge_fn.calls == []
+    assert "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD" in capsys.readouterr().err
+    assert approval_path.exists()
+
+
 # --- Case 5: full happy path -----------------------------------------------------------
 
 
@@ -507,6 +539,7 @@ def test_happy_path_calls_merge_fn_three_times_in_order_and_writes_report(
 ) -> None:
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", "0.5")
+    monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", "0.8")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     approval_path = _write_approval_file(tmp_path)
     report_path = tmp_path / "report.json"
@@ -597,6 +630,7 @@ def test_merge_fn_raises_on_second_call_stops_before_third_and_leaves_approval_u
 ) -> None:
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", "0.5")
+    monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", "0.8")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     approval_path = _write_approval_file(tmp_path)
     report_path = tmp_path / "report.json"
@@ -642,6 +676,7 @@ def _passing_run(
 ) -> tuple[int, Path]:
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.9")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", "0.5")
+    monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", "0.8")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
     approval_path = _write_approval_file(tmp_path)
     provider, _calls = _make_graph_provider(

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from graph_cleanup._fakes import (
     ABSORBED,
@@ -286,6 +286,7 @@ def _restore(baseline: SerializedGraph, persisted: _Persisted) -> PolicySystemLe
         governance=GovernanceImport(),
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=None,
     )
 

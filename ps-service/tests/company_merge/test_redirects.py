@@ -18,7 +18,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 
 from company_merge._gateway_fakes import RigReadHandle
 from company_merge._marker_graph import MarkerGraph
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.errors import CompanyMergeValidationError
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.company_merge.models import (
@@ -142,7 +142,7 @@ class _Baseline:
         if "n.role_id" in q:
             return _Result([["REG-H_req_art_1.1", "Must report.", "requirement", 0.9, self._role]])
         if "n.name, n.confidence" in q:
-            return _Result([[self._role, "Operator", 0.9]])
+            return _Result([[self._role, "Operator", 0.9, None]])
         if "[e:DEFINES]" in q:
             return _Result([[self._role, "Article 1(1)"]])
         if "[e:EXPRESSES]" in q:
@@ -462,6 +462,7 @@ def _ingest(
         embed_model="fake-embed-model",
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -676,6 +677,7 @@ def _merge_over_rig(
         embed_model="fake-embed-model",
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=caller,
         emitter=emitter,
         **merge_rig.merge_keywords(),

@@ -164,6 +164,31 @@ class _ScriptedFakeGraph:
         ]
 
 
+def test_read_baseline_graph_carries_a_cached_role_embedding_and_none_when_absent() -> None:
+    graph = _ScriptedFakeGraph(
+        regulatory_instrument_properties={"id": "CRA-1.0"},
+        role_rows=[
+            ["role_a", "Manufacturer", 0.9, [0.25, 0.5]],
+            ["role_b", "Importer", 0.9, None],
+        ],
+        requirement_rows=[],
+        obligation_rows=[],
+        capability_rows=[],
+        defines_rows=[],
+        expresses_rows=[],
+        has_rows=[],
+        satisfied_by_rows=[],
+        requires_rows=[],
+    )
+
+    result = read_baseline_graph(graph, "CRA-1.0")
+
+    by_id = {node.id: node for node in result.role_nodes}
+    assert by_id["role_a"].embedding == (0.25, 0.5)
+    assert by_id["role_a"].properties == {"name": "Manufacturer", "confidence": 0.9}
+    assert by_id["role_b"].embedding is None
+
+
 def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> None:
     graph = _ScriptedFakeGraph(
         regulatory_instrument_properties={
@@ -171,7 +196,7 @@ def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> Non
             "title": "Cyber Resilience Act",
             "jurisdiction": "EU",
         },
-        role_rows=[["role_manufacturer_abc123", "Manufacturer", 0.9]],
+        role_rows=[["role_manufacturer_abc123", "Manufacturer", 0.9, None]],
         requirement_rows=[
             [
                 "CRA-1.0_req_art_13.1",
@@ -316,7 +341,7 @@ def test_read_baseline_graph_empty_when_no_obligation_or_capability_nodes() -> N
     """
     graph = _ScriptedFakeGraph(
         regulatory_instrument_properties={"id": "GDPR-1.0", "title": "GDPR", "jurisdiction": "EU"},
-        role_rows=[["role_controller_def456", "Controller", 0.95]],
+        role_rows=[["role_controller_def456", "Controller", 0.95, None]],
         requirement_rows=[
             [
                 "GDPR-1.0_req_art_5.1",
@@ -572,7 +597,7 @@ def test_external_baseline_yields_empty_governance_tuples() -> None:
     exception, same tolerance as the existing empty-Obligation/Capability path.
     """
     graph = _empty_scripted_graph(
-        role_rows=[["role_manufacturer_abc123", "Manufacturer", 0.9]],
+        role_rows=[["role_manufacturer_abc123", "Manufacturer", 0.9, None]],
         capability_rows=[
             ["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None, None]
         ],

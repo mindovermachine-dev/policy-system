@@ -36,7 +36,7 @@ from company_merge._seed_merge_graphs import (
     BaselineGraphReader,
     SingleTenantStore,
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge import graph_reader, graph_writer
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.graph_submission import GraphWriteTarget
@@ -98,6 +98,7 @@ def _merge(rig: MergeRig, baseline: FamilyABaseline, emitter: LogEmitter) -> Non
         embed_model=EMBED_MODEL,
         merge_threshold=MERGE_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **rig.merge_keywords(),
     )
@@ -226,6 +227,7 @@ def test_the_net_new_obligation_count_is_a_delta_the_frozen_reference_gives_too(
             embed_model=EMBED_MODEL,
             merge_threshold=MERGE_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )

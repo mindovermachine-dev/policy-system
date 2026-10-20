@@ -632,6 +632,33 @@ def test_export_is_refused_naming_a_review_of_the_test_only_kind(
     assert stage.calls == []
 
 
+def test_export_is_refused_by_an_unresolved_role_review_and_writes_nothing(
+    make_emitter: MakeEmitter,
+) -> None:
+    """A Role near miss over this baseline's Roles blocks the export like a Capability one."""
+    emitter, _log_path = make_emitter()
+    db = _FakeDb(graphs=[_BASELINE_NAME])
+    baseline_graph = _FakeExistenceGraph(
+        properties=_PROPERTIES, ids_by_label={"Role": ("role_a", "role_b")}
+    )
+    stage = _FakeExportStage()
+    policy = ScriptedPolicyGraph([pending_review("review_role", kind="Role", incoming_id="role_a")])
+    dependencies, _open_baseline_calls, _open_native_calls = _build_dependencies(
+        db=db, baseline_graph=baseline_graph, stage=stage, policy_graph=policy
+    )
+
+    with pytest.raises(ExportUnresolvedNearMissesError) as raised:
+        run_export(
+            _request(), config=_config(), actor="x", dependencies=dependencies, emitter=emitter
+        )
+
+    assert raised.value.review_ids == ("review_role",)
+    installed = installed_process_gateway()
+    assert installed.system_audit.rows == []
+    assert installed.rig.events == []
+    assert stage.calls == []
+
+
 def test_export_with_a_review_of_an_unregistered_kind_is_refused_naming_it_and_writes_nothing(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:

@@ -225,6 +225,21 @@ def test_completion_entry_never_contains_stage_error_text() -> None:
     }
 
 
+def test_counts_read_the_same_whether_or_not_the_summary_carries_the_role_keys() -> None:
+    """The audited counts are the three Capability/Obligation facts; the Role keys are additive.
+
+    A stored row from before the Role keys existed, and a new one carrying them, validate and
+    read identically.
+    """
+    old_summary = {"new_obligations": 3, "new_capabilities": 1, "matched_capabilities": 2}
+    new_summary = {**old_summary, "role_near_misses": 4, "roles_minted": 9}
+
+    old_counts = audit_actions.IngestionCounts.from_merge_summary(old_summary)
+    new_counts = audit_actions.IngestionCounts.from_merge_summary(new_summary)
+
+    assert old_counts == new_counts == audit_actions.IngestionCounts(3, 1, 2)
+
+
 def test_counts_from_a_result_without_a_merge_stage_are_zero() -> None:
     assert audit_actions.IngestionCounts.from_result(None) == audit_actions.IngestionCounts(0, 0, 0)
     assert audit_actions.IngestionCounts.from_result({"stages": [{"stage": "ingestion"}]}) == (

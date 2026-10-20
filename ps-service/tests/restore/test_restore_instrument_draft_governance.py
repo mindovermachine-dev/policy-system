@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.company_merge.governance_import import GovernanceImport
 from ps_service.domain_mapper.identity import policy_id
@@ -93,6 +93,7 @@ def _build(
         governance=GovernanceImport(owner=owner, policy_embeddings=policy_embeddings or {}),
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,  # pyright: ignore[reportArgumentType] -- the make_emitter fixture's emitter
     )
 
@@ -280,6 +281,7 @@ def test_restore_instrument_refuses_governance_content_without_an_owner_before_t
             single_tenant_graph_name="policy_system",
             merge_threshold=_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             actor="tester",
             open_gateway=never_open_gateway,
             audit_event_id=UNUSED_EVENT_ID,

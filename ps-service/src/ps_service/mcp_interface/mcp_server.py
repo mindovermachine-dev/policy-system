@@ -1683,11 +1683,12 @@ def _resolve_merge_pending_approval(
         acknowledge: True when the caller accepts the governance change of a case-2 merge.
 
     Returns:
-        `{"preview", "pending_approval_id", "approval_url", "expires_at"}`; for case 2 without the
-        acknowledgment `{"preview", "acknowledgment_required": True, "message"}` and no approval; or
-        an `error: ` string when the caller is not an authenticated Compliance Officer, the review
-        does not exist or is stale or is of a kind with no merge, the pair is governed by different
-        Policies, or the graph is unreachable.
+        `{"preview", "pending_approval_id", "approval_url", "expires_at"}`; for a Capability case 2
+        without the acknowledgment `{"preview", "acknowledgment_required": True, "message"}` and no
+        approval; or an `error: ` string when the caller is not an authenticated Compliance
+        Officer, the review does not exist or is stale or is of a kind with no merge, a Role review
+        carries the governance acknowledgment, the pair is governed by different Policies, or the
+        graph is unreachable.
 
     Raises:
         Exception: Any other error propagates to `_run_mcp_action`.
@@ -1748,32 +1749,37 @@ def near_misses_resolve(
     """Resolve one near-miss pending review by keeping the two entities separate or merging them.
 
     `decision="keep-separate"` deletes only the `PendingReview` record and leaves both entities
-    untouched. `decision="merge"` merges the two Capabilities through the graph-cleanup
-    `merge-capabilities` approval and requires an explicit `ComplianceOfficer` grant on a real
-    authenticated session (no admin override, never available under the local-test bypass). This
-    call never edits the graph: it picks the survivor (the Capability with the earlier
-    `created_at`; a missing one counts earliest and a tie goes to the incoming node), returns the
-    merge preview and creates a pending passkey approval bound to that pair and state, with the
-    review id signed into it. The merge runs only when the officer opens `approval_url` in a browser
-    and signs with a passkey; use `near_misses_check_approval` to learn whether that happened.
+    untouched. `decision="merge"` merges the two entities through the graph-cleanup approval of the
+    review's kind (`merge-capabilities` for a Capability review, `merge-roles` for a Role review)
+    and requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override, never available under the local-test bypass). This call never edits the graph: it
+    picks the survivor (a Capability: the one with the earlier `created_at`, a missing one counts
+    earliest and a tie goes to the incoming node; a Role carries no `created_at`, so the incoming
+    Role survives), returns the merge preview and creates a pending passkey approval bound to that
+    pair and state, with the review id signed into it. The merge runs only when the officer opens
+    `approval_url` in a browser and signs with a passkey; use `near_misses_check_approval` to
+    learn whether that happened.
 
-    On execution the absorbed Capability is deleted and a `MergedCapability` marker naming the
-    survivor remains, so a later ingest or restore resolves to the survivor and raises no new
-    near miss. Its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the survivor. The change is
-    one all-or-nothing graph write, audited first (`capability.merge`, linked to the review id and
+    On execution the absorbed entity is deleted and a marker (`MergedCapability` or `MergedRole`)
+    naming the survivor remains, so a later ingest or restore resolves to the survivor and raises
+    no new near miss. A Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the
+    survivor; a Role's Obligations move to the surviving Role. The change is one all-or-nothing
+    graph write, audited first (`capability.merge` or `role.merge`, linked to the review id and
     reversible with `unmerge`), that also deletes the `PendingReview`. A Capability keeps at most
     one governing Policy: when exactly one of the two is governed the preview names the Policy
     (`policy_case` 2) and the first call, without `acknowledge_governance_change`, returns
     `acknowledgment_required` and creates no approval; repeat it with the flag set once the officer
     has accepted the change. Two Capabilities governed by different Policies are refused before any
-    approval, with an error naming `release-capability-governance`. Needs no LLM Interface.
+    approval, with an error naming `release-capability-governance`. A Role has no governing Policy,
+    so `acknowledge_governance_change=true` on a Role review is refused. Needs no LLM Interface.
 
     Args:
         review_id: Id of the pending review, from `near_misses_list`; at least 1 character.
         decision: `"keep-separate"` or `"merge"`; any other value is rejected before the tool runs.
         ctx: Supplied by the MCP runtime, not by the caller.
-        acknowledge_governance_change: `true` to accept the governance change of a case-2 merge;
-            default `false`. It has no effect on `keep-separate` or on the other merge cases.
+        acknowledge_governance_change: `true` to accept the governance change of a case-2
+            Capability merge; default `false`. It has no effect on `keep-separate` or on the other
+            Capability merge cases, and a Role review refuses `true`.
 
     Returns:
         For `keep-separate`: `{"review_id", "decision", "winner_id": None, "loser_id": None,
@@ -1781,18 +1787,20 @@ def near_misses_resolve(
         `{"preview": {"survivor_id", "survivor_name", "absorbed_id", "absorbed_name", "policy_case",
         "edges_to_move": {"requires", "covers", "mitigated_by"}, "duplicate_edges_collapsed",
         "obligations_affected", "state_digest", "governance"}, "pending_approval_id",
-        "approval_url", "expires_at"}`, where `approval_url` is the link a human opens to sign. For
-        a case-2 merge without the acknowledgment: `{"preview", "acknowledgment_required": true,
+        "approval_url", "expires_at"}` for a Capability review (a Role review's preview is the Role
+        merge preview), where `approval_url` is the link a human opens to sign. For a case-2
+        Capability merge without the acknowledgment: `{"preview", "acknowledgment_required": true,
         "message"}`.
 
     Errors (returned as a string beginning `error: `, never raised):
         - `review_id` does not exist, was already resolved, or no longer matches two live
-          Capabilities (stale).
+          nodes of its kind (stale).
         - The review has a kind with no registered spec; the error names the kind and nothing is
           audited or changed.
         - (`merge` only) The caller is not an authenticated Compliance Officer.
-        - (`merge` only) The review is of a kind that has no merge (the error names it), or the two
-          Capabilities are governed by different Policies.
+        - (`merge` only) The review is of a kind that has no merge (the error names it), the two
+          Capabilities are governed by different Policies, or `acknowledge_governance_change` was
+          set for a Role review.
         - (`keep-separate` only) The audit trail cannot record the resolve; the review is left
           untouched.
         - The policy graph database cannot be reached.

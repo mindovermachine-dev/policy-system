@@ -36,7 +36,7 @@ from company_merge._seed_merge_graphs import (
     OneHotEmbeddingCaller,
     SingleTenantStore,
 )
-from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD
+from company_merge._thresholds import NO_FLOOR_REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge import dedup, graph_reader
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.company_merge.models import BaselineNode, CanonicalResolution
@@ -123,6 +123,7 @@ def _production(steps: tuple[FamilyABaseline, ...], rig: MergeRig, emitter: LogE
             embed_model=EMBED_MODEL,
             merge_threshold=MERGE_THRESHOLD,
             review_threshold=NO_FLOOR_REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             call_embedding=embeddings,
             emitter=emitter,
             values=values,

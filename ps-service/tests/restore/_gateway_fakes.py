@@ -15,7 +15,7 @@ import re
 from typing import TYPE_CHECKING, cast
 
 from company_merge._gateway_fakes import POLICY_SYSTEM, MergeRig, RigReadHandle
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from ps_service.restore.restore_instrument import restore_instrument
 
@@ -80,6 +80,7 @@ class RestoreRig(MergeRig):
         source: str | None = None,
         threshold: float = THRESHOLD,
         review_threshold: float = REVIEW_THRESHOLD,
+        role_review_threshold: float = ROLE_REVIEW_THRESHOLD,
     ) -> RestoreOutcome:
         """Run the real `restore_instrument` for `artifact` through this rig."""
         return restore_instrument(
@@ -88,6 +89,7 @@ class RestoreRig(MergeRig):
             single_tenant_graph_name=POLICY_SYSTEM,
             merge_threshold=threshold,
             review_threshold=review_threshold,
+            role_review_threshold=role_review_threshold,
             actor=ACTOR,
             open_gateway=self.open_gateway,
             audit_event_id=self.audit_event_id,

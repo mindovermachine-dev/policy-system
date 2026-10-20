@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ps_service.api.ingestion_orchestration import SHORT_NAME_PATTERN
 from ps_service.graph_cleanup.models import (
     CapabilityMergePreview,
+    RoleMergePreview,
 )
 
 
@@ -491,12 +492,13 @@ class ResolveReviewRequest(BaseModel):
 
     Attributes:
         decision: ``"keep-separate"`` clears the pending review and changes nothing else.
-            ``"merge"`` requests a merge of the two Capabilities, which needs a Compliance Officer
-            and a signed passkey approval before it takes effect.
+            ``"merge"`` requests a merge of the two entities of the review, which needs a Compliance
+            Officer and a signed passkey approval before it takes effect.
         acknowledge_governance_change: ``True`` to accept the governance change of a merge where
             exactly one of the two Capabilities has a governing Policy. Default ``False``: such a
             merge then returns its preview and ``acknowledgment_required`` and creates no approval.
-            It has no effect on ``keep-separate`` or on the other merge cases.
+            It has no effect on ``keep-separate`` or on the other merge cases, and a Role review
+            refuses ``True`` because a Role has no governing Policy.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -517,15 +519,17 @@ class ResolveReviewResponse(BaseModel):
         review_id: Identifier of the resolved review; non-empty.
         decision: The decision taken, ``"keep-separate"`` or ``"merge"``.
         winner_id: Id of the surviving entity; ``None`` in the responses this route returns.
-        loser_id: Id of the absorbed Capability, which is deleted and replaced by a
-            ``MergedCapability`` marker; ``None`` in the responses this route returns.
+        loser_id: Id of the absorbed entity, which is deleted and replaced by a
+            ``MergedCapability`` or ``MergedRole`` marker; ``None`` in the responses this route
+            returns.
         pending_approval_id: Id of the pending passkey approval for a merge; ``None`` otherwise,
             including a merge that still needs its acknowledgment.
         approval_url: URL where the approver signs the merge; ``None`` unless a merge is
             pending.
         expires_at: Expiry time of the pending approval; ``None`` unless a merge is pending.
-        preview: What the merge will do (survivor, absorbed, Policy case, edges that move, state
-            digest); set for a merge, ``None`` for ``keep-separate``.
+        preview: What the merge will do; set for a merge, ``None`` for ``keep-separate``. A
+            Capability review carries a ``CapabilityMergePreview`` (survivor, absorbed, Policy case,
+            edges that move, state digest); a Role review carries a ``RoleMergePreview``.
         acknowledgment_required: ``True`` when the merge needs ``acknowledge_governance_change``
             before an approval is created; ``None`` otherwise.
         message: The acknowledgment text to show the officer; set with
@@ -541,7 +545,7 @@ class ResolveReviewResponse(BaseModel):
     pending_approval_id: str | None = None
     approval_url: str | None = None
     expires_at: str | None = None
-    preview: CapabilityMergePreview | None = None
+    preview: CapabilityMergePreview | RoleMergePreview | None = None
     acknowledgment_required: bool | None = None
     message: str | None = None
 

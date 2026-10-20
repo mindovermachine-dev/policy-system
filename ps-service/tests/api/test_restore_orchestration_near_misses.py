@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from company_merge._gateway_fakes import POLICY_SYSTEM
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from graph_gateway._fakes import close_all_rigs
 from restore._fixtures import build_restore_artifact, small_graphs
 from restore._gateway_fakes import RestoreRig
@@ -110,6 +110,7 @@ def _run(rig: RestoreRig, store: InMemoryAuditStore, *, review_threshold: float 
             artifact,
             threshold=cast("float", kwargs["merge_threshold"]),
             review_threshold=cast("float", kwargs["review_threshold"]),
+            role_review_threshold=cast("float", kwargs["role_review_threshold"]),
             owner=_ACTOR,
         )
 
@@ -126,6 +127,7 @@ def _run(rig: RestoreRig, store: InMemoryAuditStore, *, review_threshold: float 
         logging_dir=None,
         company_merge_capability_merge_threshold=_THRESHOLD,
         company_merge_capability_review_threshold=review_threshold,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
     )
     return run_restoration(

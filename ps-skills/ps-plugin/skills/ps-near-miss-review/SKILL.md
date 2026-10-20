@@ -24,9 +24,10 @@ has seen and understood what the merge does, and that it needs the
 `ComplianceOfficer` role, before the approval is requested.
 
 A review's `kind` names the node kind under review. Only kinds that have a review
-spec appear (today Capability), a review is raised only for a pair scoring at or above
-the configured review threshold, and a merge is available for kinds that have a merge
-executor (today Capability).
+spec appear (today Capability and Role; a Role review compares two Roles of one
+instrument), a review is raised only for a pair scoring at or above the configured
+review threshold of its kind, and a merge is available for kinds that have a merge
+executor (today Capability and Role).
 
 **Deliverable:** every unresolved review's `id`, `kind`, `incoming_text`,
 `nearest_existing_text`, and `similarity` on listing; for `keep-separate` the
@@ -49,7 +50,7 @@ table under Process) rather than proceeding against it. From here on,
 
 **Audit:** a `keep-separate` decision is recorded as a `near_miss.resolve` row
 (both entity ids and the decision) at the request. A `merge` is recorded as a
-`capability.merge` row, written when the approver signs with their passkey and
+`capability.merge` row (`role.merge` for a Role review), written when the approver signs with their passkey and
 before the graph is changed. It names the approver, the survivor, the absorbed
 Capability, the review id and a before/after snapshot of the graph. A failed
 or refused signing writes a `failed` row for the same approval. If the audit
@@ -84,7 +85,10 @@ Read the rows with `ps-list-audit-events`.
   `MergedCapability` marker naming the survivor remains, so a later
   ingest or restore resolves to the survivor and raises no new near miss. Its
   `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the survivor, and the
-  review record is deleted. The merge is one all-or-nothing write and can be
+  review record is deleted. For a `Role` review the merge is the Role merge
+  instead: the absorbed Role's Obligations move to the survivor, the absorbed
+  Role is deleted behind a `MergedRole` marker, no Policy is involved (never
+  set `acknowledge_governance_change`), and `unmerge` reverses it. The merge is one all-or-nothing write and can be
   reversed afterwards with the `unmerge` tool (see `ps-graph-cleanup`), which
   does not restore the review record.
 - A Capability has at most one governing Policy. When exactly one of the two

@@ -90,6 +90,7 @@ def _requirements(role_name: str, text: str) -> str:
             "requirements": [
                 {
                     "role_name": role_name,
+                    "role_is_actor": True,
                     "text": text,
                     "type": "requirement",
                     "letter_suffix": None,

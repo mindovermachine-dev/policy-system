@@ -456,6 +456,7 @@ class StatefulStages:
         embed_model: str = "",
         merge_threshold: float | None = None,
         review_threshold: float | None = None,
+        role_review_threshold: float | None = None,
         call_embedding: object = None,
         emitter: object = None,
         governance: GovernanceImport | None = None,
@@ -472,6 +473,7 @@ class StatefulStages:
             embed_model,
             merge_threshold,
             review_threshold,
+            role_review_threshold,
             call_embedding,
             emitter,
         )

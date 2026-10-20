@@ -1265,6 +1265,35 @@
           "required": ["source", "content"],
           "type": "object"
         },
+        "ObligationDuplicatePair": {
+          "additionalProperties": false,
+          "properties": {
+            "absorbed_obligation_id": {
+              "type": "string"
+            },
+            "absorbed_text": {
+              "type": "string"
+            },
+            "basis": {
+              "enum": ["identical_text", "near_text"],
+              "type": "string"
+            },
+            "survivor_obligation_id": {
+              "type": "string"
+            },
+            "survivor_text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "survivor_obligation_id",
+            "survivor_text",
+            "absorbed_obligation_id",
+            "absorbed_text",
+            "basis"
+          ],
+          "type": "object"
+        },
         "PendingApprovalStatusResponse": {
           "properties": {
             "decision": {
@@ -1492,6 +1521,9 @@
                   "$ref": "#/components/schemas/CapabilityMergePreview"
                 },
                 {
+                  "$ref": "#/components/schemas/RoleMergePreview"
+                },
+                {
                   "type": "null"
                 }
               ]
@@ -1646,6 +1678,52 @@
             }
           },
           "required": ["stage", "status"],
+          "type": "object"
+        },
+        "RoleMergePreview": {
+          "additionalProperties": false,
+          "properties": {
+            "absorbed_id": {
+              "type": "string"
+            },
+            "absorbed_name": {
+              "type": "string"
+            },
+            "duplicate_obligation_pairs": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ObligationDuplicatePair"
+              },
+              "type": "array"
+            },
+            "instrument_id": {
+              "type": "string"
+            },
+            "moved_obligation_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "state_digest": {
+              "type": "string"
+            },
+            "survivor_id": {
+              "type": "string"
+            },
+            "survivor_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "survivor_id",
+            "survivor_name",
+            "absorbed_id",
+            "absorbed_name",
+            "instrument_id",
+            "moved_obligation_ids",
+            "state_digest"
+          ],
           "type": "object"
         },
         "StageOutcome": {

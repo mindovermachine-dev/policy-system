@@ -21,6 +21,7 @@ from company_merge._review_floor_fixtures import (
     seed_existing,
 )
 from company_merge._seed_merge_graphs import BaselineGraphReader
+from company_merge._thresholds import ROLE_REVIEW_THRESHOLD
 from graph_gateway._fakes import close_all_rigs
 
 from ps_service.company_merge.merge import merge_baseline_graph
@@ -74,6 +75,7 @@ def test_AC_BI_010_ingest_and_restore_raise_identical_near_misses(
         embed_model=EMBED_MODEL,
         merge_threshold=MERGE,
         review_threshold=floor,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=ByNameEmbedding(),
         emitter=emitter,
         **ingest_rig.merge_keywords(),

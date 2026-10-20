@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 
 from api._audit_fakes import InMemoryAuditStore
@@ -91,6 +91,7 @@ class _FakeRestoreStage:
         single_tenant_graph_name: str,
         merge_threshold: float,
         review_threshold: float,
+        role_review_threshold: float,
         actor: str,
         open_gateway: Callable[[], object] | None = None,
         audit_event_id: str = "",
@@ -103,6 +104,7 @@ class _FakeRestoreStage:
             single_tenant_graph_name,
             merge_threshold,
             review_threshold,
+            role_review_threshold,
             actor,
             emitter,
         )
@@ -134,6 +136,7 @@ def _app_config() -> ServiceConfig:
         logging_dir=None,
         company_merge_capability_merge_threshold=0.83,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
         is_local_test_bypass_active=True,
         authentik_api_token="test-authentik-token",
         authentik_base_url="https://authentik.example.com",

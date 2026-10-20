@@ -168,6 +168,7 @@ def test_persist_writes_requirement_status_from_real_extraction_output(
             "unit_article_number": "13",
             "unit_paragraph_number": "1",
             "role_name": "Manufacturer",
+            "role_is_actor": True,
             "text": "Manufacturers shall conduct a cybersecurity risk assessment.",
             "type": "requirement",
             "letter_suffix": None,

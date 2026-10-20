@@ -32,7 +32,7 @@ import openai
 import pytest
 from litellm.types.utils import Embedding, EmbeddingResponse
 
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from ps_service.company_merge.errors import (
     CompanyMergeConfigurationError,
     CompanyMergePersistenceError,
@@ -386,6 +386,9 @@ class _FakeSingleTenantGraph:
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult(self._capability_index_rows())
+        if "-[:DEFINES]->(n:Role) RETURN n.id, n.name, n.embedding" in q:
+            assert params is not None
+            return _FakeQueryResult(self._defined_role_rows(cast("str", params["instrument_id"])))
         if _UNRESOLVED_PAIRS_READ.match(q) is not None:
             assert params is not None
             return _FakeQueryResult(self._unresolved_review_rows(params))
@@ -431,6 +434,21 @@ class _FakeSingleTenantGraph:
             )
             return _FakeQueryResult([[rid] for rid in requested_ids if rid in known_ids])
         return _FakeQueryResult([[0]])
+
+    def _defined_role_rows(self, instrument_id: str) -> list[object]:
+        """`[id, name, embedding]` of the Roles `instrument_id` `DEFINES` in the gateway graph."""
+        if self._gateway_graph is None:
+            return []
+        defined = {
+            key[4]
+            for key in self._gateway_graph.edges
+            if key[0] == "DEFINES" and key[2] == instrument_id and key[3] == "Role"
+        }
+        return [
+            [node_id, props.get("name"), props.get("embedding")]
+            for (label, node_id), props in self._gateway_graph.nodes.items()
+            if label == "Role" and node_id in defined
+        ]
 
     def _unresolved_review_rows(self, params: dict[str, object]) -> list[object]:
         """The `$pairs` the gateway-written `PendingReview` nodes of `$kind` already name."""
@@ -594,7 +612,7 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
 
     return _FakeBaselineGraph(
         regulatory_instrument_properties={"id": "REG-1.0", "title": "Test Regulation"},
-        role_rows=[[role_node_id, "Manufacturer", 0.9]],
+        role_rows=[[role_node_id, "Manufacturer", 0.9, None]],
         requirement_rows=[
             [
                 requirement_node_id,
@@ -635,6 +653,7 @@ def test_everything_new_writes_every_node_type_directly(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -673,15 +692,16 @@ def test_both_dedup_reads_complete_before_any_write_call(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
 
     read_positions = [i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)]
-    assert len(read_positions) == 4  # index + one marker read per kind
+    assert len(read_positions) == 5  # Capability index + Role index + one marker read per kind
     # A write is a gateway group: its first log append must come after the last read
     events = merge_rig.events
-    assert events.count(_DEDUP_READ_EVENT) == 4
+    assert events.count(_DEDUP_READ_EVENT) == 5
     assert max(i for i, event in enumerate(events) if event == _DEDUP_READ_EVENT) < events.index(
         "log_append"
     )
@@ -716,7 +736,7 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
 
     baseline = _FakeBaselineGraph(
         regulatory_instrument_properties={"id": "REG-1.0", "title": "Test Regulation"},
-        role_rows=[[role_node_id, "Manufacturer", 0.9]],
+        role_rows=[[role_node_id, "Manufacturer", 0.9, None]],
         requirement_rows=[
             [
                 requirement_node_id,
@@ -746,6 +766,7 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -801,6 +822,7 @@ def test_missing_merge_threshold_raises_before_any_call(merge_rig: MergeRig) -> 
             embed_model=_MODEL,
             merge_threshold=None,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             **merge_rig.merge_keywords(),
         )
 
@@ -825,6 +847,7 @@ def test_missing_review_threshold_raises_before_any_call(merge_rig: MergeRig) ->
             embed_model=_MODEL,
             merge_threshold=_THRESHOLD,
             review_threshold=None,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             **merge_rig.merge_keywords(),
         )
 
@@ -847,6 +870,7 @@ def test_review_threshold_above_merge_threshold_raises_before_any_call(
             embed_model=_MODEL,
             merge_threshold=0.6,
             review_threshold=0.8,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             **merge_rig.merge_keywords(),
         )
 
@@ -873,6 +897,7 @@ def test_succeeded_log_entry_carries_bound_run_id(
             embed_model=_MODEL,
             merge_threshold=_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )
@@ -908,6 +933,7 @@ def test_dedup_decision_log_entries_carry_bound_run_id(
             embed_model=_MODEL,
             merge_threshold=_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )
@@ -951,7 +977,7 @@ def _single_obligation_baseline_graph(
             "id": regulatory_instrument_id,
             "title": f"Test Regulation {regulatory_instrument_id}",
         },
-        role_rows=[[role_id_value, "Manufacturer", 0.9]],
+        role_rows=[[role_id_value, "Manufacturer", 0.9, None]],
         requirement_rows=[
             [
                 requirement_id_value,
@@ -1001,6 +1027,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1019,6 +1046,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1061,7 +1089,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     first_obligation_id = obligation_id("role_g_operator", first_obligation_text)
     first_regulatory_instrument = _FakeBaselineGraph(
         regulatory_instrument_properties={"id": "REG-G", "title": "Test Regulation REG-G"},
-        role_rows=[["role_g_operator", "Operator", 0.9]],
+        role_rows=[["role_g_operator", "Operator", 0.9, None]],
         requirement_rows=[
             [
                 "REG-G_req_art_9.1",
@@ -1086,6 +1114,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1098,7 +1127,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     second_obligation_id = obligation_id("role_h_operator", second_obligation_text)
     second_regulatory_instrument = _FakeBaselineGraph(
         regulatory_instrument_properties={"id": "REG-H", "title": "Test Regulation REG-H"},
-        role_rows=[["role_h_operator", "Operator", 0.9]],
+        role_rows=[["role_h_operator", "Operator", 0.9, None]],
         requirement_rows=[
             [
                 "REG-H_req_art_10.1",
@@ -1123,6 +1152,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1210,6 +1240,7 @@ def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         governance=_GOVERNANCE,
         **merge_rig.merge_keywords(),
@@ -1273,7 +1304,7 @@ def _baseline_graph_with_classification_nodes(
 
     return _FakeBaselineGraph(
         regulatory_instrument_properties={"id": "REG-1.0", "title": "Test Regulation"},
-        role_rows=[[role_node_id, "Manufacturer", 0.9]],
+        role_rows=[[role_node_id, "Manufacturer", 0.9, None]],
         requirement_rows=[
             [
                 requirement_node_id,
@@ -1350,6 +1381,7 @@ def test_practice_area_and_risk_path_nodes_pass_through_to_single_tenant(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1445,6 +1477,7 @@ def test_practice_area_and_risk_path_properties_unchanged_when_node_already_exis
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1509,6 +1542,7 @@ def test_capability_near_miss_persists_pending_review_node(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1574,6 +1608,7 @@ def test_rerun_over_unchanged_input_creates_no_second_review_for_a_pair(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=_ScriptedCallEmbedding({incoming_name: [0.6, 0.8]}),
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1625,6 +1660,7 @@ def test_near_title_policy_is_a_separate_draft_with_no_embedding_call_and_no_rev
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,
@@ -1686,6 +1722,7 @@ def test_pending_review_count_covers_capability_near_misses_only(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,
@@ -1715,6 +1752,7 @@ def test_external_baseline_unaffected_by_policy_pass(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1759,6 +1797,7 @@ def test_external_baseline_unaffected_by_classification_pass(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
         **merge_rig.merge_keywords(),
     )
@@ -1817,6 +1856,7 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1828,6 +1868,7 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -1934,6 +1975,7 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         **merge_rig.merge_keywords(),
@@ -2004,6 +2046,7 @@ def test_missing_classification_edge_endpoint_raises_before_any_classification_e
             embed_model=_MODEL,
             merge_threshold=_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             emitter=emitter,
             **merge_rig.merge_keywords(),
         )
@@ -2083,6 +2126,7 @@ def test_no_classification_writes_when_capability_embedding_fails(
             embed_model=_MODEL,
             merge_threshold=_THRESHOLD,
             review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
             call_embedding=call_embedding,
             emitter=emitter,
             **merge_rig.merge_keywords(),
@@ -2158,6 +2202,7 @@ def test_succeeded_log_entry_carries_classification_write_counts(
         embed_model=_MODEL,
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
         governance=_GOVERNANCE,

@@ -12,7 +12,7 @@ Public functions:
     `get_pending_review`: read one review by id, resolvable or not.
     `resolve_review`: keep a review's pair separate (deletes the review only).
     `read_review_merge_sides`, `choose_survivor`: read a review's pair and pick the survivor of a
-        merge, which the graph-cleanup `merge-capabilities` approval then performs.
+        merge, which the graph-cleanup approval of the review's kind then performs.
 
 Every `PendingReview` node is unresolved by construction: a resolved review is deleted, never
 marked with a status, so a missing node means "not found or already resolved". Reads call
@@ -21,15 +21,16 @@ Cypher. Its writes are Graph Write Gateway groups submitted with `submit_group`.
 
 `resolve_review` returns `None` for a missing review. That is this module's not-found signal;
 the API layer translates it to `PendingReviewNotFoundError`, because `ps_service.company_merge`
-never imports `ps_service.api`. A review whose incoming or existing Capability has disappeared
+never imports `ps_service.api`. A review whose incoming or existing node has disappeared
 raises `StalePendingReviewError` from `read_review_merge_sides` instead, which the API layer
 translates with a dedicated message. The review's kind is read from the `PendingReview` node itself,
 never from user input, and must be the label of a registered `ReviewableKind`.
 
 A merge is not written here. `read_review_merge_sides` reads the pair and `choose_survivor` decides
 the survivor in Python (earlier `created_at` wins, a missing one wins, a tie goes to the incoming
-node); the graph-cleanup `merge-capabilities` executor then performs the merge and deletes the
-review in the same write group.
+node); the graph-cleanup merge approval of the review's kind (`merge-capabilities` for a
+Capability, `merge-roles` for a Role) then performs the merge and deletes the review in the same
+write group.
 """
 
 from __future__ import annotations
@@ -48,7 +49,6 @@ from ps_service.company_merge.generated_values import SYSTEM_VALUES
 from ps_service.company_merge.graph_submission import read_rows, submit_group
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
 from ps_service.company_merge.reviewable_kinds import (
-    CAPABILITY,
     require_registered,
     reviewable_kind,
 )
@@ -114,16 +114,13 @@ _GET_REVIEW_QUERY = (
 
 _FIND_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind"
 
-# One read of a review's kind and its two sides for the near-miss merge request: the review's own
-# ids, whether each side still exists as a Capability, and each side's `created_at`.
-# The label is static because only a Capability review can be merged; a review of another kind
-# still yields its row (with both sides absent), so the caller can name the kind.
-_REVIEW_MERGE_SIDES_QUERY = (
-    "MATCH (r:PendingReview {id: $review_id}) "
-    "OPTIONAL MATCH (a:Capability {id: r.incoming_id}) "
-    "OPTIONAL MATCH (b:Capability {id: r.nearest_existing_id}) "
-    "RETURN r.kind, r.incoming_id, r.nearest_existing_id, "
-    "a IS NOT NULL, b IS NOT NULL, a.created_at, b.created_at"
+# The near-miss merge request reads a review in two steps. The first read yields the review's
+# own kind and ids; the second yields, under that kind's label, whether each side still exists and
+# each side's `created_at`. The label cannot be a static `:{kind}` in one statement, so the second
+# statement is built per registered kind from the spec's validated label (`_sides_query`), never
+# from stored or user input.
+_REVIEW_KIND_QUERY = (
+    "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind, r.incoming_id, r.nearest_existing_id"
 )
 
 _REVIEW_ID_PREFIX = "review_"
@@ -450,6 +447,25 @@ def resolve_review(
     return ResolveOutcome(review_id=review_id, decision=decision)
 
 
+def _sides_query(label: str) -> str:
+    """Build the read of a review's two sides under one registered kind's node label.
+
+    Args:
+        label: The `label` of a registered `ReviewableKind`; a plain identifier by construction
+            (`ReviewableKind.__post_init__`), code-owned, never adapter-, LLM- or user-sourced.
+
+    Returns:
+        A statement with the review id as the only parameter. Its row holds whether the incoming
+        and the existing node exist under `label`, then each node's `created_at`.
+    """
+    return (
+        "MATCH (r:PendingReview {id: $review_id}) "
+        f"OPTIONAL MATCH (a:{label} {{id: r.incoming_id}}) "
+        f"OPTIONAL MATCH (b:{label} {{id: r.nearest_existing_id}}) "
+        "RETURN a IS NOT NULL, b IS NOT NULL, a.created_at, b.created_at"
+    )
+
+
 def _incoming_wins(incoming_created_at: object, existing_created_at: object) -> bool:
     """Decide whether the incoming node wins, as `coalesce(a, '') <= coalesce(b, '')`.
 
@@ -490,25 +506,41 @@ def read_review_merge_sides(
 ) -> ReviewMergeSides | None:
     """Read one review's kind, both node ids and both `created_at` stamps; write nothing.
 
+    The review's kind is read first, then its two sides under that kind's own label, so every
+    registered kind is read the same way and a review whose node was absorbed is caught for every
+    kind.
+
     Args:
         single_tenant_graph: Read handle on the single-tenant graph.
         review_id: Id of the review, as returned by `list_pending_reviews`.
 
     Returns:
-        The review's sides, or None when no unresolved review has that id.
+        The review's sides, or None when no unresolved review has that id. `created_at` is None
+        for a kind whose nodes carry none (a Role has none).
 
     Raises:
         UnknownReviewKindError: The review carries a kind with no registered spec, naming it.
-        StalePendingReviewError: A Capability review whose incoming or existing node no longer
-            exists (a cleanup merge deletes the node it absorbs). Nothing is changed.
+        StalePendingReviewError: The review's incoming or existing node no longer exists (a
+            cleanup merge deletes the node it absorbs). Nothing is changed.
     """
-    result = single_tenant_graph.query(_REVIEW_MERGE_SIDES_QUERY, params={"review_id": review_id})
-    rows = cast("list[list[object]]", result.result_set)
-    if not rows:
+    kind_rows = cast(
+        "list[list[object]]",
+        single_tenant_graph.query(_REVIEW_KIND_QUERY, params={"review_id": review_id}).result_set,
+    )
+    if not kind_rows:
         return None
-    kind, incoming_id, existing_id, incoming_live, existing_live, incoming_at, existing_at = rows[0]
+    kind, incoming_id, existing_id = kind_rows[0]
     spec = reviewable_kind(cast("str", kind))
-    if spec is CAPABILITY and not (incoming_live and existing_live):
+    side_rows = cast(
+        "list[list[object]]",
+        single_tenant_graph.query(
+            _sides_query(spec.label), params={"review_id": review_id}
+        ).result_set,
+    )
+    if not side_rows:
+        return None
+    incoming_live, existing_live, incoming_at, existing_at = side_rows[0]
+    if not (incoming_live and existing_live):
         raise StalePendingReviewError(review_id)
     return ReviewMergeSides(
         review_id=review_id,
@@ -524,7 +556,8 @@ def choose_survivor(sides: ReviewMergeSides) -> tuple[str, str]:
     """Pick the survivor and the absorbed node of a near-miss merge.
 
     The node with the earlier `created_at` survives; a missing `created_at` counts as earliest and
-    a tie (or both missing) goes to the incoming node.
+    a tie (or both missing) goes to the incoming node. A Role node carries no `created_at`, so for
+    a Role review both are missing and the incoming node always survives.
 
     Args:
         sides: The review's two sides.

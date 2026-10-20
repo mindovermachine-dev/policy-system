@@ -452,6 +452,70 @@ def test_load_config_accepts_a_review_threshold_when_the_merge_threshold_is_unse
     assert config.company_merge_capability_merge_threshold is None
 
 
+_ROLE_VAR = "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD"
+
+
+def test_load_config_with_no_role_review_threshold_set_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset Role review threshold -> `None` at this layer; the required tuple enforces it."""
+    monkeypatch.delenv(_ROLE_VAR, raising=False)
+
+    assert load_config().company_merge_role_review_threshold is None
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0.0", 0.0), ("0.8", 0.8), ("1.0", 1.0)])
+def test_load_config_parses_the_role_review_threshold_including_both_bounds(
+    raw: str, expected: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(_ROLE_VAR, raw)
+
+    assert load_config().company_merge_role_review_threshold == expected
+
+
+@pytest.mark.parametrize("raw", ["high", "-0.1", "1.1", "nan", "inf", ""])
+def test_load_config_rejects_an_invalid_role_review_threshold_naming_the_variable(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(_ROLE_VAR, raw)
+
+    with pytest.raises(ServiceConfigurationError, match=_ROLE_VAR) as raised:
+        load_config()
+
+    assert "CAPABILITY" not in str(raised.value)
+
+
+def test_load_config_keeps_the_capability_review_threshold_messages_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_REVIEW_VAR, "high")
+    with pytest.raises(ServiceConfigurationError) as not_a_float:
+        load_config()
+    monkeypatch.setenv(_REVIEW_VAR, "1.5")
+    with pytest.raises(ServiceConfigurationError) as out_of_range:
+        load_config()
+
+    assert str(not_a_float.value) == f"{_REVIEW_VAR} must be a float, got 'high'"
+    assert str(out_of_range.value) == (
+        f"{_REVIEW_VAR} must be at least 0.0 and at most 1.0, got 1.5"
+    )
+
+
+def test_missing_ingestion_config_fields_names_an_unset_role_review_threshold_alone() -> None:
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        llm_interface_model="azure/gpt-5.4-mini",
+        llm_interface_embed_model="azure/text-embedding-3-small",
+        company_merge_capability_merge_threshold=0.85,
+        company_merge_capability_review_threshold=0.5,
+    )
+
+    assert missing_ingestion_config_fields(config) == ["company_merge_role_review_threshold"]
+
+
 def test_service_config_four_field_construction_still_succeeds_with_none_threshold() -> None:
     """Regression proof: the exact pre-existing 4-positional-field
     `ServiceConfig(...)` construction other tests in this file already use, with no
@@ -483,7 +547,7 @@ def test_missing_ingestion_config_fields_returns_all_four_names_when_none_are_se
     assert missing_ingestion_config_fields(config) == list(INGESTION_REQUIRED_CONFIG_FIELDS)
 
 
-def test_missing_ingestion_config_fields_returns_empty_list_when_all_four_are_set() -> None:
+def test_missing_ingestion_config_fields_returns_empty_list_when_all_five_are_set() -> None:
     config = ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -493,6 +557,7 @@ def test_missing_ingestion_config_fields_returns_empty_list_when_all_four_are_se
         llm_interface_embed_model="azure/text-embedding-3-small",
         company_merge_capability_merge_threshold=0.85,
         company_merge_capability_review_threshold=0.5,
+        company_merge_role_review_threshold=0.8,
     )
 
     assert missing_ingestion_config_fields(config) == []
@@ -508,12 +573,14 @@ def test_missing_ingestion_config_fields_names_only_the_unset_ones() -> None:
         llm_interface_embed_model=None,
         company_merge_capability_merge_threshold=None,
         company_merge_capability_review_threshold=None,
+        company_merge_role_review_threshold=None,
     )
 
     assert missing_ingestion_config_fields(config) == [
         "llm_interface_embed_model",
         "company_merge_capability_merge_threshold",
         "company_merge_capability_review_threshold",
+        "company_merge_role_review_threshold",
     ]
 
 
@@ -526,6 +593,7 @@ def test_missing_ingestion_config_fields_names_an_unset_review_threshold_alone()
         llm_interface_model="azure/gpt-5.4-mini",
         llm_interface_embed_model="azure/text-embedding-3-small",
         company_merge_capability_merge_threshold=0.85,
+        company_merge_role_review_threshold=0.8,
     )
 
     assert missing_ingestion_config_fields(config) == ["company_merge_capability_review_threshold"]

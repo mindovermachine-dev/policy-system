@@ -27,7 +27,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.errors import RestoreStageFailedError
@@ -136,6 +136,7 @@ def _config() -> ServiceConfig:
         logging_dir=None,
         company_merge_capability_merge_threshold=0.9,
         company_merge_capability_review_threshold=REVIEW_THRESHOLD,
+        company_merge_role_review_threshold=ROLE_REVIEW_THRESHOLD,
     )
 
 

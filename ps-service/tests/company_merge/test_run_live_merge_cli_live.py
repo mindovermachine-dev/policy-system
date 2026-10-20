@@ -123,6 +123,7 @@ class _RaisingOnFirstCallMergeFn:
         embed_model: str,
         merge_threshold: float,
         review_threshold: float,
+        role_review_threshold: float,
         call_embedding: object | None = None,
         emitter: object | None = None,
     ) -> object:
@@ -153,6 +154,7 @@ def test_real_wiring_reaches_merge_fn_with_real_args_and_issues_zero_writes(
     # embedding/write call, since it raises before doing anything with them.
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.85")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
+    monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", "0.8")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
 
     approval_path = tmp_path / "approval.md"

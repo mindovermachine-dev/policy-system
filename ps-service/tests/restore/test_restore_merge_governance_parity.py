@@ -29,7 +29,7 @@ from company_merge._seed_merge_graphs import (
     ingest_seed,
     parse_seed,
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from graph_gateway._fakes import GatewayRig
 
 from ps_service.company_merge.governance_import import GovernanceImport
@@ -147,6 +147,7 @@ def test_restore_and_live_merge_write_identical_governance_trees(
         embed_model=EMBED_MODEL,
         merge_threshold=MERGE_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         call_embedding=OneHotEmbeddingCaller(),
         emitter=emitter,
         governance=GovernanceImport(owner=_OWNER),
@@ -160,6 +161,7 @@ def test_restore_and_live_merge_write_identical_governance_trees(
         governance=GovernanceImport(owner=_OWNER),
         merge_threshold=MERGE_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=emitter,
     )
 

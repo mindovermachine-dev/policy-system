@@ -17,7 +17,8 @@ A kind's scope decides the candidate pool (`"global"`: every node of the label; 
 the nodes the run's instrument `DEFINES` in the single-tenant graph, plus the run's own mints). Its
 rule decides what a close pair does (`"merge-above"`: merge onto an eligible candidate at or above
 the merge threshold; `"review-only"`: never merge, cite pairs at or above the review threshold).
-Capability is the one kind with a merge rule in production; Obligation is Role-scoped and passed
+Capability is the one kind with a merge rule in production; Role is registered review-only (a close
+pair of Roles of one instrument is cited, never merged); Obligation is Role-scoped and passed
 through.
 The exact-key match is only correct if it computes the same hash Domain Mapper used to write the
 baseline graph's node ids, so `capability_id` is imported from Domain Mapper, never reimplemented

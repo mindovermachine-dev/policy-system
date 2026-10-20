@@ -71,7 +71,7 @@ from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
@@ -445,6 +445,8 @@ class _FakeSingleTenantGraph:
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
+        if "-[:DEFINES]->(n:Role) RETURN n.id, n.name, n.embedding" in q:
+            return _FakeQueryResult([])  # the instrument defines no Role yet
         if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._policies.values()])
         if "MERGE (n:Standard {id: $id}) ON CREATE SET n += $properties" in q:
@@ -695,6 +697,7 @@ def _call_restore_instrument(instrument_id: str = _INSTRUMENT_ID) -> CallToolRes
 def _set_merge_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.83")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
+    monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", str(ROLE_REVIEW_THRESHOLD))
 
 
 @pytest.fixture(name="audit_store", autouse=True)
@@ -1485,6 +1488,32 @@ def test_missing_review_threshold_returns_named_configuration_error(
     text = _text(result)
     assert text.startswith("error: ")
     assert "PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD" in text
+    assert open_db_calls == []
+
+
+def test_missing_role_review_threshold_returns_named_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unset `PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD` fails the restore closed: a named
+    `error:` string, with the FalkorDB boundary never opened.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_merge_threshold(monkeypatch)
+    monkeypatch.delenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", raising=False)
+    configure()
+    open_db_calls: list[object] = []
+
+    def _counting_open_db(config: ServiceConfig) -> FalkorDB:
+        open_db_calls.append(config)
+        return cast("FalkorDB", object())
+
+    _use_fake_restore_infra(monkeypatch, _valid_transport(), open_db=_counting_open_db)
+
+    result = _call_restore_instrument()
+
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD" in text
     assert open_db_calls == []
 
 

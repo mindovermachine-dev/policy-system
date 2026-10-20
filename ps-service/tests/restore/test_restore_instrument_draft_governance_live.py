@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from policy_lifecycle._gateway_fakes import policy_manager_enforcer
 
 from ps_service.audit.store import PsycopgAuditStore
@@ -100,6 +100,7 @@ def _restore(
         single_tenant_graph_name=graph_name,
         merge_threshold=_MERGE_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         actor=_ACTOR,
         open_gateway=lambda: gateway,
         audit_event_id=audit_event_id,

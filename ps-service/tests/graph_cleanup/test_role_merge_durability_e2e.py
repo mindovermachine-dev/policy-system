@@ -26,7 +26,8 @@ from typing import TYPE_CHECKING, cast
 
 from company_merge._gateway_fakes import BASELINE, POLICY_SYSTEM
 from company_merge._marker_graph import MarkerGraph
-from company_merge._thresholds import REVIEW_THRESHOLD
+from company_merge._seed_merge_graphs import OneHotEmbeddingCaller
+from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
 from graph_cleanup._fakes import (
     ABSORBED_SOURCE_REF,
@@ -94,7 +95,7 @@ class _RegeneratedBaseline:
         if "n.description" in q:  # the Capability read: this instrument has no Capability
             return _Result([])
         if "n.name, n.confidence" in q:
-            return _Result([[r, _ROLE_NAMES[r], 0.9] for r in self._roles])
+            return _Result([[r, _ROLE_NAMES[r], 0.9, None] for r in self._roles])
         if "[e:DEFINES]" in q:
             return _Result([[r, _source_ref(r)] for r in self._roles])
         if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
@@ -152,6 +153,8 @@ def _ingest(rig: CleanupRig, *, roles: tuple[str, ...]) -> None:
         embed_model="fake-embed-model",
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
+        call_embedding=OneHotEmbeddingCaller(),
     )
 
 
@@ -255,6 +258,7 @@ def _restore(rig: CleanupRig, roles: tuple[str, ...]) -> PolicySystemLeg:
         governance=GovernanceImport(),
         merge_threshold=_THRESHOLD,
         review_threshold=REVIEW_THRESHOLD,
+        role_review_threshold=ROLE_REVIEW_THRESHOLD,
         emitter=None,
     )
 
