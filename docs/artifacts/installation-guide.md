@@ -762,12 +762,15 @@ Things to know:
   - It does **not** rotate, because Authentik applies a bootstrap token once per tenant.
 - The bundled `akadmin` account and the owner have no usable password (verified live). An
   invitee has **no password set** (an empty hash). All of them register passkeys instead.
-  - The shipped login flow still contains a password stage.
-  - An administrator can set a user's password in the admin UI.
-  - So "passkey-only" applies to enrolment and recovery. It does not come from removing
-    the password stage.
-  - Live checks showed that Authentik rejected a submitted password for both the owner and an
-    invitee.
+  - Login runs through the bundled `ps-login` flow, which has no password stage and asks only
+    for a passkey (user verification required).
+  - An account without a registered passkey, including `akadmin`, is denied. It regains access
+    through an admin recovery link.
+  - A password set by an administrator in the admin UI is not usable at login.
+  - Three failed passkey assertions for a typed username lock that sign-in out (the fourth
+    attempt is denied). Failed autofill sign-ins are not counted.
+  - Authentik's shipped `default-authentication-flow` is not used by the brand but stays
+    reachable by its direct URL.
 - This flow does not change production TLS termination (Let's Encrypt, cert-manager).
 
 ---

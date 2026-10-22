@@ -143,10 +143,15 @@ password:
   User Login, with no password stage. The deploy scripts issue the owner's single-use,
   time-limited link from it. Authentik cannot issue a recovery link unless the brand has a
   recovery flow, which is why the blueprint sets one.
-- **Login**: the identification stage accepts a passkey directly. The shipped authentication
-  flow still contains a password stage and an administrator can set a user's password, so
-  "passkey-only" is enforced at enrolment and recovery, not by removing that stage (removing it
-  is a documented lockout risk).
+- **Login** (`ps-login`, set as the brand's `flow_authentication` and `flow_device_code`):
+  Identification → Reputation Deny → passkey validation → User Login, with no password stage.
+  The identification stage accepts a passkey directly (autofill) and the validation stage is
+  skipped after such a sign-in, so there is no second prompt. A typed username followed by
+  **Log in** triggers the passkey prompt. The passkey must be presented with user verification.
+  A user with no registered passkey is denied, and an administrator-set password is not usable
+  in this flow. Such a user (including the bundled `akadmin`) regains access through an admin
+  recovery link. Authentik's shipped `default-authentication-flow` is not part of the brand
+  and is not modified, but it stays reachable by its direct URL.
 
 ### Configuring PS Service manually (non-script Authentik instances)
 
@@ -264,14 +269,13 @@ defined as follows. It has not been verified against a non-Authentik provider.
 
 - **`ps-cli auth login` device-flow page 404s**: almost always means
   Authentik's Brand has no `flow_device_code` configured — the bundled
-  blueprint sets this, but a hand-run/standalone Authentik instance built
+  blueprint sets it to the `ps-login` flow, but a hand-run/standalone Authentik instance built
   without it will 404 silently (a silent 404).
-- **Every login redirects to a password prompt, passkey never offered
-  standalone**: means the shipped `default-authentication-identification`
-  stage's `webauthn_stage` FK is unset — by default, a fresh Authentik
-  install only accepts a passkey as an MFA *second* factor, not as a
-  password replacement. The bundled blueprint patches this explicitly (see
-  `docs/architecture/customer-azure-deployment.md`'s Authentik section).
+- **Login asks for a password**: the brand's `flow_authentication` is not the passkey-only
+  `ps-login` flow (for example a hand-run instance without the bundled blueprint, or the
+  shipped `default-authentication-flow` opened by its direct URL). Point the brand's
+  `flow_authentication` at `ps-login`; see
+  `docs/architecture/customer-azure-deployment.md`'s Authentik section.
 - **`ps-cli auth login` reports `Could not verify the TLS certificate of ...` against the
   evaluator's `https://` issuer**: the local CA is not in the operating system trust store that
   `ps-cli` verifies against — see [Transport](#transport-https-and-trust-for-ps-cli).

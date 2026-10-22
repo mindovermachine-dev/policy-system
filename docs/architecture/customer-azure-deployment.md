@@ -247,8 +247,8 @@ rotation](#authentik) below) and points the upstream sub-chart's own
 authentik-blueprint.yaml`, mounted via a ConfigMap Authentik auto-discovers and auto-applies at
 startup/on change — a native Authentik feature, no custom code), covering:
 
-- A **Brand patch** pointing `flow_device_code` at Authentik's shipped default authentication
-  flow — without it, PS-Cli's device-code `verification_uri` 404s.
+- A **Brand patch** pointing `flow_authentication` and `flow_device_code` at the blueprint-owned
+  `ps-login` flow — without `flow_device_code`, PS-Cli's device-code `verification_uri` 404s.
 - **One fixed OAuth2 Provider** (`client_id: ps-cli`) and Application (`slug: ps-cli`) — not a
   separate API-app/CLI-app pair; Authentik's `aud` claim is always the bare Provider client ID, so
   `psService.auth.audience` and `psService.auth.cliClientId` are both the same fixed literal.
@@ -259,9 +259,13 @@ startup/on change — a native Authentik feature, no custom code), covering:
   (`continue_flow_without_invitation: false` — no invite code, registration is rejected identically
   whether the code is missing, garbage, expired, or already redeemed) → Prompt (username/name/email,
   no password field) → User Write → WebAuthn (passkey) → User Login. An invitee's account
-  therefore has no password set. The identification stage is additionally patched to accept a
-  WebAuthn assertion directly at login, so an enrolled passkey genuinely replaces password entry
-  rather than only supplementing it as a second factor.
+  therefore has no password set.
+- A **passkey-only login flow** (`ps-login`, the brand's `flow_authentication`): Identification →
+  Reputation Deny (order 25) → passkey validation (order 30) → User Login. It has no password
+  stage. Its identification stage accepts a WebAuthn assertion directly (autofill), and the
+  validation stage is skipped after such a sign-in so there is no second prompt; a typed username
+  followed by **Log in** triggers the passkey prompt. The validation stage requires user
+  verification and denies a user who has no passkey.
 - A **passkey recovery flow** (WebAuthn setup → User Login, no password stage), set as the brand's
   `flow_recovery`. It is what the owner's enrolment link is issued from — Authentik cannot issue a
   recovery link while the brand has none.
@@ -270,10 +274,11 @@ startup/on change — a native Authentik feature, no custom code), covering:
 - The bundled blueprints first apply Authentik's own shipped `Default - Brand` blueprint. Without
   that, on a fresh install these blueprints can win a race and create the brand themselves with no
   default flows, after which Authentik's own blueprint never repairs it.
-- The shipped login flow keeps its **password stage**: removing it is a documented lockout risk
-  (see the Reputation-Policy write-up below), and an administrator can still set a user's
-  password. "Passkey-only" is therefore enforced for enrolment and recovery; the owner and the
-  bundled `akadmin` have no usable password and invitees have none set.
+- Login is **passkey-only**. An account without a registered passkey, including the bundled
+  `akadmin`, is denied; it regains access through an admin recovery link. A password set by an
+  administrator is not usable in `ps-login`. Authentik's shipped `default-authentication-flow`
+  is not part of the brand and is not modified, but it remains reachable by its direct URL and is
+  password-capable there for an account that has a password (none has one by policy).
 - A **Reputation-Policy Deny stage** — see the failed-login write-up below.
 
 **Dual-purpose, single-hostname Ingress, not a second hostname — and an allowlist, not the whole
@@ -362,17 +367,18 @@ deployment runs on Authentik's own shipped default (`days=365`, configured under
 
 **Repeated failed logins.** A dedicated
 `authentik_stages_deny.denystage` (`ps-login-reputation-deny-stage`) is bound into
-`default-authentication-flow` at order 25 — between the shipped password stage (order 20) and MFA
-validation (order 30) — with a Reputation Policy PolicyBinding (`threshold: -5`, `check_ip: true`,
+`ps-login` at order 25 — between identification (order 10) and passkey validation
+(order 30) — with a Reputation Policy PolicyBinding (`threshold: -5`, `check_ip: true`,
 `check_username: true`) gating its inclusion. This is **not a per-account lockout**: `check_ip:
 true` means traffic sharing an IP with a failing account also degrades that IP's own reputation
 score, regardless of username, so the effect can be shared-IP-wide, not scoped to one account
-alone. Live-proven (a fresh `kind` cluster, not merely rendered): 9 wrong-password attempts against
-one account dropped its score to the configured threshold (`-5`); a subsequent login attempt for
-that account — even with the *correct* password — was met with the Deny stage's message ("Too many
-failed sign-in attempts for this account. Please wait a few minutes and try again."), while a
-different, never-failed account logging in from a separate source IP completed normally,
-confirming the mechanism denies/degrades rather than blanket-locking the whole system.
+alone. Measured on a `kind` cluster against the `ps-login` flow: each failed passkey assertion for a
+typed username records one `login_failed` event and lowers that account's score by 2 points (the
+failed-login signal and the invalid challenge), and the score clamps at the threshold (`-5`).
+Three failed assertions therefore reach the threshold, and the fourth attempt is met at the Deny
+stage with its message ("Too many failed sign-in attempts for this account. Please wait a few
+minutes and try again.") before any passkey prompt is issued, so a valid passkey cannot pass
+either.
 
 ### AKS cluster
 
@@ -683,9 +689,12 @@ model-*availability* failure).
   published release does yet (3.11.0 lacks it), so until one ships the link carries the in-cluster
   address and must be rewritten by hand. It was not exercised end to end through PS Service on
   production.
-- **The shipped login flow still contains a password stage** (see [Authentik](#authentik)), so
-  passkey-only is enforced at enrolment and recovery only; whether to remove it despite the
-  lockout precedent is a follow-up decision.
+- **Failed passkey autofill sign-ins are not scored.** Autofill identifies the user from the
+  assertion itself, so a failure there carries no username and does not count toward the
+  lockout (see [Authentik](#authentik)); only failures for a typed username do.
+- **Authentik's shipped `default-authentication-flow` remains reachable by its direct URL.** The
+  brand does not use it and it is not modified, so it still offers a password stage to an account
+  that has a password (none has one by policy).
 - **`scripts/ps-upgrade.sh` reuse is unit-tested, not live-verified**: it upgrades with
   `--reset-then-reuse-values` so the values this flow adds (bootstrap owner, Authentik URLs,
   local-TLS values) survive, checked against a fake `helm` only.

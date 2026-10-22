@@ -22,10 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 FILES_DIR = REPO_ROOT / "charts" / "policy-system" / "files"
 MAIN_BLUEPRINT = FILES_DIR / "authentik-blueprint.yaml"
 
-PASSWORD_MODELS = {
-    "authentik_stages_password.passwordstage",
-    "authentik_stages_identification.identificationstage",
-}
+PASSWORD_MODELS = {"authentik_stages_password.passwordstage"}
 
 
 @dataclass(frozen=True)
@@ -247,11 +244,11 @@ def test_enrollment_invitation_stage_still_rejects_open_registration(
     assert stage["attrs"]["continue_flow_without_invitation"] is False
 
 
-# --- negative tests: password stage stays in LOGIN only, never in enrollment/recovery ------
+# --- negative tests: no password stage in enrollment, recovery or login ------
 
 
-@pytest.mark.parametrize("flow_id", ["ps-enrollment-flow", "ps-recovery-flow"])
-def test_enrollment_and_recovery_flows_have_no_password_stage(
+@pytest.mark.parametrize("flow_id", ["ps-enrollment-flow", "ps-recovery-flow", "ps-login-flow"])
+def test_enrollment_recovery_and_login_flows_have_no_password_stage(
     main_entries: list[dict[str, Any]], flow_id: str
 ) -> None:
     models = set(_bound_stage_models(main_entries, flow_id))
@@ -260,25 +257,162 @@ def test_enrollment_and_recovery_flows_have_no_password_stage(
     assert "authentik_stages_password.passwordstage" not in {e["model"] for e in main_entries}
 
 
-def test_blueprint_does_not_remove_the_shipped_login_password_stage(
+def test_no_password_stage_is_defined_or_bound_anywhere_in_the_blueprint(
     main_entries: list[dict[str, Any]],
 ) -> None:
-    """The password stage stays in the shipped login flow (documented lockout precedent)."""
-    login_flow_edits = [
-        e
+    assert not [e for e in main_entries if e["model"] in PASSWORD_MODELS]
+    for binding in (e for e in main_entries if e["model"] == "authentik_flows.flowstagebinding"):
+        stage = binding["identifiers"]["stage"]
+        if isinstance(stage, Tag) and stage.tag == "KeyOf":
+            assert _by_id(main_entries, str(stage.value))["model"] not in PASSWORD_MODELS
+        else:
+            assert "password" not in str(stage).lower()
+    scalars = [v for v in _walk(main_entries) if isinstance(v, str)]
+    assert not [v for v in scalars if "stages_password" in v or "authentication-password" in v]
+
+
+def test_blueprint_does_not_patch_the_shipped_identification_stage(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    names = [
+        e["identifiers"].get("name")
         for e in main_entries
-        if e["model"] == "authentik_flows.flowstagebinding"
-        and isinstance(e["identifiers"].get("target"), Tag)
-        and e["identifiers"]["target"].tag == "Find"
-        and "default-authentication-flow" in _walk(e["identifiers"]["target"])
+        if e["model"] == "authentik_stages_identification.identificationstage"
     ]
 
-    # Only the reputation Deny stage is added to the shipped login flow; nothing deletes a binding.
-    assert all(e.get("state", "present") == "present" for e in login_flow_edits)
-    assert all(
-        _keyof_target(e["identifiers"]["stage"]) == "ps-login-reputation-deny-stage"
-        for e in login_flow_edits
+    assert names
+    assert all(isinstance(n, str) and n.startswith("ps-") for n in names)
+
+
+# --- passkey-only login flow ----------------------------------------------------------------
+
+
+LOGIN_VALIDATE_BINDING_ID = "ps-login-validate-binding"
+
+
+def _brand_entry_with(entries: list[dict[str, Any]], attr: str) -> tuple[int, dict[str, Any]]:
+    matches = [
+        (i, e)
+        for i, e in enumerate(entries)
+        if e["model"] == "authentik_brands.brand" and attr in e["attrs"]
+    ]
+    assert len(matches) == 1, f"expected exactly one brand entry setting {attr}"
+    return matches[0]
+
+
+def _login_flow_id(entries: list[dict[str, Any]]) -> str:
+    """Entry id of the flow the brand serves as its authentication flow."""
+    _, brand = _brand_entry_with(entries, "flow_authentication")
+    return _keyof_target(brand["attrs"]["flow_authentication"])
+
+
+def test_login_passkey_validate_stage_is_passkey_only_and_denies_unconfigured_users(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    stage = _by_id(main_entries, "ps-login-passkey-validate")
+
+    assert stage["model"] == "authentik_stages_authenticator_validate.authenticatorvalidatestage"
+    assert stage["attrs"]["device_classes"] == ["webauthn"]
+    assert stage["attrs"]["not_configured_action"] == "deny"
+    assert stage["attrs"]["webauthn_user_verification"] == "required"
+    assert stage["attrs"]["last_auth_threshold"] == "seconds=0"
+
+
+def test_login_flow_chain_is_identification_reputation_deny_passkey_validate_user_login(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    flow_id = _login_flow_id(main_entries)
+    flow = _by_id(main_entries, flow_id)
+
+    assert flow["model"] == "authentik_flows.flow"
+    assert flow["attrs"]["designation"] == "authentication"
+    assert [b["identifiers"]["order"] for b in _bindings_for(main_entries, flow_id)] == [
+        10,
+        25,
+        30,
+        100,
+    ]
+    assert _bound_stage_models(main_entries, flow_id) == [
+        "authentik_stages_identification.identificationstage",
+        "authentik_stages_deny.denystage",
+        "authentik_stages_authenticator_validate.authenticatorvalidatestage",
+        "authentik_stages_user_login.userloginstage",
+    ]
+
+
+def test_brand_authentication_flow_is_defined_before_it_is_referenced(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    flow_id = _login_flow_id(main_entries)
+    flow_index = next(i for i, e in enumerate(main_entries) if e.get("id") == flow_id)
+    brand_index, brand = _brand_entry_with(main_entries, "flow_authentication")
+
+    assert brand_index > flow_index
+    assert brand["identifiers"] == {"domain": "authentik-default"}
+
+
+def test_device_code_flow_is_the_passkey_login_flow(main_entries: list[dict[str, Any]]) -> None:
+    _, brand = _brand_entry_with(main_entries, "flow_device_code")
+
+    assert _keyof_target(brand["attrs"]["flow_device_code"]) == _login_flow_id(main_entries)
+
+
+def test_identification_webauthn_stage_is_the_bound_passkey_validate_stage(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    flow_id = _login_flow_id(main_entries)
+    by_order = {b["identifiers"]["order"]: b for b in _bindings_for(main_entries, flow_id)}
+    identification = _by_id(main_entries, _keyof_target(by_order[10]["identifiers"]["stage"]))
+    validate_id = _keyof_target(by_order[30]["identifiers"]["stage"])
+
+    assert validate_id == "ps-login-passkey-validate"
+    assert _keyof_target(identification["attrs"]["webauthn_stage"]) == validate_id
+    assert identification["attrs"]["user_fields"] == ["email", "username"]
+
+
+def test_obsolete_reputation_deny_binding_on_the_shipped_flow_is_removed_after_the_stage_is_defined(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    stage_index = next(
+        i for i, e in enumerate(main_entries) if e.get("id") == "ps-login-reputation-deny-stage"
     )
+    removals = [
+        (i, e)
+        for i, e in enumerate(main_entries)
+        if e["model"] == "authentik_flows.flowstagebinding" and e.get("state") == "absent"
+    ]
+
+    assert len(removals) == 1
+    index, removal = removals[0]
+    assert index > stage_index
+    assert removal["identifiers"]["order"] == 25
+    assert removal["identifiers"]["stage"] == Tag("KeyOf", "ps-login-reputation-deny-stage")
+    target = removal["identifiers"]["target"]
+    assert target == Tag("Find", ["authentik_flows.flow", ["slug", "default-authentication-flow"]])
+
+
+def test_login_validate_binding_is_skipped_only_after_a_verified_passkey_identification(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    binding = _by_id(main_entries, LOGIN_VALIDATE_BINDING_ID)
+    policy_bindings = [
+        e
+        for e in main_entries
+        if e["model"] == "authentik_policies.policybinding"
+        and isinstance(e["identifiers"].get("target"), Tag)
+        and e["identifiers"]["target"].value == LOGIN_VALIDATE_BINDING_ID
+    ]
+
+    assert binding["attrs"]["re_evaluate_policies"] is True
+    assert len(policy_bindings) == 1
+    attrs = policy_bindings[0]["attrs"]
+    assert attrs["failure_result"] is True
+    assert attrs.get("negate", False) is False
+    policy = _by_id(main_entries, _keyof_target(attrs["policy"]))
+    assert policy["model"] == "authentik_policies_expression.expressionpolicy"
+    expression = policy["attrs"]["expression"]
+    assert "auth_webauthn_pwl" in expression
+    assert "not" in expression
 
 
 # --- 2C: sub_mode -------------------------------------------------------------------
