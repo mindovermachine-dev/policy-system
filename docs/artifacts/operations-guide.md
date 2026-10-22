@@ -124,7 +124,7 @@ The script deletes the PS Service, FalkorDB and PS Postgres deployments and the 
 scripts/grant-access-role.sh --principal <subject> --role ComplianceOfficer
 ```
 
-`--role` is `SystemOwner`, `SystemAdmin`, `PolicyManager` or `ComplianceOfficer` (default `ComplianceOfficer`). The caller must hold a role that may grant the requested one (`SystemOwner` for any role; `SystemAdmin` for `PolicyManager` and `ComplianceOfficer`). The tool is never available under the local-test bypass. The `ps-manage-access-roles` skill grants and revokes roles from a Claude session.
+`--role` is required and is `SystemOwner`, `SystemAdmin`, `PolicyManager` or `ComplianceOfficer`. The caller must hold a role that may grant the requested one (`SystemOwner` for any role; `SystemAdmin` for `PolicyManager` and `ComplianceOfficer`). The tool is never available under the local-test bypass. The `ps-manage-access-roles` skill grants and revokes roles from a Claude session.
 
 ### Updating or reinstalling the Policy System Plugin
 

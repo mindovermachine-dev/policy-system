@@ -3,12 +3,10 @@
 # Streamable HTTP endpoint directly with the bearer token `ps-cli auth login` stored.
 #
 # Usage:
-#   scripts/grant-access-role.sh [--principal <subject>] [--role <AccessRole>]
+#   scripts/grant-access-role.sh --principal <subject> --role <AccessRole>
 #
-#   --principal  The principal_subject to grant to (default tete@cartman.dk -- the evaluator deploy
-#                uses the owner's email as the OIDC `sub`).
-#   --role       SystemOwner | SystemAdmin | PolicyManager | ComplianceOfficer (default
-#                ComplianceOfficer).
+#   --principal  Required, no default. The principal_subject (the OIDC `sub`) to grant to.
+#   --role       Required, no default. SystemOwner | SystemAdmin | PolicyManager | ComplianceOfficer.
 #
 # Targets ps-cli's current context (`ps-cli config get-contexts`; `eval` = local kind). Needs
 # `ps-cli auth login` for it and a SystemOwner caller. GRANT_ACCESS_ROLE_TOKEN, when set, is the
@@ -20,17 +18,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-principal="tete@cartman.dk"
-role="ComplianceOfficer"
+principal=""
+role=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --principal) principal="${2:?--principal needs a value}"; shift 2 ;;
-    --role) role="${2:?--role needs a value}"; shift 2 ;;
+    --principal) principal="${2:-}"; shift $(($# > 1 ? 2 : 1)) ;;
+    --role) role="${2:-}"; shift $(($# > 1 ? 2 : 1)) ;;
     -h | --help) sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+
+[[ -n "${principal}" ]] || { printf -- '--principal is required (no default).\n' >&2; exit 2; }
+[[ -n "${role}" ]] || { printf -- '--role is required (no default).\n' >&2; exit 2; }
 
 case "${role}" in
   SystemOwner | SystemAdmin | PolicyManager | ComplianceOfficer) ;;

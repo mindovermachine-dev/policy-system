@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+GRANT = ("--principal", "ann@example.com", "--role", "ComplianceOfficer")
 SCRIPT = REPO_ROOT / "scripts" / "grant-access-role.sh"
 
 SUBPROCESS_TIMEOUT_SECONDS = 120.0
@@ -149,10 +150,10 @@ def _assert_no_token_leak(result: subprocess.CompletedProcess[str]) -> None:
 def test_grant_succeeds_with_bearer_session_echo_and_flag_arguments(
     ps_service: Running, tmp_path: Path
 ) -> None:
-    result = _run(tmp_path, ps_service.url)
+    result = _run(tmp_path, ps_service.url, *GRANT)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("Granted ComplianceOfficer to tete@cartman.dk\n")
+    assert result.stdout.startswith("Granted ComplianceOfficer to ann@example.com\n")
     seen = ps_service.service.requests
     assert [r.body.get("method") for r in seen] == [
         "initialize",
@@ -165,7 +166,7 @@ def test_grant_succeeds_with_bearer_session_echo_and_flag_arguments(
     assert seen[2].headers["mcp-session-id"] == SESSION_ID
     assert seen[2].body["params"] == {
         "name": "grant-access-role",
-        "arguments": {"principal_subject": "tete@cartman.dk", "access_role": "ComplianceOfficer"},
+        "arguments": {"principal_subject": "ann@example.com", "access_role": "ComplianceOfficer"},
     }
     _assert_no_token_leak(result)
 
@@ -188,7 +189,7 @@ def test_grant_passes_the_principal_and_role_flags_through(
 def test_without_a_token_or_stored_credential_no_authorization_header_is_sent(
     ps_service: Running, tmp_path: Path
 ) -> None:
-    result = _run(tmp_path, ps_service.url, token=None)
+    result = _run(tmp_path, ps_service.url, *GRANT, token=None)
 
     assert result.returncode == 0, result.stderr
     assert all("authorization" not in r.headers for r in ps_service.service.requests)
@@ -197,7 +198,7 @@ def test_without_a_token_or_stored_credential_no_authorization_header_is_sent(
 def test_tool_error_text_exits_one_with_grant_failed(ps_service: Running, tmp_path: Path) -> None:
     ps_service.service.mode = "tool-error-text"
 
-    result = _run(tmp_path, ps_service.url)
+    result = _run(tmp_path, ps_service.url, *GRANT)
 
     assert result.returncode == 1
     assert "Grant failed: error: caller is not a SystemOwner" in result.stderr
@@ -207,10 +208,10 @@ def test_tool_error_text_exits_one_with_grant_failed(ps_service: Running, tmp_pa
 def test_event_stream_reply_is_understood(ps_service: Running, tmp_path: Path) -> None:
     ps_service.service.mode = "sse"
 
-    result = _run(tmp_path, ps_service.url)
+    result = _run(tmp_path, ps_service.url, *GRANT)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("Granted ComplianceOfficer to tete@cartman.dk\n")
+    assert result.stdout.startswith("Granted ComplianceOfficer to ann@example.com\n")
 
 
 def test_unauthorized_exits_one_and_points_at_auth_login(
@@ -218,7 +219,7 @@ def test_unauthorized_exits_one_and_points_at_auth_login(
 ) -> None:
     ps_service.service.mode = "unauthorized"
 
-    result = _run(tmp_path, ps_service.url)
+    result = _run(tmp_path, ps_service.url, *GRANT)
 
     assert result.returncode == 1
     assert "ps-cli auth login" in result.stderr
@@ -228,7 +229,7 @@ def test_unauthorized_exits_one_and_points_at_auth_login(
 def test_server_error_exits_one_naming_the_status(ps_service: Running, tmp_path: Path) -> None:
     ps_service.service.mode = "server-error"
 
-    result = _run(tmp_path, ps_service.url)
+    result = _run(tmp_path, ps_service.url, *GRANT)
 
     assert result.returncode == 1
     assert "HTTP 500" in result.stderr
@@ -240,7 +241,7 @@ def test_unreachable_service_exits_one_saying_cannot_reach(tmp_path: Path) -> No
         probe.bind(("127.0.0.1", 0))
         closed_port = probe.getsockname()[1]
 
-    result = _run(tmp_path, f"http://127.0.0.1:{closed_port}")
+    result = _run(tmp_path, f"http://127.0.0.1:{closed_port}", *GRANT)
 
     assert result.returncode == 1
     assert "Cannot reach" in result.stderr
@@ -250,10 +251,47 @@ def test_unreachable_service_exits_one_saying_cannot_reach(tmp_path: Path) -> No
 def test_invalid_role_exits_two_without_calling_the_service(
     ps_service: Running, tmp_path: Path
 ) -> None:
-    result = _run(tmp_path, ps_service.url, "--role", "bogus")
+    result = _run(tmp_path, ps_service.url, "--principal", "ann@example.com", "--role", "bogus")
 
     assert result.returncode == 2
     assert "Invalid --role bogus" in result.stderr
+    assert ps_service.service.requests == []
+
+
+@pytest.mark.parametrize(
+    ("args", "missing"),
+    [
+        ((), "--principal"),
+        (("--role", "SystemAdmin"), "--principal"),
+        (("--principal", "ann@example.com"), "--role"),
+    ],
+)
+def test_missing_required_flag_exits_two_without_calling_the_service(
+    ps_service: Running, tmp_path: Path, args: tuple[str, ...], missing: str
+) -> None:
+    result = _run(tmp_path, ps_service.url, *args)
+
+    assert result.returncode == 2
+    assert f"{missing} is required" in result.stderr
+    assert ps_service.service.requests == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--principal", "", "--role", "SystemAdmin"),
+        ("--principal", "ann@example.com", "--role", ""),
+        ("--principal",),
+        ("--role", "SystemAdmin", "--principal"),
+        ("--principal", "ann@example.com", "--role"),
+    ],
+)
+def test_empty_or_valueless_flag_exits_two_without_calling_the_service(
+    ps_service: Running, tmp_path: Path, args: tuple[str, ...]
+) -> None:
+    result = _run(tmp_path, ps_service.url, *args)
+
+    assert result.returncode == 2
     assert ps_service.service.requests == []
 
 
@@ -270,6 +308,9 @@ def test_help_prints_usage_and_exits_zero(ps_service: Running, tmp_path: Path) -
     assert result.returncode == 0
     assert "Usage:" in result.stdout
     assert "--principal" in result.stdout
+    assert result.stdout.count("Required, no default") == 2
+    assert "Exit codes:" in result.stdout
+    assert "cartman" not in result.stdout
     assert "GRANT_ACCESS_ROLE_TOKEN" in result.stdout
     assert ps_service.service.requests == []
 
@@ -300,7 +341,7 @@ def test_bundle_layout_runs_the_client_in_the_installed_ps_cli_tool(
     tree, env = _bundle_tree(tmp_path, with_tool=True)
 
     result = subprocess.run(  # noqa: S603
-        ["bash", str(tree / "scripts" / "grant-access-role.sh")],  # noqa: S607
+        ["bash", str(tree / "scripts" / "grant-access-role.sh"), *GRANT],  # noqa: S607
         env={
             **os.environ,
             **env,
@@ -315,14 +356,14 @@ def test_bundle_layout_runs_the_client_in_the_installed_ps_cli_tool(
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("Granted ComplianceOfficer to ")
+    assert result.stdout.startswith("Granted ComplianceOfficer to ann@example.com\n")
 
 
 def test_bundle_layout_without_the_ps_cli_tool_fails_with_a_hint(tmp_path: Path) -> None:
     tree, env = _bundle_tree(tmp_path, with_tool=False)
 
     result = subprocess.run(  # noqa: S603
-        ["bash", str(tree / "scripts" / "grant-access-role.sh")],  # noqa: S607
+        ["bash", str(tree / "scripts" / "grant-access-role.sh"), *GRANT],  # noqa: S607
         env={**os.environ, **env},
         capture_output=True,
         text=True,
