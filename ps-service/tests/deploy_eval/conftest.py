@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import pty
 import shutil
 import subprocess
 import sys
@@ -224,6 +226,29 @@ cat "$PS_TEST_IFCONFIG_OUTPUT"
 DEFAULT_HOST_ADDRESSES = ("127.0.0.1", "::1", "192.168.1.5", "fe80::1")
 
 
+def _run_on_tty(
+    argv: list[str], cwd: Path, env: dict[str, str], tty_input: str
+) -> subprocess.CompletedProcess[str]:
+    """Run `argv` with a terminal as stdin, typing `tty_input` (an interactive run)."""
+    master, slave = pty.openpty()
+    try:
+        os.write(master, tty_input.encode())
+        completed = subprocess.run(  # noqa: S603 - fixture-owned script copy, hermetic PATH
+            argv,
+            cwd=cwd,
+            env=env,
+            stdin=slave,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=SCRIPT_TIMEOUT_SECONDS,
+        )
+    finally:
+        os.close(master)
+        os.close(slave)
+    return completed
+
+
 def _install_python_fake(source: Path, target: Path) -> None:
     lines = source.read_text(encoding="utf-8").splitlines()
     lines[0] = f"#!{sys.executable}"
@@ -333,6 +358,14 @@ class EvalFixture:
         _install_text_fake(FAKE_ROUTE, self.bin_dir / "route")
         _install_text_fake(FAKE_IPCONFIG, self.bin_dir / "ipconfig")
 
+    @property
+    def debian_anchor(self) -> Path:
+        return self.root / "trust" / "ps-local-ca.crt"
+
+    @property
+    def fedora_anchor(self) -> Path:
+        return self.root / "trust" / "ps-local-ca.pem"
+
     def set_platform(self, name: str) -> None:
         """Make `uname -s` report `name` (`Darwin` or `Linux`)."""
         (self.bin_dir / "uname").unlink(missing_ok=True)
@@ -388,6 +421,7 @@ class EvalFixture:
         self,
         *args: str,
         stdin: str | None = None,
+        tty_input: str | None = None,
         expect: int | None = 0,
         **env: str,
     ) -> ScriptRun:
@@ -410,6 +444,8 @@ class EvalFixture:
             "PS_TEST_ROUTE_OUTPUT": str(self.root / "route-output.txt"),
             "PS_TEST_IPCONFIG_ADDRESS": str(self.root / "ipconfig-address.txt"),
             "PS_TEST_SECURITY_LOG": str(self.root / "security.log"),
+            "PS_DEBIAN_CA_ANCHOR": str(self.debian_anchor),
+            "PS_FEDORA_CA_ANCHOR": str(self.fedora_anchor),
             "PS_TEST_OPENSSL_LOG": str(self.root / "openssl.log"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
             "PS_PROXY_PROBE_ATTEMPTS": "1",
@@ -420,16 +456,19 @@ class EvalFixture:
             **env,
         }
         bash = shutil.which("bash") or "/bin/bash"
-        completed = subprocess.run(  # noqa: S603 - fixture-owned script copy, hermetic PATH
-            [bash, str(script), *args],
-            cwd=self.root,
-            env=full_env,
-            capture_output=True,
-            text=True,
-            input=stdin if stdin is not None else "",
-            check=False,
-            timeout=SCRIPT_TIMEOUT_SECONDS,
-        )
+        if tty_input is None:
+            completed = subprocess.run(  # noqa: S603 - fixture-owned script copy, hermetic PATH
+                [bash, str(script), *args],
+                cwd=self.root,
+                env=full_env,
+                capture_output=True,
+                text=True,
+                input=stdin if stdin is not None else "",
+                check=False,
+                timeout=SCRIPT_TIMEOUT_SECONDS,
+            )
+        else:
+            completed = _run_on_tty([bash, str(script), *args], self.root, full_env, tty_input)
         result = ScriptRun(completed.returncode, completed.stdout, completed.stderr)
         if expect is not None:
             assert result.returncode == expect, (

@@ -557,67 +557,6 @@ def _fake_sudo(fixture: EvalFixture) -> Path:
     return log
 
 
-def test_closing_output_lists_the_missing_local_steps_and_points_at_the_guide(
-    eval_fixture: EvalFixture,
-) -> None:
-    hosts = _hosts_file(eval_fixture)
-    eval_fixture.set_platform("Darwin")
-    eval_fixture.add_security(trusted=False)
-
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
-
-    assert f"echo '{LAN} {HOST}' | sudo tee -a {hosts}" in run.stdout
-    assert MACOS_TRUST in run.stdout
-    assert str(eval_fixture.state_dir / "ca.pem") in run.stdout
-    assert "installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only" in run.stdout
-    assert "--apply-host-setup" in run.stdout
-    # The LAN-colleague walkthrough lives in the guide, not in the script output.
-    assert "LAN colleagues" in run.stdout
-    assert "export SSL_CERT_FILE" not in run.stdout
-    assert run.stdout.rstrip().splitlines()[-1].startswith("https://")
-
-
-def test_closing_output_prints_the_issuer_and_the_auth_url(eval_fixture: EvalFixture) -> None:
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
-
-    assert f"Authentik:  https://{HOST}:30443/auth/" in run.stdout
-    assert f"OIDC issuer: {ISSUER}" in run.stdout
-
-
-def test_summary_prints_hosts_line_ca_path_set_context_and_mcp_url(
-    eval_fixture: EvalFixture,
-) -> None:
-    ca = eval_fixture.state_dir / "ca.pem"
-
-    default = eval_fixture.run(
-        "--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture)
-    )
-
-    assert f"PS Service: https://{HOST}:30443" in default.stdout
-    assert f"hosts line:  {LAN} {HOST}" in default.stdout
-    assert f"CA file:     {ca}" in default.stdout
-    assert f"ps-cli config set-context eval --url https://{HOST}:30443" in default.stdout
-    assert f"PS_MCP_URL=https://{HOST}:30443/mcp/" in default.stdout
-    assert "127.0.0.1:8000" not in default.stdout
-
-
-def test_summary_values_follow_a_custom_name_and_lan_address(eval_fixture: EvalFixture) -> None:
-    run = eval_fixture.run(
-        "--owner-email",
-        OWNER_EMAIL,
-        "--hostname",
-        "ps.example.test",
-        "--lan-address",
-        "10.20.30.40",
-        PS_HOSTS_FILE=_hosts_file(eval_fixture),
-    )
-
-    assert "hosts line:  10.20.30.40 ps.example.test" in run.stdout
-    assert "ps-cli config set-context eval --url https://ps.example.test:30443" in run.stdout
-    assert "PS_MCP_URL=https://ps.example.test:30443/mcp/" in run.stdout
-    assert f"{HOST}:30443/mcp/" not in run.stdout
-
-
 def test_final_probe_hits_health_and_issuer_through_the_proxy(
     eval_fixture: EvalFixture,
 ) -> None:
@@ -688,9 +627,7 @@ def test_ps_cli_context_is_set_and_selected_when_missing(eval_fixture: EvalFixtu
     calls = log.read_text().splitlines()
     assert f"config set-context eval --url https://{HOST}:30443" in calls
     assert "config use-context eval" in calls
-    assert "  ps-cli auth login" in run.stdout
-    assert "SSL_CERT_FILE" not in run.stdout
-    assert "ps-cli config use-context" not in run.stdout
+    assert "ps-cli" not in run.stdout
 
 
 def test_ps_cli_context_is_left_alone_when_already_current(eval_fixture: EvalFixture) -> None:
@@ -700,28 +637,6 @@ def test_ps_cli_context_is_left_alone_when_already_current(eval_fixture: EvalFix
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     assert all("set-context" not in call for call in log.read_text().splitlines())
-
-
-def test_without_ps_cli_the_closing_output_prints_the_commands(eval_fixture: EvalFixture) -> None:
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
-
-    assert f"ps-cli config set-context eval --url https://{HOST}:30443" in run.stdout
-    assert "ps-cli config use-context eval" in run.stdout
-    assert "  ps-cli auth login" in run.stdout
-    assert "SSL_CERT_FILE" not in run.stdout
-
-
-def test_closing_output_omits_the_hosts_step_when_the_hostname_is_already_mapped(
-    eval_fixture: EvalFixture,
-) -> None:
-    hosts = _hosts_file(eval_fixture, f"127.0.0.1 localhost\n{LAN} {HOST} # ps\n")
-    eval_fixture.set_platform("Darwin")
-    eval_fixture.add_security(trusted=False)
-
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
-
-    assert f"sudo tee -a {hosts}" not in run.stdout
-    assert "add-trusted-cert" in run.stdout
 
 
 def test_without_consent_no_sudo_command_is_run(eval_fixture: EvalFixture) -> None:
@@ -739,7 +654,7 @@ def test_the_name_is_mapped_to_the_lan_address_not_to_loopback(eval_fixture: Eva
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
 
-    assert f"echo '{LAN} {HOST}' | sudo tee -a {hosts}" in run.stdout
+    assert _hosts_line_printed(run) == f"{LAN} {HOST}"
     assert f"127.0.0.1 {HOST}" not in run.output
     assert f"::1 {HOST}" not in run.output
     assert "resolves to 127.0.0.1" not in run.output
@@ -757,7 +672,7 @@ def test_apply_host_setup_appends_exactly_one_hosts_line(eval_fixture: EvalFixtu
     assert f"sudo tee -a {hosts}" not in run.stdout
 
 
-def test_rerun_with_the_mapping_present_changes_nothing_and_prints_ready(
+def test_rerun_with_the_mapping_present_changes_nothing_and_still_prints_the_hosts_line(
     eval_fixture: EvalFixture,
 ) -> None:
     hosts = _hosts_file(eval_fixture, f"{LAN} {HOST}\n")
@@ -769,7 +684,7 @@ def test_rerun_with_the_mapping_present_changes_nothing_and_prints_ready(
 
     assert not sudo_log.exists()
     assert (eval_fixture.root / "hosts").read_text() == f"{LAN} {HOST}\n"
-    assert f"This machine is ready: {HOST} maps to {LAN}" in run.stdout
+    assert _hosts_line_printed(run) == f"{LAN} {HOST}"
 
 
 def test_a_hosts_line_mapping_the_name_to_another_address_is_reported_not_duplicated(
@@ -788,7 +703,6 @@ def test_a_hosts_line_mapping_the_name_to_another_address_is_reported_not_duplic
     assert f"maps {HOST} to 10.0.0.99" in run.stdout
     assert LAN in run.stdout
     assert "Fix:" in run.stdout
-    assert "This machine is ready" not in run.stdout
 
 
 def test_a_loopback_mapping_of_the_name_is_reported_not_duplicated(
@@ -822,9 +736,8 @@ def test_provisioning_does_not_depend_on_the_hosts_file(eval_fixture: EvalFixtur
 
 
 def _hosts_line_printed(run: ScriptRun) -> str:
-    lines = [line for line in run.stdout.splitlines() if line.startswith("  echo '")]
-    assert len(lines) == 1, run.stdout
-    return lines[0]
+    """The closing output opens with the hosts line."""
+    return run.stdout.splitlines()[0]
 
 
 def test_lan_address_comes_from_the_default_route_first(eval_fixture: EvalFixture) -> None:
@@ -833,7 +746,7 @@ def test_lan_address_comes_from_the_default_route_first(eval_fixture: EvalFixtur
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
 
-    assert f"echo '10.0.0.9 {HOST}'" in _hosts_line_printed(run)
+    assert _hosts_line_printed(run) == f"10.0.0.9 {HOST}"
 
 
 def test_lan_address_comes_from_the_default_route_on_macos(eval_fixture: EvalFixture) -> None:
@@ -842,7 +755,7 @@ def test_lan_address_comes_from_the_default_route_on_macos(eval_fixture: EvalFix
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
 
-    assert f"echo '10.0.0.9 {HOST}'" in _hosts_line_printed(run)
+    assert _hosts_line_printed(run) == f"10.0.0.9 {HOST}"
 
 
 def test_lan_address_is_the_single_private_address_without_a_default_route(
@@ -852,7 +765,7 @@ def test_lan_address_is_the_single_private_address_without_a_default_route(
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
 
-    assert f"echo '10.0.0.9 {HOST}'" in _hosts_line_printed(run)
+    assert _hosts_line_printed(run) == f"10.0.0.9 {HOST}"
 
 
 def test_several_private_addresses_without_a_default_route_need_the_flag_before_any_change(
@@ -891,7 +804,7 @@ def test_the_lan_address_flag_overrides_detection(eval_fixture: EvalFixture) -> 
         PS_HOSTS_FILE=_hosts_file(eval_fixture),
     )
 
-    assert f"echo '192.168.1.5 {HOST}'" in _hosts_line_printed(run)
+    assert _hosts_line_printed(run) == f"192.168.1.5 {HOST}"
 
 
 @pytest.mark.parametrize("value", ["not-an-address", "300.1.1.1", "127.0.0.1", "::1", "10.0.0"])
@@ -906,17 +819,6 @@ def test_an_unusable_lan_address_is_a_usage_error_before_any_change(
 
 
 # --- trust for TLS server authentication only --------------------------------------------------
-
-
-def test_trust_command_on_macos_limits_trust_to_ssl(eval_fixture: EvalFixture) -> None:
-    eval_fixture.set_platform("Darwin")
-    eval_fixture.add_security(trusted=False)
-    ca = eval_fixture.state_dir / "ca.pem"
-
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
-
-    assert f"  {MACOS_TRUST} {ca}" in run.stdout
-    assert "-r trustRoot -k" not in run.stdout
 
 
 def test_apply_host_setup_runs_the_ssl_only_trust_command_on_macos(
@@ -935,32 +837,6 @@ def test_apply_host_setup_runs_the_ssl_only_trust_command_on_macos(
 
     trust_args = MACOS_TRUST.removeprefix("sudo ")
     assert f"{trust_args} {eval_fixture.state_dir / 'ca.pem'}" in sudo_log.read_text()
-
-
-def test_trust_commands_on_linux_are_printed_for_debian_and_fedora_families(
-    eval_fixture: EvalFixture,
-) -> None:
-    eval_fixture.set_platform("Linux")
-    ca = eval_fixture.state_dir / "ca.pem"
-
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
-
-    assert "add-trusted-cert" not in run.stdout
-    assert (
-        f"sudo cp {ca} /usr/local/share/ca-certificates/ps-local-ca.crt"
-        " && sudo update-ca-certificates"
-    ) in run.stdout
-    assert (
-        f"sudo cp {ca} /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust"
-    ) in run.stdout
-    squashed = " ".join(run.stdout.split())
-    # Debian ignores the purposes of a CA, so only the name constraint limits it there; Fedora
-    # derives the purposes from the CA's extended key usage.
-    assert "Debian" in squashed
-    assert "ignores" in squashed
-    assert "name constraint" in squashed
-    assert "extended key usage" in squashed
-    assert "TLS server authentication" in squashed
 
 
 def test_linux_run_never_prints_or_runs_keychain_commands(eval_fixture: EvalFixture) -> None:
@@ -984,22 +860,6 @@ def test_linux_run_never_prints_or_runs_keychain_commands(eval_fixture: EvalFixt
         assert "security " not in text
     assert not security_log.exists()
     assert "replaced" in first.stderr
-
-
-def test_linux_summary_shows_debian_and_fedora_trust_methods(eval_fixture: EvalFixture) -> None:
-    _seed_legacy_evaluator(eval_fixture)
-    eval_fixture.set_platform("Linux")
-    ca = eval_fixture.state_dir / "ca.pem"
-
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
-
-    summary = run.stdout
-    assert f"sudo cp {ca} /usr/local/share/ca-certificates/ps-local-ca.crt" in summary
-    assert "sudo update-ca-certificates" in summary
-    assert f"sudo cp {ca} /etc/pki/ca-trust/source/anchors/ps-local-ca.pem" in summary
-    assert "sudo update-ca-trust" in summary
-    assert "sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt" in summary
-    assert "sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem" in summary
 
 
 def test_ca_trust_check_uses_the_ssl_policy_and_is_skipped_when_already_trusted(
@@ -1031,31 +891,324 @@ def test_apply_host_setup_does_not_trust_twice(eval_fixture: EvalFixture) -> Non
     assert "tee -a" in sudo_log.read_text()
 
 
-# --- what colleagues do ------------------------------------------------------------------------
+# --- closing output: hosts line, ca.pem path, enrolment link ------------------------------------
+
+REMOVED_OUTPUT = (
+    "Client values",
+    "Other machines",
+    "LAN colleagues",
+    "Before opening the enrolment link",
+    "This machine is ready",
+    "The local CA was replaced",
+    "ps-cli",
+    "PS_MCP_URL",
+    "Authentik:",
+    "OIDC issuer",
+    "PS Service:",
+    "deployed",
+    "already up to date",
+    "sudo ",
+    "installation-guide",
+)
+LINK_LINE = f"{AUTH_BASE}/if/flow/ps-passkey-recovery/?flow_token="
 
 
-def test_closing_output_tells_colleagues_to_map_the_lan_address_and_copy_only_ca_pem(
+def _enrol_with_passkey(fixture: EvalFixture) -> None:
+    fixture.run("--owner-email", OWNER_EMAIL)
+    pk = next(iter(fixture.curl_users()))
+    fixture.seed_curl(devices={pk: [{"pk": 1, "name": "passkey"}]})
+
+
+def test_closing_output_is_the_hosts_line_the_ca_path_and_the_enrolment_link_in_that_order(
     eval_fixture: EvalFixture,
 ) -> None:
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
 
-    colleagues = run.stdout.split("Other machines (LAN colleagues)", 1)[1]
-    colleagues = colleagues.split("\nhttps://", 1)[0]
-    squashed = " ".join(colleagues.split())
-    ca = eval_fixture.state_dir / "ca.pem"
-    assert f"{LAN} {HOST}" in squashed
-    assert str(ca) in squashed
-    assert "ca.key" in squashed
-    assert "never" in squashed.lower()
-    assert "copy ca.key" not in squashed.replace("never copy ca.key", "")
+    lines = run.stdout.splitlines()
+    assert len(lines) == 4
+    assert lines[0] == f"{LAN} {HOST}"
+    assert lines[1] == str(eval_fixture.state_dir / "ca.pem")
+    assert lines[1].startswith("/")
+    assert "single-use link" in lines[2]
+    assert lines[3].startswith(LINK_LINE)
 
 
-def test_closing_output_recommends_a_reserved_dhcp_address(eval_fixture: EvalFixture) -> None:
+def test_closing_output_with_an_enrolled_owner_is_the_hosts_line_the_ca_path_and_the_message(
+    eval_fixture: EvalFixture,
+) -> None:
+    _enrol_with_passkey(eval_fixture)
+
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
 
-    squashed = " ".join(run.stdout.split())
-    assert "reserve" in squashed
-    assert "DHCP" in squashed
+    lines = run.stdout.splitlines()
+    assert len(lines) == 3
+    assert lines[0] == f"{LAN} {HOST}"
+    assert lines[1] == str(eval_fixture.state_dir / "ca.pem")
+    assert "already has a passkey" in lines[2]
+    assert "/if/flow/" not in run.output
+
+
+@pytest.mark.parametrize("enrolled", [False, True])
+def test_closing_output_has_none_of_the_removed_blocks(
+    eval_fixture: EvalFixture, *, enrolled: bool
+) -> None:
+    if enrolled:
+        _enrol_with_passkey(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=_hosts_file(eval_fixture))
+
+    for text in REMOVED_OUTPUT:
+        assert text not in run.stdout, text
+
+
+def test_closing_output_follows_a_custom_name_and_lan_address(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run(
+        "--owner-email",
+        OWNER_EMAIL,
+        "--hostname",
+        "ps.example.test",
+        "--lan-address",
+        "10.20.30.40",
+        PS_HOSTS_FILE=_hosts_file(eval_fixture),
+    )
+
+    assert run.stdout.splitlines()[0] == "10.20.30.40 ps.example.test"
+    assert f"{HOST}" not in run.stdout.splitlines()[0]
+
+
+def test_closing_output_prints_the_link_once_and_never_the_ca_key(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert run.output.count("flow_token=") == 1
+    assert "ca.key" not in run.output
+
+
+def test_a_conflicting_hosts_line_is_reported_right_after_the_hosts_line(
+    eval_fixture: EvalFixture,
+) -> None:
+    hosts = _hosts_file(eval_fixture, f"10.0.0.99 {HOST}\n")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+
+    lines = run.stdout.splitlines()
+    assert lines[0] == f"{LAN} {HOST}"
+    assert f"maps {HOST} to 10.0.0.99" in lines[1]
+    assert lines[2].lstrip().startswith("Fix:")
+    assert lines[3] == str(eval_fixture.state_dir / "ca.pem")
+
+
+# --- removal of the replaced local CA from this machine's trust store ---------------------------
+
+
+def _failing_sudo(fixture: EvalFixture) -> Path:
+    """A `sudo` that logs its argv and fails, as a declined password prompt does."""
+    log = fixture.root / "sudo.log"
+    sudo = fixture.bin_dir / "sudo"
+    sudo.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "' + str(log) + '"\nexit 1\n')
+    sudo.chmod(0o755)
+    return log
+
+
+def _removal_commands(sudo_log: Path) -> list[str]:
+    if not sudo_log.exists():
+        return []
+    markers = ("remove-trusted-cert", "delete-certificate", "rm ", "update-ca")
+    return [ln for ln in sudo_log.read_text().splitlines() if any(m in ln for m in markers)]
+
+
+def _replaced_on_darwin(fixture: EvalFixture) -> tuple[str, Path]:
+    """A legacy evaluator whose old CA this machine trusts; returns its SHA-1 and kept copy."""
+    fixture.set_platform("Darwin")
+    _seed_legacy_evaluator(fixture)
+    sha1 = _ca_hash(fixture.state_dir / "ca.pem", "sha1")
+    fixture.add_security(trusted=True)
+    return sha1, fixture.state_dir / f"ca.replaced-{sha1[:8]}.pem"
+
+
+def test_the_replaced_ca_is_removed_on_macos_by_its_sha1_with_apply_host_setup(
+    eval_fixture: EvalFixture,
+) -> None:
+    sha1, kept = _replaced_on_darwin(eval_fixture)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert _removal_commands(sudo_log) == [
+        f"security remove-trusted-cert -d {kept.resolve()}",
+        f"security delete-certificate -Z {sha1} -t /Library/Keychains/System.keychain",
+    ]
+    assert "still trusted" not in run.stdout
+    assert kept.exists()
+
+
+def test_the_replaced_ca_is_removed_after_an_interactive_yes(eval_fixture: EvalFixture) -> None:
+    sha1, _ = _replaced_on_darwin(eval_fixture)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, tty_input="y\n", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert any(f"delete-certificate -Z {sha1}" in c for c in _removal_commands(sudo_log))
+    assert "still trusted" not in run.stdout
+
+
+def test_an_interactive_no_removes_nothing_and_points_at_the_flag(
+    eval_fixture: EvalFixture,
+) -> None:
+    _replaced_on_darwin(eval_fixture)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, tty_input="n\n", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert _removal_commands(sudo_log) == []
+    assert "still trusted" in run.stdout
+
+
+def test_a_non_interactive_run_without_the_flag_removes_nothing_and_points_at_the_flag(
+    eval_fixture: EvalFixture,
+) -> None:
+    _replaced_on_darwin(eval_fixture)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--yes")
+
+    assert not sudo_log.exists()
+    pointer = [ln for ln in run.stdout.splitlines() if "still trusted" in ln]
+    assert len(pointer) == 1
+    assert "--apply-host-setup" in pointer[0]
+    assert run.stdout.splitlines()[-1].startswith(LINK_LINE)
+
+
+def test_a_failed_removal_keeps_the_old_ca_continues_and_prints_the_pointer(
+    eval_fixture: EvalFixture,
+) -> None:
+    _replaced_on_darwin(eval_fixture)
+    sudo_log = _failing_sudo(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert _removal_commands(sudo_log)
+    assert "still trusted" in run.stdout
+    assert LINK_LINE in run.stdout
+
+
+def test_no_trust_anchor_is_removed_when_the_ca_was_not_replaced(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_platform("Darwin")
+    eval_fixture.add_security(trusted=True)
+    sudo_log = _fake_sudo(eval_fixture)
+    hosts = _hosts_file(eval_fixture)
+
+    first = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts
+    )
+    second = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts
+    )
+
+    assert _removal_commands(sudo_log) == []
+    assert "still trusted" not in first.stdout + second.stdout
+
+
+def test_an_old_ca_the_machine_does_not_trust_needs_no_removal_and_no_pointer(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.set_platform("Darwin")
+    _seed_legacy_evaluator(eval_fixture)
+    eval_fixture.add_security(trusted=False)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--yes")
+
+    assert _removal_commands(sudo_log) == []
+    assert "still trusted" not in run.stdout
+
+
+def _replaced_on_linux(fixture: EvalFixture, anchor: Path) -> None:
+    """A legacy evaluator whose old CA sits in the trust-store file `anchor`."""
+    fixture.set_platform("Linux")
+    _seed_legacy_evaluator(fixture)
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    anchor.write_text((fixture.state_dir / "ca.pem").read_text())
+
+
+def test_the_replaced_ca_is_removed_on_debian_with_apply_host_setup(
+    eval_fixture: EvalFixture,
+) -> None:
+    anchor = eval_fixture.debian_anchor
+    _replaced_on_linux(eval_fixture, anchor)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert _removal_commands(sudo_log) == [f"rm {anchor}", "update-ca-certificates --fresh"]
+    assert "still trusted" not in run.stdout
+
+
+def test_the_replaced_ca_is_removed_on_fedora_with_apply_host_setup(
+    eval_fixture: EvalFixture,
+) -> None:
+    anchor = eval_fixture.fedora_anchor
+    _replaced_on_linux(eval_fixture, anchor)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert _removal_commands(sudo_log) == [f"rm {anchor}", "update-ca-trust"]
+
+
+def test_a_linux_trust_file_holding_another_certificate_is_left_alone(
+    eval_fixture: EvalFixture,
+) -> None:
+    anchor = eval_fixture.debian_anchor
+    _replaced_on_linux(eval_fixture, anchor)
+    other = eval_fixture.root / "other"
+    other.mkdir()
+    _openssl(
+        *("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=another"),
+        *("-keyout", "k.pem", "-out", "c.pem"),
+        cwd=other,
+    )
+    anchor.write_text((other / "c.pem").read_text())
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert _removal_commands(sudo_log) == []
+    assert anchor.exists()
+    assert "still trusted" not in run.stdout
+
+
+def test_a_declined_linux_removal_keeps_the_file_and_prints_the_pointer(
+    eval_fixture: EvalFixture,
+) -> None:
+    anchor = eval_fixture.debian_anchor
+    _replaced_on_linux(eval_fixture, anchor)
+    sudo_log = _failing_sudo(eval_fixture)
+
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=_hosts_file(eval_fixture)
+    )
+
+    assert _removal_commands(sudo_log) == [f"rm {anchor}"]
+    assert anchor.exists()
+    assert "still trusted" in run.stdout
 
 
 # --- helm idempotence --------------------------------------------------------------------------
@@ -1326,18 +1479,20 @@ def test_migration_replaces_the_unconstrained_ca_and_names_the_old_ca_to_remove(
     assert kept.read_text() == old_text
     assert (eval_fixture.state_dir / "ca.pem").read_text() != old_text
     assert "Permitted: DNS:" + HOST in _x509_text(eval_fixture.state_dir / "ca.pem")
-    for stream in (run.stderr, run.stdout):
-        assert sha1 in stream
-        assert sha256 in stream
-        assert "Policy System local CA" in stream
-        assert f"sudo security remove-trusted-cert -d {kept.resolve()}" in stream
-        assert (
-            f"sudo security delete-certificate -Z {sha1} -t /Library/Keychains/System.keychain"
-            in stream
-        )
-        assert "sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt" in stream
-        assert "update-ca-certificates --fresh" in stream
-        assert "sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem" in stream
+    stream = run.stderr
+    assert sha1 in stream
+    assert sha256 in stream
+    assert "Policy System local CA" in stream
+    assert f"sudo security remove-trusted-cert -d {kept.resolve()}" in stream
+    assert (
+        f"sudo security delete-certificate -Z {sha1} -t /Library/Keychains/System.keychain"
+        in stream
+    )
+    assert "sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt" in stream
+    assert "update-ca-certificates --fresh" in stream
+    assert "sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem" in stream
+    assert "Policy System local CA" not in run.stdout
+    assert sha1 not in run.stdout
     assert ":".join([sha1[:2], sha1[2:4]]) not in run.output
     assert f"{eval_fixture.state_dir.resolve()}/ca.pem" in run.stderr
 

@@ -104,7 +104,6 @@ readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
 readonly PS_CLI_CONTEXT="eval"
 readonly INSTALL_GUIDE="docs/artifacts/installation-guide.md"
-readonly INSTALL_GUIDE_TRUST_STEP="${INSTALL_GUIDE}#b2-map-the-name-and-trust-the-ca-evaluator-only"
 
 # Process-wide state, plain assignment only (never inside $(...), so writes reach the caller).
 # OWNER_EMAIL, SKIP_OWNER_PROMPT, AUTHENTIK_API_BASE, AUTHENTIK_LINK_BASE and AUTHENTIK_CURL_ARGS
@@ -125,9 +124,8 @@ allow_public_host=false
 check_exposure_only=false
 lan_address=""
 needs_hosts=false
-hosts_conflict=""
 needs_trust=false
-ps_cli_context_ready=false
+old_ca_still_trusted=false
 # Read by lib/authentik-owner.sh: true when the hostname changed on an existing install, because
 # the owner's passkeys are bound to the old name and are unusable (see announce_migration).
 OWNER_IGNORE_EXISTING_DEVICES=false
@@ -802,137 +800,134 @@ print_trust_commands() {
   printf '  Other systems: import %s as a trusted root for TLS server authentication in the system or browser store.\n' "$ca"
 }
 
-# check_local_access <host> <ca>: sets needs_hosts/hosts_conflict/needs_trust to what this machine
-# still lacks.
+# check_local_access <host> <ca>: sets needs_hosts/needs_trust to what this machine still lacks.
 check_local_access() {
-  local state
   needs_hosts=false
-  hosts_conflict=""
   needs_trust=false
-  state="$(host_mapping_state "$1")"
-  case "$state" in
-    missing) needs_hosts=true ;;
-    conflict*) hosts_conflict="${state#conflict }" ;;
-    *) ;;
-  esac
+  [[ "$(host_mapping_state "$1")" != missing ]] || needs_hosts=true
   ca_is_trusted "$2" || needs_trust=true
 }
 
 # confirm_local_access_setup: 0 when the sudo steps may run now: --apply-host-setup, or a yes at
-# the prompt of an interactive run. A non-interactive run without the flag only prints them.
+# the prompt of an interactive run. A non-interactive run without the flag runs none of them.
 confirm_local_access_setup() {
   local answer=""
   [[ "$apply_host_setup" == true ]] && return 0
   [[ "$SKIP_OWNER_PROMPT" == true || ! -t 0 ]] && return 1
-  printf 'This machine still needs sudo steps to open the enrolment link (hostname mapping and/or CA trust). Run them now? [y/N] ' >&2
+  printf 'This machine still needs sudo steps (hostname mapping, CA trust and/or removal of the replaced CA). Run them now? [y/N] ' >&2
   read -r answer || true
   [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]]
 }
 
-# setup_local_access <host>: when this machine lacks the hostname mapping or CA trust, runs the
-# sudo steps if the evaluator agreed, then re-checks. A step that fails (sudo declined) stays
-# outstanding and is printed by the closing summary instead.
+# debian_ca_anchor / fedora_ca_anchor: where the trust store of each Linux family holds the
+# local CA (overridable for tests).
+debian_ca_anchor() {
+  printf '%s' "${PS_DEBIAN_CA_ANCHOR:-/usr/local/share/ca-certificates/ps-local-ca.crt}"
+}
+fedora_ca_anchor() {
+  printf '%s' "${PS_FEDORA_CA_ANCHOR:-/etc/pki/ca-trust/source/anchors/ps-local-ca.pem}"
+}
+
+# replaced_ca_anchor: prints the Linux trust-store file that holds the replaced local CA (matched
+# by SHA-1, so a file holding any other certificate is never named), or nothing.
+replaced_ca_anchor() {
+  local anchor
+  for anchor in "$(debian_ca_anchor)" "$(fedora_ca_anchor)"; do
+    [[ -f "$anchor" ]] || continue
+    if [[ "$(_cert_hash "$anchor" sha1)" == "$LOCAL_TLS_REPLACED_CA_SHA1" ]]; then
+      printf '%s' "$anchor"
+      return 0
+    fi
+  done
+}
+
+# replaced_ca_is_trusted: 0 when this machine's trust store still holds the replaced local CA
+# (macOS: the system trust settings accept the kept copy; Linux: a trust-store file holds it).
+replaced_ca_is_trusted() {
+  [[ -n "$LOCAL_TLS_REPLACED_CA_SHA1" ]] || return 1
+  if [[ "$(host_os)" == Darwin ]]; then
+    ca_is_trusted "$LOCAL_TLS_REPLACED_CA_PEM"
+  else
+    [[ -n "$(replaced_ca_anchor)" ]]
+  fi
+}
+
+# remove_replaced_ca: removes the replaced local CA, identified by its SHA-1, from this machine's
+# trust store (sudo). Returns 1 when a command fails (sudo declined); the old CA then stays.
+remove_replaced_ca() {
+  local anchor
+  if [[ "$(host_os)" == Darwin ]]; then
+    sudo security remove-trusted-cert -d "$LOCAL_TLS_REPLACED_CA_PEM" || return 1
+    sudo security delete-certificate -Z "$LOCAL_TLS_REPLACED_CA_SHA1" -t /Library/Keychains/System.keychain
+    return
+  fi
+  anchor="$(replaced_ca_anchor)"
+  sudo rm "$anchor" || return 1
+  if [[ "$anchor" == "$(debian_ca_anchor)" ]]; then
+    sudo update-ca-certificates --fresh
+  else
+    sudo update-ca-trust
+  fi
+}
+
+# setup_local_access <host>: when this machine lacks the hostname mapping or CA trust, or still
+# trusts the CA this run replaced, runs the sudo steps if the evaluator agreed, then re-checks.
+# A step that fails (sudo declined) stays outstanding: a missing mapping is not retried, and the
+# closing output carries the pointer for a replaced CA that is still trusted.
 setup_local_access() {
-  local host="$1" ca
+  local host="$1" ca remove_old=false
   ca="$(local_tls_state_dir)/ca.pem"
   check_local_access "$host" "$ca"
-  [[ "$needs_hosts" == false && "$needs_trust" == false ]] && return 0
-  confirm_local_access_setup || return 0
-  if [[ "$needs_hosts" == true ]]; then
-    log_step "Mapping ${host} to ${lan_address} in $(hosts_file) (sudo)"
-    missing_host_mapping "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
+  old_ca_still_trusted=false
+  ! replaced_ca_is_trusted || remove_old=true
+  [[ "$remove_old" == false ]] || old_ca_still_trusted=true
+  [[ "$needs_hosts" == false && "$needs_trust" == false && "$remove_old" == false ]] && return 0
+  if confirm_local_access_setup; then
+    if [[ "$needs_hosts" == true ]]; then
+      log_step "Mapping ${host} to ${lan_address} in $(hosts_file) (sudo)"
+      missing_host_mapping "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
+    fi
+    if [[ "$needs_trust" == true && "$(host_os)" == Darwin ]]; then
+      log_step "Trusting the local CA for TLS server authentication in the system keychain (sudo)"
+      sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain "$ca" || true
+    fi
+    if [[ "$remove_old" == true ]]; then
+      log_step "Removing the replaced local CA (SHA-1 ${LOCAL_TLS_REPLACED_CA_SHA1}) from this machine's trust store (sudo)"
+      ! remove_replaced_ca || old_ca_still_trusted=false
+    fi
+    check_local_access "$host" "$ca"
   fi
-  if [[ "$needs_trust" == true && "$(host_os)" == Darwin ]]; then
-    log_step "Trusting the local CA for TLS server authentication in the system keychain (sudo)"
-    sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain "$ca" || true
-  fi
-  check_local_access "$host" "$ca"
 }
 
 # configure_ps_cli_context <host>: points ps-cli's "eval" context at PS Service and selects it, unless it
 # already is (set-context deletes the context's stored login, so a re-run must not repeat it).
-# Sets ps_cli_context_ready; any failure leaves it false and the summary prints the commands.
+# Any failure is ignored; the installation guide covers the manual commands.
 configure_ps_cli_context() {
-  ps_cli_context_ready=false
   command -v ps-cli >/dev/null 2>&1 || return 0
   local contexts url
   url="$(ps_service_url "$1")"
   contexts="$(ps-cli config get-contexts 2>/dev/null || true)"
-  if grep -Eq "\*.*[[:space:]]${PS_CLI_CONTEXT}[[:space:]].*${url//./\\.}[[:space:]]" <<<"$contexts"; then
-    ps_cli_context_ready=true
-    return 0
-  fi
+  grep -Eq "\*.*[[:space:]]${PS_CLI_CONTEXT}[[:space:]].*${url//./\\.}[[:space:]]" <<<"$contexts" && return 0
   log_step "Pointing ps-cli's ${PS_CLI_CONTEXT} context at ${url}"
-  if ps-cli config set-context "$PS_CLI_CONTEXT" --url "$url" >/dev/null \
-    && ps-cli config use-context "$PS_CLI_CONTEXT" >/dev/null; then
-    ps_cli_context_ready=true
+  if ps-cli config set-context "$PS_CLI_CONTEXT" --url "$url" >/dev/null; then
+    ps-cli config use-context "$PS_CLI_CONTEXT" >/dev/null || true
   fi
 }
 
-# print_local_steps <host> <ca>: what this machine still lacks before the enrolment link opens
-# (the hosts line, a hosts line to fix, the CA trust), or that it is ready.
-print_local_steps() {
-  local host="$1" ca="$2"
-  if [[ "$needs_hosts" == true || "$needs_trust" == true || -n "$hosts_conflict" ]]; then
-    printf 'Before opening the enrolment link in a browser on this machine:\n'
-    print_hosts_steps "$host"
-    if [[ "$needs_trust" == true ]]; then
-      print_trust_commands "$ca"
-    fi
-    printf '(re-run with --apply-host-setup to have the script do the sudo steps)\n\n'
-  else
-    printf 'This machine is ready: %s maps to %s and the local CA is trusted.\n\n' "$host" "$lan_address"
-  fi
-}
-
-# print_colleague_steps <host> <ca>: what every other machine that logs in does, and the advice
-# to give this machine a fixed address because their hosts lines point at it.
-print_colleague_steps() {
-  local host="$1" ca="$2"
-  printf 'Other machines (LAN colleagues), on each one:\n'
-  printf "  1. Map the name to this machine's LAN address: echo '%s %s' | sudo tee -a /etc/hosts\n" "$lan_address" "$host"
-  printf '  2. Copy %s there (only the certificate, never copy ca.key) and trust it for TLS server\n' "$ca"
-  printf '     authentication; see %s\n' "$INSTALL_GUIDE_TRUST_STEP"
-  printf "Every colleague's hosts line points at %s, so reserve it for this machine in your router's\n" "$lan_address"
-  printf 'DHCP settings (a reserved DHCP address); a new address breaks every colleague until their hosts line is updated.\n\n'
-}
-
-# print_client_values <host> <ca>: the values a machine needs to use this evaluator, all derived
-# from the configured name, this machine's LAN address and the proxy port.
-print_client_values() {
-  local host="$1" ca="$2" url
-  url="$(ps_service_url "$host")"
-  printf 'Client values (every machine that uses this evaluator):\n'
-  printf '  hosts line:  %s %s\n' "$lan_address" "$host"
-  printf '  CA file:     %s\n' "$ca"
-  printf '  ps-cli:      ps-cli config set-context %s --url %s\n' "$PS_CLI_CONTEXT" "$url"
-  printf '  MCP URL:     PS_MCP_URL=%s/mcp/\n\n' "$url"
-}
-
-# print_closing_summary <host>: what the evaluator does next. Only the steps this machine still
-# lacks are listed; ps-cli and other-machine setup live in the installation guide. The
-# enrolment link is printed last, exactly once (it is a single-use credential-equivalent).
+# print_closing_summary <host>: the three things to carry to a client machine, in this order: the
+# hosts line (with a conflicting hosts line and its fix right after it), the absolute path of
+# ca.pem, and the owner's enrolment link or the already-enrolled message. A pointer line sits
+# before the link when the replaced CA is still trusted here. Per-OS, per-client and ps-cli steps
+# live in the installation guide. The enrolment link is printed last, exactly once (it is a
+# single-use credential-equivalent).
 print_closing_summary() {
-  local host="$1" ca
-  ca="$(local_tls_state_dir)/ca.pem"
-  if [[ "$made_release_change" == true ]]; then
-    printf 'Policy System (evaluator profile) deployed.\n'
-  else
-    printf 'Policy System (evaluator profile) already up to date.\n'
+  local host="$1"
+  printf '%s %s\n' "$lan_address" "$host"
+  print_hosts_conflict "$host"
+  printf '%s\n' "$(local_tls_state_dir)/ca.pem"
+  if [[ "$old_ca_still_trusted" == true ]]; then
+    printf 'The replaced local CA is still trusted on this machine; re-run with --apply-host-setup to remove it.\n'
   fi
-  printf '\nAuthentik:  %s/\nOIDC issuer: %s\nPS Service: %s\n\n' \
-    "$(authentik_base_url "$host")" "$(authentik_issuer "$host")" "$(ps_service_url "$host")"
-  print_client_values "$host" "$ca"
-  print_local_steps "$host" "$ca"
-  print_replaced_ca_steps
-  if [[ "$ps_cli_context_ready" == true ]]; then
-    printf 'ps-cli is pointed at %s. After you register the passkey, log in with:\n' "$(ps_service_url "$host")"
-  else
-    printf 'Select the ps-cli context set above, then log in once the passkey is registered:\n'
-    printf '  ps-cli config use-context %s\n' "$PS_CLI_CONTEXT"
-  fi
-  printf '  ps-cli auth login\n\n'
-  print_colleague_steps "$host" "$ca"
   print_owner_link_message
 }
 
