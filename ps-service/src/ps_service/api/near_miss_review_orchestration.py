@@ -107,7 +107,7 @@ class NearMissReviewDependencies:
     """Everything the near-miss review entry points need that is not per-request.
 
     Attributes:
-        open_single_tenant_graph: Opens the single-tenant `policy_system` graph for a resolved
+        open_single_tenant_graph: Opens the configured single-tenant graph for a resolved
             service configuration. May raise a Redis error when FalkorDB is unreachable.
         list_pending_reviews: Returns every unresolved `PendingReviewRecord` in the graph.
         resolve_review: Keeps one review's pair separate by id, writing through the given write
@@ -290,7 +290,7 @@ def run_resolve_near_miss(
     audit_event_id = record_opening_row_with_event_id(
         audit, target, component=_COMPONENT, details=details, emitter=emitter
     )
-    write_target = _graph_write_target(write_access.gateway, audit_event_id)
+    write_target = _graph_write_target(write_access.gateway, config.falkordb_graph, audit_event_id)
     try:
         response = _resolve_or_raise_not_found(
             dependencies, graph, review_id, decision, write_target
@@ -321,16 +321,15 @@ def run_resolve_near_miss(
     return response
 
 
-def _graph_write_target(gateway: GroupSubmitter, audit_event_id: str) -> GraphWriteTarget:
-    """Build the write target: the `policy_system` graph, under the opening audit event."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
-        single_tenant_graph_name,
-    )
+def _graph_write_target(
+    gateway: GroupSubmitter, graph_name: str, audit_event_id: str
+) -> GraphWriteTarget:
+    """Build the write target: the graph `graph_name`, under the opening audit event."""
     from ps_service.company_merge.graph_submission import (  # noqa: PLC0415 -- function-local, as above
         GraphWriteTarget,
     )
 
-    return GraphWriteTarget(gateway, single_tenant_graph_name(), audit_event_id)
+    return GraphWriteTarget(gateway, graph_name, audit_event_id)
 
 
 def _resolve_or_raise_not_found(
@@ -357,7 +356,7 @@ def _resolve_or_raise_not_found(
 
 
 def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
-    """Open the single-tenant (`policy_system`) graph from the service configuration.
+    """Open the graph `config.falkordb_graph` names, connecting from the service configuration.
 
     The import is function-local so `ps_service.main` stays independent of Company Merge at
     import time.
@@ -368,10 +367,9 @@ def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
         select_graph,
-        single_tenant_graph_name,
     )
 
-    return select_graph(connect_from_config(config), single_tenant_graph_name())
+    return select_graph(connect_from_config(config), config.falkordb_graph)
 
 
 def build_default_near_miss_review_graph_opener() -> Callable[[ServiceConfig], GraphHandle]:
@@ -385,7 +383,7 @@ def build_default_near_miss_review_graph_opener() -> Callable[[ServiceConfig], G
     substitute up.
 
     Returns:
-        The function that opens the `policy_system` graph for a service configuration.
+        The function that opens the graph a service configuration names.
     """
     return _open_single_tenant_graph
 

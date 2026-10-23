@@ -28,6 +28,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 )
 
 from policy_lifecycle._gateway_fakes import (
+    POLICY_SYSTEM,
     LifecycleRig,
     PolicyReadGraph,
     SeedControl,
@@ -124,6 +125,7 @@ def test_a_policy_edit_leaves_the_graph_the_frozen_legacy_writer_left(
         graph=PolicyReadGraph(lifecycle_rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -180,6 +182,7 @@ def test_a_standard_edit_leaves_the_graph_the_frozen_legacy_writer_left(
         graph=PolicyReadGraph(lifecycle_rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -202,6 +205,7 @@ def test_a_control_edit_leaves_the_graph_the_frozen_legacy_writer_left(
         graph=PolicyReadGraph(lifecycle_rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -232,6 +236,7 @@ def test_adding_a_standard_leaves_the_graph_the_frozen_legacy_writer_left(
         graph=PolicyReadGraph(lifecycle_rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -274,6 +279,7 @@ def test_adding_a_control_leaves_the_graph_the_frozen_legacy_writer_left(
         graph=PolicyReadGraph(lifecycle_rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -349,6 +355,7 @@ def test_a_backfill_leaves_the_graph_the_frozen_legacy_backfill_left(
         policy_id=_POLICY,
         graph=lifecycle_rig.read,
         submitter_source=lambda: lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -371,6 +378,7 @@ def _create(
         graph=rig.read,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -520,6 +528,7 @@ def test_a_claim_leaves_the_graph_the_frozen_legacy_writer_left(
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     if absent:
@@ -577,7 +586,12 @@ def test_a_cascade_leaves_the_graph_the_frozen_legacy_cascade_left(
 
     if action == "propose":
         propose_policy(
-            actor=_OWNER, policy_id=_POLICY, graph=graph, audit_store=audit, submitter=submitter
+            actor=_OWNER,
+            policy_id=_POLICY,
+            graph=graph,
+            audit_store=audit,
+            submitter=submitter,
+            graph_name=POLICY_SYSTEM,
         )
     elif action == "reject":
         reject_policy(
@@ -587,10 +601,16 @@ def test_a_cascade_leaves_the_graph_the_frozen_legacy_cascade_left(
             audit_store=audit,
             enforce_policy_manager=policy_manager_enforcer(_managers()),
             submitter=submitter,
+            graph_name=POLICY_SYSTEM,
         )
     else:
         revert_policy_to_draft(
-            actor=_OWNER, policy_id=_POLICY, graph=graph, audit_store=audit, submitter=submitter
+            actor=_OWNER,
+            policy_id=_POLICY,
+            graph=graph,
+            audit_store=audit,
+            submitter=submitter,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -632,6 +652,7 @@ def test_approving_a_fork_leaves_the_graph_the_frozen_legacy_repoint_and_cascade
         audit_store=lifecycle_rig.audit,
         enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -653,6 +674,7 @@ def test_approving_a_plain_policy_leaves_the_graph_the_frozen_legacy_cascade_lef
         audit_store=lifecycle_rig.audit,
         enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert canonical_digest(lifecycle_rig.graph) == expected
@@ -677,6 +699,7 @@ def _approve(rig: LifecycleRig, policy_id: str) -> None:
         audit_store=rig.audit,
         enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -687,6 +710,7 @@ def _propose(rig: LifecycleRig, policy_id: str) -> None:
         graph=rig.read,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -806,6 +830,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         graph=graph,
         access_role_store=roles,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
     add_standard_to_draft(
         actor=_OWNER,
@@ -815,6 +840,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         graph=graph,
         access_role_store=roles,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
     add_control_to_draft(
         actor=_OWNER,
@@ -825,6 +851,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         graph=graph,
         access_role_store=roles,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
     update_standard_draft(
         actor=_OWNER,
@@ -833,6 +860,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         graph=graph,
         access_role_store=roles,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
     update_control_draft(
         actor=_OWNER,
@@ -841,6 +869,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         graph=graph,
         access_role_store=roles,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
     _propose(rig, new_id)
     reject_policy(
@@ -850,6 +879,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         audit_store=rig.audit,
         enforce_policy_manager=policy_manager_enforcer(_managers()),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
     _propose(rig, new_id)
     revert_policy_to_draft(
@@ -858,6 +888,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         graph=rig.read,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
     _propose(rig, new_id)
     _approve(rig, new_id)
@@ -865,6 +896,7 @@ def _composite_service_run(rig: LifecycleRig, new_id: str, logging_std: str) -> 
         policy_id=new_id,
         graph=rig.read,
         submitter_source=lambda: rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -939,6 +971,7 @@ def test_a_second_pass_changes_nothing_and_logs_nothing(
                 graph=graph,
                 access_role_store=roles,
                 submitter=lifecycle_rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         elif family == "add-standard":
             add_standard_to_draft(
@@ -949,12 +982,14 @@ def test_a_second_pass_changes_nothing_and_logs_nothing(
                 graph=graph,
                 access_role_store=roles,
                 submitter=lifecycle_rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         else:
             get_policy(
                 policy_id=_POLICY,
                 graph=lifecycle_rig.read,
                 submitter_source=lambda: lifecycle_rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
 
     _run()
@@ -979,6 +1014,7 @@ def test_identity_less_legacy_edges_are_stamped_before_the_first_group(
         graph=PolicyReadGraph(lifecycle_rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert lifecycle_rig.logged_groups == 2

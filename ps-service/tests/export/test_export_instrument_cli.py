@@ -41,7 +41,6 @@ from export._gateway_fakes import (
 )
 from ps_service.api.errors import ExportUnresolvedNearMissesError
 from ps_service.audit.errors import AuditTrailUnavailableError
-from ps_service.company_merge.falkordb_client import single_tenant_graph_name
 from ps_service.config import ServiceConfig
 from ps_service.logging import facade
 
@@ -100,10 +99,13 @@ def cli_module() -> ModuleType:
     return _load_cli_module()
 
 
+_POLICY_SYSTEM = "policy_system"
+
+
 class _FakeFalkorDB:
     """Records `select_graph` calls; each name is a read handle over that rig graph.
 
-    The single-tenant `policy_system` name answers with `policy_graph` when one is scripted;
+    The single-tenant graph name (`policy_name`) answers with `policy_graph` when one is scripted;
     otherwise that graph does not exist (`list_graphs` omits it) as on a fresh server.
     """
 
@@ -112,18 +114,21 @@ class _FakeFalkorDB:
         self.port = port
         self.selected: list[str] = []
         self.policy_graph: ScriptedPolicyGraph | None = None
+        self.policy_name = _POLICY_SYSTEM
         self._rig = rig
 
     def list_graphs(self) -> list[str]:
         names = list(self._rig.graphs.graphs)
         if self.policy_graph is not None:
-            names.append(single_tenant_graph_name())
+            names.append(self.policy_name)
         return names
 
     def select_graph(self, name: str) -> ExportReadGraph | ScriptedPolicyGraph:
         self.selected.append(name)
-        if name == single_tenant_graph_name():
-            assert self.policy_graph is not None, "policy_system must not be selected when absent"
+        if name == self.policy_name:
+            assert self.policy_graph is not None, (
+                "the single-tenant graph must not be selected when absent"
+            )
             return self.policy_graph
         return ExportReadGraph(self._rig.graphs.open(name))
 
@@ -148,12 +153,22 @@ class _Wiring:
         self.system_audit = system_audit
         self.gateway_configs: list[ServiceConfig] = []
         self.fake_db = _FakeFalkorDB(rig=rig.rig, host="fake-host", port=1234)
+        self.graph_name = _POLICY_SYSTEM
 
     def load_config(self) -> ServiceConfig:
         """Stand-in for `load_config`: a fixed configuration, no environment read."""
         return ServiceConfig(
-            host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
+            host="127.0.0.1",
+            port=8000,
+            graceful_shutdown_seconds=10,
+            logging_dir=None,
+            falkordb_graph=self.graph_name,
         )
+
+    def use_graph_name(self, name: str) -> None:
+        """Configure the single-tenant graph name, which the fake server then lists."""
+        self.graph_name = name
+        self.fake_db.policy_name = name
 
     def main(self, cli_module: ModuleType, argv: list[str], **kwargs: object) -> int:
         """Run the CLI's `main()` with this rig injected at its composition seams."""
@@ -509,7 +524,27 @@ def test_main_skips_the_gate_and_creates_no_graph_when_policy_system_is_absent(
     )
 
     assert exit_code == 0
-    assert single_tenant_graph_name() not in wiring.fake_db.selected
+    assert _POLICY_SYSTEM not in wiring.fake_db.selected
+
+
+def test_the_cli_reads_near_misses_from_the_configured_graph(
+    cli_module: ModuleType, wiring: _Wiring, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The gate selects the configured name, and only lists it when the server has it."""
+    rig = wiring.rig
+    wiring.use_graph_name("custom_graph")
+    _seed_instrument(rig, "32024R2847", source_type="external")
+    rig.seed_node(rig.baseline, "Capability", "cap1", {"name": "Cap One"})
+    wiring.fake_db.policy_graph = ScriptedPolicyGraph([pending_review("r1", incoming_id="cap1")])
+
+    exit_code = wiring.main(
+        cli_module, _refusal_argv(tmp_path), call_embedding=_FakeEmbeddingCaller()
+    )
+
+    assert exit_code == 1
+    assert "custom_graph" in wiring.fake_db.selected
+    assert _POLICY_SYSTEM not in wiring.fake_db.selected
+    assert "r1" in capsys.readouterr().err
 
 
 def test_main_fails_closed_when_policy_system_cannot_be_read(
@@ -529,7 +564,7 @@ def test_main_fails_closed_when_policy_system_cannot_be_read(
 
     assert exit_code == 1
     err = capsys.readouterr().err
-    assert single_tenant_graph_name() in err
+    assert _POLICY_SYSTEM in err
     assert "boom" in err
     assert caller.calls == []
     assert wiring.system_audit.rows == []

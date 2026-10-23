@@ -143,7 +143,6 @@ def _config() -> ServiceConfig:
 def _real_delegate_dependencies() -> RestoreDependencies:
     return RestoreDependencies(
         open_db=lambda config: _NEVER_TOUCHED_DB,
-        single_tenant_graph_name=lambda config: "__gh104_never_touched_single_tenant__",
         restore=restore_instrument,
         graph_write_access=graph_write_access,
     )

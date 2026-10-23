@@ -9,8 +9,8 @@ is in the log and the gateway applies it on recovery).
 
 from __future__ import annotations
 
-import os
 import uuid
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -397,30 +397,38 @@ def test_no_installed_gateway_is_the_persistence_error() -> None:
     assert str(raised.value) == _SANITIZED
 
 
-@pytest.mark.parametrize("graph_env", [None, "custom_graph"])
-def test_the_group_goes_to_the_graph_the_reads_open(
-    monkeypatch: pytest.MonkeyPatch, cleanup_rig: CleanupRig, graph_env: str | None
-) -> None:
-    if graph_env is None:
-        monkeypatch.delenv("PS_FALKORDB_GRAPH", raising=False)
-    else:
-        monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_env)
-    opened: list[str] = []
+class _RecordingDatabase:
+    """A database whose `select_graph` records the name it was asked for."""
 
-    def _connect(_config: ServiceConfig) -> object:
+    def __init__(self) -> None:
+        self.selected: list[str] = []
+
+    def connect(self, _config: ServiceConfig) -> _RecordingDatabase:
+        return self
+
+    def select_graph(self, name: str) -> object:
+        self.selected.append(name)
         return object()
 
-    def _select(_client: object, name: str) -> object:
-        opened.append(name)
-        return object()
 
-    monkeypatch.setattr("ps_service.company_merge.falkordb_client.connect_from_config", _connect)
-    # detroit-exception: no FalkorDB server here; the graph name passed IS the spec
-    monkeypatch.setattr("ps_service.company_merge.falkordb_client.select_graph", _select)
-    build_default_graph_cleanup_graph_opener()(_CONFIG)
+def test_graph_write_target_names_the_configured_graph(cleanup_rig: CleanupRig) -> None:
+    config = replace(_CONFIG, falkordb_graph="custom_graph")
     dependencies = cleanup_rig.dependencies(roles=None)  # pyright: ignore[reportArgumentType] -- roles are not read here
 
-    target = graph_write_target(dependencies, _CONFIG)
+    target = graph_write_target(dependencies, config)
 
-    assert opened == [target.graph_name]
-    assert target.graph_name == os.environ.get("PS_FALKORDB_GRAPH", "policy_system")
+    assert target.graph_name == "custom_graph"
+
+
+def test_the_default_opener_selects_the_configured_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _RecordingDatabase()
+    monkeypatch.setattr(
+        "ps_service.company_merge.falkordb_client.connect_from_config",
+        database.connect,
+    )
+
+    build_default_graph_cleanup_graph_opener()(replace(_CONFIG, falkordb_graph="custom_graph"))
+
+    assert database.selected == ["custom_graph"]

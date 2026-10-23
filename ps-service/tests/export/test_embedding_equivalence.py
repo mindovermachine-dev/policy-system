@@ -95,7 +95,7 @@ def test_run_export_matches_the_pre_migration_golden_export(
         export=export_instrument,
         call_embedding=_golden_embedder,
         graph_write_access=graph_write_access,
-        open_single_tenant_graph=lambda _db: ScriptedPolicyGraph(),
+        open_single_tenant_graph=lambda _db, _name: ScriptedPolicyGraph(),
     )
 
     response = run_export(

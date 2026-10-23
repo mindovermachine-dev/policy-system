@@ -131,6 +131,7 @@ def cra_roles(
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD", "0.85")
     monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
     monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", _ROLE_REVIEW_THRESHOLD)
+    # Driven end to end through the real `load_config()`: the env is the graph name's only input.
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _DISPOSABLE_GRAPH)
 
     config = live_app_config(provisioned_graph_log)

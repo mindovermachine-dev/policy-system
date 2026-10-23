@@ -4,7 +4,8 @@ Entry is the REAL `run_change_check_sweep`; everything below it is real: `read_t
 `will_reingest` / `trigger_reingestion` / `classify_reingestion`, the succession's gateway groups,
 the shared stage sequence and the REAL Ingestion, Domain Mapper (extract, derive) and Company Merge
 stages with the REAL Cellar/ELI Domain Mapping Adapter, over three disposable FalkorDB graphs
-(`live201_native`, `live201_baseline` and a single-tenant graph named by `PS_FALKORDB_GRAPH`).
+(`live201_native`, `live201_baseline` and a single-tenant graph named by the config's
+`falkordb_graph`).
 `policy_system` itself is never touched.
 
 Stubbed boundaries (all on `approved-mock-boundaries.yaml`): the Cellar fetch (a scripted
@@ -436,9 +437,9 @@ def _drop(db: FalkorDB, names: tuple[str, ...]) -> None:
 def _build_world(
     monkeypatch: pytest.MonkeyPatch, emitter: object, prov: Provisioned
 ) -> Iterator[_World]:
-    monkeypatch.setenv("PS_FALKORDB_GRAPH", _SINGLE_TENANT)
     config = dataclasses.replace(
         prov.state_config(),
+        falkordb_graph=_SINGLE_TENANT,
         llm_interface_model="azure/stub-chat",
         llm_interface_embed_model="azure/stub-embed",
         company_merge_capability_merge_threshold=0.83,

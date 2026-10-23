@@ -220,9 +220,9 @@ def capstone(
     """Run the real internal-seed pipeline against real infrastructure, once, and capture state.
 
     Sequence, all against one disposable single-tenant graph
-    (``_DISPOSABLE_GRAPH``, via the existing ``PS_FALKORDB_GRAPH`` override
-    -- no new mechanism): the seed fixture is POSTed twice (item 1's
-    proof, then item 2's no-op proof), then the dangling-edge fixture is
+    (``_DISPOSABLE_GRAPH``, via the ``PS_FALKORDB_GRAPH`` override that
+    ``load_config()`` resolves): the seed fixture is POSTed twice
+    (item 1's proof, then item 2's no-op proof), then the dangling-edge fixture is
     POSTed once (item 3's fail-closed proof; it never reaches ``merge``, so
     it cannot touch the disposable graph either way).
 
@@ -249,6 +249,7 @@ def capstone(
         monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
     if not os.environ.get("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", str(ROLE_REVIEW_THRESHOLD))
+    # Driven end to end through the real `load_config()`: the env is the graph name's only input.
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _DISPOSABLE_GRAPH)
 
     # Built after the env above is set: layers the provisioned state Postgres (graph log and audit

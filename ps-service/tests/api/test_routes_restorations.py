@@ -122,7 +122,6 @@ class _FakeRestoreStage:
 def _fake_dependencies(stage: _FakeRestoreStage) -> RestoreDependencies:
     return RestoreDependencies(
         open_db=lambda config: cast("FalkorDB", _FakeDb()),
-        single_tenant_graph_name=lambda config: "policy_system",
         restore=stage,
         graph_write_access=graph_write_access,
     )
@@ -427,7 +426,6 @@ def _real_restore_dependencies() -> RestoreDependencies:
         open_db=lambda config: cast(
             "FalkorDB", RigDb(lambda: RigReadHandle(rig.graphs.open("policy_system")))
         ),
-        single_tenant_graph_name=lambda config: "policy_system",
         restore=restore_instrument,
         graph_write_access=graph_write_access,
     )

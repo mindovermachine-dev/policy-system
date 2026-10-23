@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from policy_lifecycle._gateway_fakes import POLICY_SYSTEM
 from ps_service.policy_lifecycle.errors import PolicyCapabilityNotFoundError
 from ps_service.policy_lifecycle.graph_writer import read_capability_governors
 from ps_service.policy_lifecycle.service import create_policy_draft
@@ -60,6 +61,7 @@ def test_claiming_an_absorbed_capability_raises_not_found(lifecycle_rig: Lifecyc
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert raised.value.capability_ids == ("cap_b",)

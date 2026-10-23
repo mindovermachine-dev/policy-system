@@ -139,7 +139,7 @@ def _dependencies(
         export=export_instrument,
         call_embedding=call_embedding,
         graph_write_access=access,  # pyright: ignore[reportArgumentType]
-        open_single_tenant_graph=lambda _db: ScriptedPolicyGraph(),
+        open_single_tenant_graph=lambda _db, _name: ScriptedPolicyGraph(),
     )
 
 

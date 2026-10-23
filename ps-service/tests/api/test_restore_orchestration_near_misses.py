@@ -116,7 +116,6 @@ def _run(rig: RestoreRig, store: InMemoryAuditStore, *, review_threshold: float 
 
     dependencies = RestoreDependencies(
         open_db=lambda _config: cast("FalkorDB", rig.db),
-        single_tenant_graph_name=lambda _config: POLICY_SYSTEM,
         restore=_restore,
         graph_write_access=lambda _config: cast("GraphWriteAccess", None),
     )

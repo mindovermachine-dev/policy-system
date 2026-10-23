@@ -234,6 +234,7 @@ def _create(rig: LifecycleRig) -> object:
         graph=rig.read,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -245,6 +246,7 @@ def _claim(rig: LifecycleRig) -> object:
         graph=rig.read,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -257,6 +259,7 @@ def _transition(action: str) -> Callable[[LifecycleRig], object]:
                 graph=rig.read,
                 audit_store=rig.audit,
                 submitter=rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         if action == "revert":
             return revert_policy_to_draft(
@@ -265,6 +268,7 @@ def _transition(action: str) -> Callable[[LifecycleRig], object]:
                 graph=rig.read,
                 audit_store=rig.audit,
                 submitter=rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         if action == "reject":
             return reject_policy(
@@ -274,6 +278,7 @@ def _transition(action: str) -> Callable[[LifecycleRig], object]:
                 audit_store=rig.audit,
                 enforce_policy_manager=policy_manager_enforcer(_roles()),
                 submitter=rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         return approve_policy(
             actor=_MANAGER,
@@ -282,6 +287,7 @@ def _transition(action: str) -> Callable[[LifecycleRig], object]:
             audit_store=rig.audit,
             enforce_policy_manager=policy_manager_enforcer(_roles()),
             submitter=rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     return _run
@@ -298,6 +304,7 @@ def _edit(kind: str) -> Callable[[LifecycleRig], object]:
                 graph=graph,
                 access_role_store=roles,
                 submitter=rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         if kind == "update-standard":
             return update_standard_draft(
@@ -307,6 +314,7 @@ def _edit(kind: str) -> Callable[[LifecycleRig], object]:
                 graph=graph,
                 access_role_store=roles,
                 submitter=rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         if kind == "update-control":
             return update_control_draft(
@@ -316,6 +324,7 @@ def _edit(kind: str) -> Callable[[LifecycleRig], object]:
                 graph=graph,
                 access_role_store=roles,
                 submitter=rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         if kind == "add-standard":
             return add_standard_to_draft(
@@ -326,6 +335,7 @@ def _edit(kind: str) -> Callable[[LifecycleRig], object]:
                 graph=graph,
                 access_role_store=roles,
                 submitter=rig.gateway,
+                graph_name=POLICY_SYSTEM,
             )
         return add_control_to_draft(
             actor=_OWNER,
@@ -336,6 +346,7 @@ def _edit(kind: str) -> Callable[[LifecycleRig], object]:
             graph=graph,
             access_role_store=roles,
             submitter=rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     return _run
@@ -346,6 +357,7 @@ def _backfill(rig: LifecycleRig) -> object:
         policy_id="pol_x",
         graph=rig.read,
         submitter_source=lambda: rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 

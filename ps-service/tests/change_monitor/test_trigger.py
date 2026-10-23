@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from change_monitor._fakes import FakeAdapter, MakeEmitter, ReadLines
-from change_monitor._gateway_fakes import RigRunner
+from change_monitor._gateway_fakes import POLICY_SYSTEM, RigRunner
 from ps_service.change_monitor.errors import (
     ChangeMonitorStateError,
     NationalTranspositionNotSupportedError,
@@ -109,6 +109,7 @@ def _trigger(
         adapter=adapter or FakeAdapter({_IDENTIFIER: _structure()}),
         graph=rig.read_native(),
         submitter=rig.rig.gateway,
+        single_tenant_graph_name=POLICY_SYSTEM,
         audit_anchor=lambda: audit_event_id,
         emitter=emitter,  # pyright: ignore[reportArgumentType]
         run_id=run_id,

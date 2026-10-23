@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 import redis.exceptions
 
-from policy_lifecycle._gateway_fakes import SeedControl, SeedStandard
+from policy_lifecycle._gateway_fakes import POLICY_SYSTEM, SeedControl, SeedStandard
 from ps_service.domain_mapper.identity import control_id, standard_id
 from ps_service.policy_lifecycle.errors import (
     PolicyLifecycleGraphUnavailableError,
@@ -65,6 +65,7 @@ def _create(
         graph=rig.read,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -268,6 +269,7 @@ def test_an_audit_store_that_cannot_report_the_event_id_is_a_wiring_error(
             graph=lifecycle_rig.read,
             audit_store=_PlainStore(),  # pyright: ignore[reportArgumentType]
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.logged_groups == 0

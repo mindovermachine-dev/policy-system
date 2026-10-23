@@ -139,6 +139,7 @@ def ingest_env(
         monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
     if not os.environ.get("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", str(ROLE_REVIEW_THRESHOLD))
+    # Driven end to end through the real `load_config()`: the env is the graph name's only input.
     monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)
     # Built after the env above is set: layers the provisioned state Postgres (graph log and audit
     # trail) and the local-test auth bypass over `load_config()`.
@@ -290,7 +291,12 @@ def test_reingest_after_approval_leaves_the_approved_tree_untouched(
     audit = PsycopgAuditStore(config)
     submitter = lifecycle_submitter(build_default_graph_write_gateway(config))
     propose_policy(
-        actor=_OWNER, policy_id=target, graph=graph, audit_store=audit, submitter=submitter
+        actor=_OWNER,
+        policy_id=target,
+        graph=graph,
+        audit_store=audit,
+        submitter=submitter,
+        graph_name=graph_name,
     )
     approve_policy(
         actor=_MANAGER,
@@ -299,6 +305,7 @@ def test_reingest_after_approval_leaves_the_approved_tree_untouched(
         audit_store=audit,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=submitter,
+        graph_name=graph_name,
     )
     before = _governance_state(graph)
 

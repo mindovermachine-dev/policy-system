@@ -23,9 +23,9 @@ import, so importing ``ps_service.main`` does not load that component at module 
    server. An empty result also raises ``ExportInstrumentNotFoundError`` (the key exists but
    this ``instrument_id`` was never written to it).
 5. Refuses the export with :class:`~ps_service.api.errors.ExportUnresolvedNearMissesError` when
-   an unresolved ``PendingReview`` in ``policy_system`` names a node of the instrument's baseline
-   graph, of any registered reviewable kind (``ps_service.export.near_miss_gate``). A review whose
-   kind has no registered spec refuses the export with
+   an unresolved ``PendingReview`` in the single-tenant graph names a node of the instrument's
+   baseline graph, of any registered reviewable kind (``ps_service.export.near_miss_gate``). A
+   review whose kind has no registered spec refuses the export with
    :class:`~ps_service.api.errors.ReviewKindUnsupportedError`, naming the kind. A failure to read
    either graph propagates, so the export fails closed. This runs before step 6, so a refusal
    writes no audit row, no embedding backfill and no file.
@@ -175,9 +175,10 @@ class ExportDependencies:
             delegate's default.
         graph_write_access: Resolves the graph write gateway and system audit recorder for a
             ``ServiceConfig``; raises ``GraphWriteUnavailableError`` when none is installed.
-        open_single_tenant_graph: Opens the single-tenant ``policy_system`` graph on a connection;
-            the near-miss gate reads unresolved ``PendingReview`` nodes from it. Required, with no
-            default, so a test cannot silently open the real graph.
+        open_single_tenant_graph: Opens the named single-tenant graph on a connection; the
+            near-miss gate reads unresolved ``PendingReview`` nodes from it. The name is
+            ``ServiceConfig.falkordb_graph``. Required, with no default, so a test cannot silently
+            open the real graph.
     """
 
     open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
@@ -186,7 +187,7 @@ class ExportDependencies:
     export: ExportStage
     call_embedding: EmbeddingCaller | None
     graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
-    open_single_tenant_graph: Callable[[ReadOnlyDatabase], GraphHandle]
+    open_single_tenant_graph: Callable[[ReadOnlyDatabase, str], GraphHandle]
 
 
 # --- instrument_id -> short_name (no graph access) -------------------
@@ -495,9 +496,9 @@ def run_export(
         short_name=short_name, instrument_id=instrument_id, properties=properties
     )
 
-    # Export serializes the per-instrument graphs only, so a near miss recorded in `policy_system`
-    # would be lost from the artifact. Refuse before the audit row, the backfill and any file are
-    # written. A read failure propagates: the export fails closed.
+    # Export serializes the per-instrument graphs only, so a near miss recorded in the
+    # single-tenant graph would be lost from the artifact. Refuse before the audit row, the
+    # backfill and any file are written. A read failure propagates: the export fails closed.
     from ps_service.company_merge.errors import (  # noqa: PLC0415 -- function-local
         UnknownReviewKindError,
     )
@@ -507,7 +508,7 @@ def run_export(
 
     try:
         blocking_review_ids = unresolved_near_miss_review_ids(
-            baseline_graph, dependencies.open_single_tenant_graph(db)
+            baseline_graph, dependencies.open_single_tenant_graph(db, config.falkordb_graph)
         )
     except UnknownReviewKindError as exc:
         # The same expected-condition entry as a near-miss refusal, without a review count.
@@ -665,14 +666,12 @@ def _default_open_native_graph(db: ReadOnlyDatabase, short_name: str) -> _GraphQ
     return graph_query_handle(db, native_graph_name(short_name))
 
 
-def _default_open_single_tenant_graph(db: ReadOnlyDatabase) -> GraphHandle:
-    """Open the single-tenant ``policy_system`` graph, read-only, on ``db``.
-
-    The graph name is ``single_tenant_graph_name()`` (``PS_FALKORDB_GRAPH``, default
-    ``policy_system``): ``ServiceConfig`` has no graph-name field, a known configuration gap.
+def _default_open_single_tenant_graph(db: ReadOnlyDatabase, graph_name: str) -> GraphHandle:
+    """Open the single-tenant graph ``graph_name``, read-only, on ``db``.
 
     Args:
         db: The read-only FalkorDB connection.
+        graph_name: The single-tenant graph name (``ServiceConfig.falkordb_graph``).
 
     Returns:
         A read handle on the single-tenant graph.
@@ -682,10 +681,9 @@ def _default_open_single_tenant_graph(db: ReadOnlyDatabase) -> GraphHandle:
     """
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local
         select_graph,
-        single_tenant_graph_name,
     )
 
-    return select_graph(db, single_tenant_graph_name())
+    return select_graph(db, graph_name)
 
 
 def build_default_export_dependencies() -> ExportDependencies:

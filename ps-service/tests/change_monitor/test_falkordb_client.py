@@ -20,7 +20,6 @@ from ps_service.change_monitor.falkordb_client import (
     connect,
     connect_from_config,
     native_graph_name,
-    single_tenant_graph_name,
 )
 from ps_service.config import ServiceConfig, load_config
 from ps_service.dependency_health import FALKORDB, is_healthy
@@ -78,22 +77,6 @@ def test_check_connectivity_marks_falkordb_healthy_on_success() -> None:
     check_connectivity(probe, host="127.0.0.1", port=6379)
 
     assert is_healthy(FALKORDB) is True
-
-
-def test_single_tenant_graph_name_defaults_to_policy_system_when_env_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("PS_FALKORDB_GRAPH", raising=False)
-
-    assert single_tenant_graph_name() == "policy_system"
-
-
-def test_single_tenant_graph_name_uses_env_override_when_set(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PS_FALKORDB_GRAPH", "custom_name")
-
-    assert single_tenant_graph_name() == "custom_name"
 
 
 @pytest.mark.parametrize(

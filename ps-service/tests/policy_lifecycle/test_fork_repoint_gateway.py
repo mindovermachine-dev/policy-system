@@ -19,6 +19,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 )
 
 from policy_lifecycle._gateway_fakes import (
+    POLICY_SYSTEM,
     FlippingRead,
     PolicyReadGraph,
     SeedStandard,
@@ -82,6 +83,7 @@ def _approve(
         audit_store=rig.audit,
         enforce_policy_manager=policy_manager_enforcer(roles),
         submitter=rig.gateway if submitter is None else submitter,
+        graph_name=POLICY_SYSTEM,
     )
 
 

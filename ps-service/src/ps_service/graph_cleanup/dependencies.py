@@ -53,7 +53,7 @@ class GraphCleanupDependencies:
     runs, not at construction.
 
     Attributes:
-        open_single_tenant_graph: Opens the `policy_system` graph for reads; required.
+        open_single_tenant_graph: Opens the configured single-tenant graph for reads; required.
         audit_store: Builds the audit store that records each approved action and its outcome.
         access_role_store: Builds the store used to check the caller's AccessRole.
         graph_write_gateway: Builds the gateway handle where every graph write goes (one
@@ -68,14 +68,13 @@ class GraphCleanupDependencies:
 
 
 def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
-    """Open the single-tenant (`policy_system`) graph; each component keeps its own opener."""
+    """Open the graph `config.falkordb_graph` names; each component keeps its own opener."""
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
         select_graph,
-        single_tenant_graph_name,
     )
 
-    return select_graph(connect_from_config(config), single_tenant_graph_name())
+    return select_graph(connect_from_config(config), config.falkordb_graph)
 
 
 def build_default_graph_cleanup_graph_opener() -> Callable[[ServiceConfig], GraphHandle]:
@@ -83,7 +82,8 @@ def build_default_graph_cleanup_graph_opener() -> Callable[[ServiceConfig], Grap
 
     Returns:
         A factory that, given a `ServiceConfig`, connects to FalkorDB and returns a handle on
-        the `policy_system` graph. Tests substitute this function to avoid a live connection.
+        the graph `config.falkordb_graph` names. Tests substitute this function to avoid a live
+        connection.
     """
     return _open_single_tenant_graph
 

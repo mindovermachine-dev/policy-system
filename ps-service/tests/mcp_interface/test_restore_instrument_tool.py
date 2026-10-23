@@ -71,6 +71,7 @@ from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
+from company_merge._gateway_fakes import POLICY_SYSTEM
 from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 from fastapi.testclient import TestClient
 from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -86,7 +87,6 @@ from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.models import AccessRole
-from ps_service.company_merge.falkordb_client import single_tenant_graph_name
 from ps_service.company_merge.graph_writer import ANY_LABEL_EXISTENCE_READ
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.curated_source.artifact_client import fetch_artifact
@@ -633,15 +633,13 @@ def _default_open_db_stub(config: ServiceConfig) -> FalkorDB:
     scenario that reaches this far now drives the REAL `stage_graph`/`stage_and_finalize_
     policy_system_leg`/`raw_connection` -- a real `GRAPH.COPY` snapshot and a real
     WATCH-guarded `RENAME` finalize against this in-memory graph-key registry, not a scripted
-    no-op. `single_tenant_graph_name()` (the same real accessor
-    `restore_orchestration._default_single_tenant_graph_name` resolves through, since
-    `CatalogRestoreInfra` deliberately excludes that field from substitution) seeds the fake
-    under the exact key name the real orchestration will look it up by. A fresh instance is
+    no-op. The fake is seeded under `POLICY_SYSTEM`, the key name the
+    default configuration makes the real orchestration look it up by. A fresh instance is
     built per call, matching the once-per-tool-call cardinality `dependencies.open_db(config)`
     is actually invoked at.
     """
     del config
-    return cast("FalkorDB", _FakeStagingFalkorDB(single_tenant_graph_name()))
+    return cast("FalkorDB", _FakeStagingFalkorDB(POLICY_SYSTEM))
 
 
 def _use_fake_restore_infra(
@@ -1214,7 +1212,7 @@ def _restored_policy_owner() -> tuple[object, object]:
     Read from the process gateway's `policy_system` graph (what the restore's group applied), not
     from any statement text.
     """
-    graph = installed_process_gateway().rig.graphs.open(single_tenant_graph_name())
+    graph = installed_process_gateway().rig.graphs.open(POLICY_SYSTEM)
     policies = [props for (label, _node_id), props in graph.nodes.items() if label == "Policy"]
     assert len(policies) == 1
     return policies[0]["owner_subject"], policies[0]["owner_issuer"]

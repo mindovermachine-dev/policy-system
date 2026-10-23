@@ -21,6 +21,7 @@ from ps_service.api.errors import (
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.near_miss_review_orchestration import (
     NearMissReviewDependencies,
+    build_default_near_miss_review_graph_opener,
     run_resolve_near_miss,
 )
 from ps_service.audit import AuditContext, AuditPostgresUnavailableError, AuditTrailUnavailableError
@@ -99,11 +100,12 @@ def _run(
     store: InMemoryAuditStore,
     deps: NearMissReviewDependencies,
     decision: Decision = "keep-separate",
+    config: ServiceConfig | None = None,
 ) -> object:
     return run_resolve_near_miss(
         "review_aaa",
         decision,
-        config=_config(),
+        config=config if config is not None else _config(),
         dependencies=deps,
         audit=AuditContext(_ACTOR, store),
     )
@@ -317,3 +319,46 @@ def test_a_failed_resolution_row_does_not_change_the_group_anchor() -> None:
 
     assert [t.audit_event_id for t in targets] == [store.event_ids[0]]
     assert len(store.event_ids) == 2  # opening row and failed row, each with its own id
+
+
+def test_keep_separate_resolves_on_the_configured_graph(
+    process_gateway: ProcessGateway,
+) -> None:
+    """The resolution's write target names the graph the passed configuration selects."""
+    store = InMemoryAuditStore(event_id_sink=process_gateway.rig.store.audit_rows.add)
+    targets: list[GraphWriteTarget] = []
+
+    _run(
+        store,
+        _deps(store, targets=targets),
+        config=replace(_config(), falkordb_graph="custom_graph"),
+    )
+
+    (target,) = targets
+    assert target.graph_name == "custom_graph"
+
+
+class _RecordingDatabase:
+    """A database whose `select_graph` records the name it was asked for."""
+
+    def __init__(self) -> None:
+        self.selected: list[str] = []
+
+    def connect(self, _config: ServiceConfig) -> _RecordingDatabase:
+        return self
+
+    def select_graph(self, name: str) -> object:
+        self.selected.append(name)
+        return object()
+
+
+def test_the_default_opener_selects_the_configured_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    database = _RecordingDatabase()
+    monkeypatch.setattr(
+        "ps_service.company_merge.falkordb_client.connect_from_config",
+        database.connect,
+    )
+
+    build_default_near_miss_review_graph_opener()(replace(_config(), falkordb_graph="custom_graph"))
+
+    assert database.selected == ["custom_graph"]

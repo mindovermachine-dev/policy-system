@@ -33,7 +33,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 )
 from pydantic import ValidationError
 
-from policy_lifecycle._gateway_fakes import policy_manager_enforcer
+from policy_lifecycle._gateway_fakes import POLICY_SYSTEM, policy_manager_enforcer
 from ps_service.authz.models import AccessRole
 from ps_service.policy_lifecycle.audit_actions import PolicyTransitionDetails
 from ps_service.policy_lifecycle.errors import (
@@ -81,6 +81,7 @@ def test_access_denied_reason_code_is_identical_across_propose_and_revert(
             graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=propose_audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     revert_audit = InMemoryAuditStore()
@@ -91,6 +92,7 @@ def test_access_denied_reason_code_is_identical_across_propose_and_revert(
             graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=revert_audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     propose_reason = propose_audit.rows[0].details["reason_code"]
@@ -111,6 +113,7 @@ def test_self_approval_blocked_reason_code_is_identical_across_approve_and_rejec
             audit_store=approve_audit,
             enforce_policy_manager=policy_manager_enforcer(_manager_store(subject_pair=_OWNER)),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     reject_audit = InMemoryAuditStore()
@@ -122,6 +125,7 @@ def test_self_approval_blocked_reason_code_is_identical_across_approve_and_rejec
             audit_store=reject_audit,
             enforce_policy_manager=policy_manager_enforcer(_manager_store(subject_pair=_OWNER)),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     approve_reason = approve_audit.rows[0].details["reason_code"]
@@ -141,6 +145,7 @@ def test_invalid_status_reason_code_is_identical_across_all_four_transitions(
             graph=_tree(lifecycle_rig, status="proposed", owner=_OWNER),
             audit_store=propose_audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     revert_audit = InMemoryAuditStore()
@@ -151,6 +156,7 @@ def test_invalid_status_reason_code_is_identical_across_all_four_transitions(
             graph=_tree(lifecycle_rig, status="draft", owner=_OWNER),
             audit_store=revert_audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     approve_audit = InMemoryAuditStore()
@@ -162,6 +168,7 @@ def test_invalid_status_reason_code_is_identical_across_all_four_transitions(
             audit_store=approve_audit,
             enforce_policy_manager=policy_manager_enforcer(_manager_store()),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     reject_audit = InMemoryAuditStore()
@@ -173,6 +180,7 @@ def test_invalid_status_reason_code_is_identical_across_all_four_transitions(
             audit_store=reject_audit,
             enforce_policy_manager=policy_manager_enforcer(_manager_store()),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     reasons = {

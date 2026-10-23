@@ -56,7 +56,6 @@ from ps_service.policy_lifecycle.errors import (
 )
 from ps_service.policy_lifecycle.graph_submission import (
     GraphWriteTarget,
-    single_tenant_graph_name,
 )
 from ps_service.policy_lifecycle.rules import (
     PolicyLifecycleRuleContext,
@@ -457,6 +456,7 @@ def _write_new_policy(
     submitter: LifecycleSubmitter,
     actor: tuple[str, str],
     new: _NewPolicy,
+    graph_name: str,
 ) -> bool:
     """Record `applied`, write the new Policy, and record `failed` if the write fails.
 
@@ -470,6 +470,7 @@ def _write_new_policy(
         submitter: The Graph Write Gateway the group is submitted through.
         actor: The creating caller's `(sub, iss)` identity; becomes the owner.
         new: The Policy to write.
+        graph_name: The graph the group is written to.
 
     Returns:
         `True` when the Policy was written; `False` only when a claimed Capability was governed
@@ -491,7 +492,7 @@ def _write_new_policy(
             resource_id=new.policy_id,
             details=new.details,
         )
-        target = GraphWriteTarget(submitter, single_tenant_graph_name())
+        target = GraphWriteTarget(submitter, graph_name)
         if new.capability_ids:
             return graph_writer.create_claimed_policy_draft(
                 graph,
@@ -534,7 +535,7 @@ def _write_new_policy(
     return True
 
 
-def create_policy_draft(
+def create_policy_draft(  # noqa: PLR0913 -- one create's identity, request, handles and write target; no natural grouping
     *,
     actor: tuple[str, str],
     title: str,
@@ -544,6 +545,7 @@ def create_policy_draft(
     graph: GraphHandle,
     audit_store: AuditStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> PolicyDraftResult:
     """Create a draft Policy owned by `actor`, or a successor draft forked from an approved Policy.
 
@@ -579,6 +581,7 @@ def create_policy_draft(
         audit_store: Where `policy.create_draft` audit events are recorded as standalone rows.
         submitter: The Graph Write Gateway used for the Policy write and for backfilling a legacy
             prior tree; the backfill only writes when some node of that tree needs it.
+        graph_name: The single-tenant graph the Policy is written to.
 
     Returns:
         A `PolicyDraftResult` with the new Policy's id, version, owner, and the ids of every
@@ -613,7 +616,7 @@ def create_policy_draft(
     new_version = "1"
     if supersedes_policy_id is not None:
         prior_record = _read_transition_target(
-            graph, supersedes_policy_id, submitter_source=_eager(submitter)
+            graph, supersedes_policy_id, submitter_source=_eager(submitter), graph_name=graph_name
         )
         if prior_record.status != "approved":
             raise PolicySupersedePriorNotApprovedError(supersedes_policy_id, prior_record.status)
@@ -679,6 +682,7 @@ def create_policy_draft(
             capability_ids=claimed_capability_ids,
             details=details,
         ),
+        graph_name=graph_name,
     )
 
     if not created:
@@ -812,6 +816,7 @@ def get_policy(
     policy_id: str,
     graph: GraphHandle,
     submitter_source: Callable[[], LifecycleSubmitter],
+    graph_name: str,
 ) -> PolicyView:
     """Read a Policy and its full Standard and Control tree.
 
@@ -828,6 +833,7 @@ def get_policy(
         graph: The single-tenant policy graph handle.
         submitter_source: Returns the Graph Write Gateway for the backfill; called only when some
             node of the tree needs a fill, so reading an already backfilled Policy needs no gateway.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `PolicyView` of the Policy and its tree.
@@ -842,7 +848,9 @@ def get_policy(
         May backfill missing `version` and `status` properties through the gateway. Otherwise
         read-only.
     """
-    graph_writer.backfill_governance_status(graph, policy_id, submitter_source=submitter_source)
+    graph_writer.backfill_governance_status(
+        graph, policy_id, submitter_source=submitter_source, graph_name=graph_name
+    )
     record = graph_writer.read_policy_tree(graph, policy_id)
     if record is None:
         raise PolicyNotFoundError(policy_id)
@@ -873,6 +881,7 @@ def propose_policy(
     graph: GraphHandle,
     audit_store: AuditStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> PolicyProposeResult:
     """Propose a draft Policy for approval, moving its whole tree to `status="proposed"`.
 
@@ -889,6 +898,7 @@ def propose_policy(
         audit_store: Where `policy.propose` audit events are recorded as standalone rows.
         submitter: The Graph Write Gateway used for the status cascade and for backfilling a
             legacy tree; the backfill only writes when some node needs it.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `PolicyProposeResult` with the Policy's id, the new status and the ids of its tree.
@@ -909,7 +919,9 @@ def propose_policy(
         On success sets `status` to `"proposed"` on the Policy and every Standard and Control as one
         gateway group linked to the `applied` event. May backfill missing `version` and `status`.
     """
-    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
+    record = _read_transition_target(
+        graph, policy_id, submitter_source=_eager(submitter), graph_name=graph_name
+    )
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -951,7 +963,7 @@ def propose_policy(
         gates=gates,
         graph=graph,
         audit_store=audit_store,
-        submitter=submitter,
+        target=GraphWriteTarget(submitter, graph_name),
     )
 
     return PolicyProposeResult(
@@ -993,7 +1005,7 @@ class _Repoint:
 
 def _write_cascade(
     graph: GraphHandle,
-    submitter: LifecycleSubmitter,
+    target: GraphWriteTarget,
     *,
     policy_id: str,
     target_status: str,
@@ -1004,7 +1016,7 @@ def _write_cascade(
 
     Args:
         graph: The single-tenant policy graph handle.
-        submitter: The Graph Write Gateway the group is submitted through.
+        target: The gateway and graph the group is submitted to.
         policy_id: Id of the Policy whose tree gets `target_status`.
         target_status: The status written to the Policy and its Standards and Controls.
         repoint: The Capability move to include, or `None` for a plain cascade.
@@ -1019,7 +1031,6 @@ def _write_cascade(
             (`FalkorDB write failed: ...`).
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
     """
-    target = GraphWriteTarget(submitter, single_tenant_graph_name())
     if repoint is None:
         graph_writer.cascade_status(
             graph,
@@ -1048,7 +1059,7 @@ def _cascade_with_audit(
     affected_node_ids: tuple[str, ...],
     graph: GraphHandle,
     audit_store: AuditStore,
-    submitter: LifecycleSubmitter,
+    target: GraphWriteTarget,
     repoint: _Repoint | None = None,
 ) -> None:
     """Run the audited cascade tail: `applied` event, status cascade, `failed` event on failure.
@@ -1067,7 +1078,7 @@ def _cascade_with_audit(
         affected_node_ids: Ids of every node in the tree, recorded on the events.
         graph: The single-tenant policy graph handle.
         audit_store: Where the events are recorded.
-        submitter: The Graph Write Gateway the group is submitted through.
+        target: The gateway and graph the group is submitted to.
         repoint: The Capability move to include, or `None` (default) for a plain cascade.
 
     Raises:
@@ -1115,7 +1126,7 @@ def _cascade_with_audit(
     try:
         moved = _write_cascade(
             graph,
-            submitter,
+            target,
             policy_id=policy_id,
             target_status=spec.target_status,
             repoint=repoint,
@@ -1145,7 +1156,11 @@ def _eager(submitter: LifecycleSubmitter) -> Callable[[], LifecycleSubmitter]:
 
 
 def _read_transition_target(
-    graph: GraphHandle, policy_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
+    graph: GraphHandle,
+    policy_id: str,
+    *,
+    submitter_source: Callable[[], LifecycleSubmitter],
+    graph_name: str,
 ) -> graph_writer.PolicyRecord:
     """Backfill, read and return the Policy tree a lifecycle action operates on.
 
@@ -1158,6 +1173,7 @@ def _read_transition_target(
         graph: The single-tenant policy graph handle.
         policy_id: Id of the Policy to read.
         submitter_source: Returns the gateway for the backfill; called only when a fill is needed.
+        graph_name: The graph a backfill write goes to.
 
     Returns:
         The Policy's `PolicyRecord`, with `version` and `status` populated.
@@ -1167,7 +1183,9 @@ def _read_transition_target(
         PolicyLifecycleGraphUnavailableError: a needed backfill write failed.
         redis.exceptions.RedisError: a graph read failed (propagated unwrapped).
     """
-    graph_writer.backfill_governance_status(graph, policy_id, submitter_source=submitter_source)
+    graph_writer.backfill_governance_status(
+        graph, policy_id, submitter_source=submitter_source, graph_name=graph_name
+    )
     record = graph_writer.read_policy_tree(graph, policy_id)
     if record is None:
         raise PolicyNotFoundError(policy_id)
@@ -1217,7 +1235,7 @@ def _apply_transition(
     gates: Sequence[_TransitionGate],
     graph: GraphHandle,
     audit_store: AuditStore,
-    submitter: LifecycleSubmitter,
+    target: GraphWriteTarget,
 ) -> None:
     """Check the gates, then run the audited cascade.
 
@@ -1229,7 +1247,7 @@ def _apply_transition(
         gates: The preconditions, evaluated in order.
         graph: The single-tenant policy graph handle.
         audit_store: Where the audit events are recorded.
-        submitter: The Graph Write Gateway the cascade is submitted through.
+        target: The gateway and graph the cascade is submitted to.
 
     Raises:
         Exception: the error of the first gate that is not allowed, after its `rejected` event
@@ -1247,7 +1265,7 @@ def _apply_transition(
         affected_node_ids=affected_node_ids,
         graph=graph,
         audit_store=audit_store,
-        submitter=submitter,
+        target=target,
     )
 
 
@@ -1353,6 +1371,7 @@ def approve_policy(
     audit_store: AuditStore,
     enforce_policy_manager: Callable[[tuple[str, str]], None],
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> PolicyApproveResult:
     """Approve a proposed Policy, moving its whole tree to `status="approved"`.
 
@@ -1383,6 +1402,7 @@ def approve_policy(
             The caller supplies it, so this service builds no role store or audit context.
         submitter: The Graph Write Gateway used for the cascades and for backfilling a legacy
             tree; the backfill only writes when some node needs it.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `PolicyApproveResult` with the new status, the tree's ids, the auto-deprecated prior's id
@@ -1411,7 +1431,9 @@ def approve_policy(
         (and the Capability move for a fork) as one gateway group per transition. May backfill
         missing `version` and `status`.
     """
-    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
+    record = _read_transition_target(
+        graph, policy_id, submitter_source=_eager(submitter), graph_name=graph_name
+    )
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -1450,7 +1472,7 @@ def approve_policy(
         affected_node_ids=affected_node_ids,
         graph=graph,
         audit_store=audit_store,
-        submitter=submitter,
+        target=GraphWriteTarget(submitter, graph_name),
         repoint=repoint,
     )
 
@@ -1470,7 +1492,7 @@ def approve_policy(
                 affected_node_ids=_tree_node_ids(prior_record),
                 graph=graph,
                 audit_store=audit_store,
-                submitter=submitter,
+                target=GraphWriteTarget(submitter, graph_name),
             )
             auto_deprecated_policy_id = prior_id
 
@@ -1511,6 +1533,7 @@ def reject_policy(
     audit_store: AuditStore,
     enforce_policy_manager: Callable[[tuple[str, str]], None],
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> PolicyRejectResult:
     """Reject a proposed Policy, returning its whole tree to `status="draft"`.
 
@@ -1535,6 +1558,7 @@ def reject_policy(
             The caller supplies it, so this service builds no role store or audit context.
         submitter: The Graph Write Gateway used for the cascade and for backfilling a legacy tree;
             the backfill only writes when some node needs it.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `PolicyRejectResult` with the Policy's id, the new status and the ids of its tree.
@@ -1558,7 +1582,9 @@ def reject_policy(
         On success sets `status` to `"draft"` on the Policy and every Standard and Control as one
         gateway group. May backfill missing `version` and `status`.
     """
-    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
+    record = _read_transition_target(
+        graph, policy_id, submitter_source=_eager(submitter), graph_name=graph_name
+    )
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -1595,7 +1621,7 @@ def reject_policy(
         gates=gates,
         graph=graph,
         audit_store=audit_store,
-        submitter=submitter,
+        target=GraphWriteTarget(submitter, graph_name),
     )
 
     return PolicyRejectResult(
@@ -1632,6 +1658,7 @@ def revert_policy_to_draft(
     graph: GraphHandle,
     audit_store: AuditStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> PolicyRevertResult:
     """Revert a proposed Policy to `status="draft"`, moving its whole tree back to draft.
 
@@ -1650,6 +1677,7 @@ def revert_policy_to_draft(
         audit_store: Where `policy.revert` events are recorded as standalone rows.
         submitter: The Graph Write Gateway used for the cascade and for backfilling a legacy tree;
             the backfill only writes when some node needs it.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `PolicyRevertResult` with the Policy's id, the new status and the ids of its tree.
@@ -1670,7 +1698,9 @@ def revert_policy_to_draft(
         On success sets `status` to `"draft"` on the Policy and every Standard and Control as one
         gateway group. May backfill missing `version` and `status`.
     """
-    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
+    record = _read_transition_target(
+        graph, policy_id, submitter_source=_eager(submitter), graph_name=graph_name
+    )
 
     owner = (record.owner_subject, record.owner_issuer)
     current_status = cast("PolicyStatus", record.status)
@@ -1703,7 +1733,7 @@ def revert_policy_to_draft(
         gates=gates,
         graph=graph,
         audit_store=audit_store,
-        submitter=submitter,
+        target=GraphWriteTarget(submitter, graph_name),
     )
 
     return PolicyRevertResult(
@@ -1766,6 +1796,7 @@ def update_policy_draft(
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> PolicyDraftUpdateResult:
     """Patch a subset of a draft Policy's own content fields.
 
@@ -1783,6 +1814,7 @@ def update_policy_draft(
             `actor` is not the owner.
         submitter: The Graph Write Gateway the patch is submitted through, also used to backfill a
             legacy tree if needed.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `PolicyDraftUpdateResult` with the Policy id and the sorted names of the supplied fields.
@@ -1802,7 +1834,9 @@ def update_policy_draft(
         Writes the patch as one gateway group with no audit link; a patch that changes nothing logs
         nothing. May backfill missing `version` and `status`.
     """
-    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
+    record = _read_transition_target(
+        graph, policy_id, submitter_source=_eager(submitter), graph_name=graph_name
+    )
     context = PolicyLifecycleRuleContext(
         actor=actor,
         owner=(record.owner_subject, record.owner_issuer),
@@ -1811,7 +1845,7 @@ def update_policy_draft(
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
     graph_writer.update_policy_fields(
-        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        GraphWriteTarget(submitter, graph_name),
         policy_id=policy_id,
         properties=fields,
     )
@@ -1844,6 +1878,7 @@ def add_standard_to_draft(
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> StandardDraftResult:
     """Add a new Standard under a draft Policy.
 
@@ -1862,6 +1897,7 @@ def add_standard_to_draft(
             `actor` is not the Policy's owner.
         submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
             legacy tree if needed.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `StandardDraftResult` with the new Standard's id (usable in the next call), its parent
@@ -1882,7 +1918,9 @@ def add_standard_to_draft(
         Writes the Standard and its link to the Policy as one gateway group with no audit link.
         May backfill missing `version` and `status`.
     """
-    record = _read_transition_target(graph, policy_id, submitter_source=_eager(submitter))
+    record = _read_transition_target(
+        graph, policy_id, submitter_source=_eager(submitter), graph_name=graph_name
+    )
     context = PolicyLifecycleRuleContext(
         actor=actor,
         owner=(record.owner_subject, record.owner_issuer),
@@ -1892,7 +1930,7 @@ def add_standard_to_draft(
     _authorize_draft_edit(context, access_role_store=access_role_store)
     new_standard_id = standard_id(policy_id, title)
     graph_writer.add_standard_to_policy(
-        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        GraphWriteTarget(submitter, graph_name),
         policy_id=policy_id,
         standard_id=new_standard_id,
         title=title,
@@ -1904,7 +1942,11 @@ def add_standard_to_draft(
 
 
 def _read_standard_with_parent_backfilled(
-    graph: GraphHandle, standard_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
+    graph: GraphHandle,
+    standard_id: str,
+    *,
+    submitter_source: Callable[[], LifecycleSubmitter],
+    graph_name: str,
 ) -> graph_writer.StandardWithParent:
     """Read a Standard with its parent Policy's owner and status, backfilling first.
 
@@ -1917,6 +1959,7 @@ def _read_standard_with_parent_backfilled(
         graph: The single-tenant policy graph handle.
         standard_id: Id of the Standard to read.
         submitter_source: Returns the gateway for the backfill; called only when a fill is needed.
+        graph_name: The graph a backfill write goes to.
 
     Returns:
         The re-read `StandardWithParent` row, after the backfill.
@@ -1929,7 +1972,9 @@ def _read_standard_with_parent_backfilled(
     row = graph_writer.find_standard_with_parent(graph, standard_id)
     if row is None:
         raise PolicyStandardNotFoundError(standard_id)
-    graph_writer.backfill_governance_status(graph, row.policy_id, submitter_source=submitter_source)
+    graph_writer.backfill_governance_status(
+        graph, row.policy_id, submitter_source=submitter_source, graph_name=graph_name
+    )
     # Node cannot vanish between these two reads in this service's own
     # single-request flow.
     refreshed = graph_writer.find_standard_with_parent(graph, standard_id)
@@ -1946,6 +1991,7 @@ def update_standard_draft(
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> StandardDraftResult:
     """Patch a subset of a draft Standard's own content fields.
 
@@ -1964,6 +2010,7 @@ def update_standard_draft(
             `actor` is not the parent Policy's owner.
         submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
             legacy tree if needed.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `StandardDraftResult` with the Standard's id, parent Policy id and title, and status
@@ -1985,7 +2032,7 @@ def update_standard_draft(
         and `status`.
     """
     row = _read_standard_with_parent_backfilled(
-        graph, standard_id, submitter_source=_eager(submitter)
+        graph, standard_id, submitter_source=_eager(submitter), graph_name=graph_name
     )
     context = PolicyLifecycleRuleContext(
         actor=actor,
@@ -1995,7 +2042,7 @@ def update_standard_draft(
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
     graph_writer.update_standard_fields(
-        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        GraphWriteTarget(submitter, graph_name),
         standard_id=standard_id,
         properties=fields,
     )
@@ -2023,7 +2070,7 @@ class ControlDraftResult:
     status: Literal["draft"]
 
 
-def add_control_to_draft(
+def add_control_to_draft(  # noqa: PLR0913 -- one add's identity, content, handles and write target; no natural grouping
     *,
     actor: tuple[str, str],
     standard_id: str,
@@ -2033,6 +2080,7 @@ def add_control_to_draft(
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> ControlDraftResult:
     """Add a new Control under a draft Standard.
 
@@ -2055,6 +2103,7 @@ def add_control_to_draft(
             `actor` is not the root Policy's owner.
         submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
             legacy tree if needed.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `ControlDraftResult` with the new Control's id (usable in the next call), its parent
@@ -2076,7 +2125,7 @@ def add_control_to_draft(
         May backfill missing `version` and `status`.
     """
     row = _read_standard_with_parent_backfilled(
-        graph, standard_id, submitter_source=_eager(submitter)
+        graph, standard_id, submitter_source=_eager(submitter), graph_name=graph_name
     )
     context = PolicyLifecycleRuleContext(
         actor=actor,
@@ -2087,7 +2136,7 @@ def add_control_to_draft(
     _authorize_draft_edit(context, access_role_store=access_role_store)
     new_control_id = control_id(standard_id, title)
     graph_writer.add_control_to_standard(
-        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        GraphWriteTarget(submitter, graph_name),
         standard_id=standard_id,
         control_id=new_control_id,
         title=title,
@@ -2104,7 +2153,11 @@ def add_control_to_draft(
 
 
 def _read_control_with_parent_backfilled(
-    graph: GraphHandle, control_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
+    graph: GraphHandle,
+    control_id: str,
+    *,
+    submitter_source: Callable[[], LifecycleSubmitter],
+    graph_name: str,
 ) -> graph_writer.ControlWithParent:
     """Read a Control with its parent Standard and root Policy, backfilling first.
 
@@ -2117,6 +2170,7 @@ def _read_control_with_parent_backfilled(
         graph: The single-tenant policy graph handle.
         control_id: Id of the Control to read.
         submitter_source: Returns the gateway for the backfill; called only when a fill is needed.
+        graph_name: The graph a backfill write goes to.
 
     Returns:
         The re-read `ControlWithParent` row, after the backfill.
@@ -2130,7 +2184,9 @@ def _read_control_with_parent_backfilled(
     row = graph_writer.find_control_with_parent(graph, control_id)
     if row is None:
         raise PolicyControlNotFoundError(control_id)
-    graph_writer.backfill_governance_status(graph, row.policy_id, submitter_source=submitter_source)
+    graph_writer.backfill_governance_status(
+        graph, row.policy_id, submitter_source=submitter_source, graph_name=graph_name
+    )
     # Node cannot vanish between these two reads in this service's own
     # single-request flow.
     refreshed = graph_writer.find_control_with_parent(graph, control_id)
@@ -2147,6 +2203,7 @@ def update_control_draft(
     graph: GraphHandle,
     access_role_store: AccessRoleStore,
     submitter: LifecycleSubmitter,
+    graph_name: str,
 ) -> ControlDraftResult:
     """Patch a subset of a draft Control's own content fields.
 
@@ -2166,6 +2223,7 @@ def update_control_draft(
             `actor` is not the root Policy's owner.
         submitter: The Graph Write Gateway the write is submitted through, also used to backfill a
             legacy tree if needed.
+        graph_name: The single-tenant graph the writes go to.
 
     Returns:
         A `ControlDraftResult` with the Control's id, parent Standard id, root Policy id and title,
@@ -2188,7 +2246,7 @@ def update_control_draft(
         and `status`.
     """
     row = _read_control_with_parent_backfilled(
-        graph, control_id, submitter_source=_eager(submitter)
+        graph, control_id, submitter_source=_eager(submitter), graph_name=graph_name
     )
     context = PolicyLifecycleRuleContext(
         actor=actor,
@@ -2198,7 +2256,7 @@ def update_control_draft(
     )
     _authorize_draft_edit(context, access_role_store=access_role_store)
     graph_writer.update_control_fields(
-        GraphWriteTarget(submitter, single_tenant_graph_name()),
+        GraphWriteTarget(submitter, graph_name),
         control_id=control_id,
         properties=fields,
     )

@@ -17,7 +17,7 @@ import pytest
 import redis.exceptions
 
 from change_monitor._fakes import FakeAdapter, ReadLines
-from change_monitor._gateway_fakes import RecordingSubmitter
+from change_monitor._gateway_fakes import POLICY_SYSTEM, RecordingSubmitter
 from change_monitor._legacy_reference import FROZEN_STATEMENTS
 from ps_service import dependency_health
 from ps_service.change_monitor.errors import ChangeMonitorStateError, SuccessionPersistenceError
@@ -125,6 +125,7 @@ def _trigger(
         adapter=FakeAdapter({_IDENTIFIER: _structure()}),
         graph=rig.read_native(allowed_legacy=allowed_legacy),
         submitter=submitter or rig.rig.gateway,
+        single_tenant_graph_name=POLICY_SYSTEM,
         audit_anchor=lambda: audit_event_id,
         emitter=emitter,  # pyright: ignore[reportArgumentType]
         run_pipeline=runner,

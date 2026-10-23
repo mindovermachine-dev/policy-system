@@ -187,7 +187,6 @@ def _catalog_deps(
             url=_SOURCE_URL, is_override=False
         ),
         open_db=lambda _config: cast("FalkorDB", _Db()),
-        single_tenant_graph_name=lambda _config: "policy_system",
         restore=delegate,
         graph_write_access=graph_write_access,
     )
@@ -423,7 +422,6 @@ def _upload_request(*, blob_b64: str | None = None) -> RestorationRequest:
 def _upload_deps(delegate: _Delegate) -> RestoreDependencies:
     return RestoreDependencies(
         open_db=lambda _config: cast("FalkorDB", _Db()),
-        single_tenant_graph_name=lambda _config: "policy_system",
         restore=delegate,
         graph_write_access=graph_write_access,
     )

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -44,10 +45,10 @@ from policy_lifecycle._gateway_fakes import (
 )
 
 from ps_service.authz.models import AccessRole
-from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
+from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfig
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server, tool_core
+from ps_service.mcp_interface import mcp_server, policy_lifecycle_tools, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
@@ -229,6 +230,18 @@ def _install_audit_store(monkeypatch: pytest.MonkeyPatch, store: _FakeAuditStore
     monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory)
 
 
+def _configure_graph_name(monkeypatch: pytest.MonkeyPatch, graph_name: str) -> None:
+    base_config = ServiceConfig(
+        host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
+    )
+    # detroit-exception: the config handed to the tool is the specified input (load_config)
+    monkeypatch.setattr(
+        policy_lifecycle_tools,
+        "load_config",
+        lambda: dataclasses.replace(base_config, falkordb_graph=graph_name),
+    )
+
+
 def _call_create_policy_draft(
     title: str = _TITLE, *, capability_ids: list[str] | None = None
 ) -> CallToolResult:
@@ -279,6 +292,22 @@ def test_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         "governed_capability_ids": [],
     }
     assert body["policy_id"].startswith("pol_data_protection_policy_")
+
+
+def test_create_policy_draft_writes_to_the_configured_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    _configure_graph_name(monkeypatch, "custom_graph")
+    _install_graph(monkeypatch, _FakeGraph())
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_create_policy_draft()
+
+    assert result.is_error is False
+    (group,) = installed_process_gateway().rig.store.groups
+    assert group.graph == "custom_graph"
 
 
 def test_duplicate_title_surfaces_as_its_own_distinct_error(
@@ -1044,7 +1073,10 @@ def test_get_policy_with_standards_and_controls_returns_full_nested_tree(
 
 
 def _install_rig_graph(
-    monkeypatch: pytest.MonkeyPatch, policy: _PolicyFixture | None
+    monkeypatch: pytest.MonkeyPatch,
+    policy: _PolicyFixture | None,
+    *,
+    graph_name: str = "policy_system",
 ) -> GatewayRig:
     """Seed `policy` (no children) into the process gateway rig's `policy_system` graph.
 
@@ -1053,7 +1085,7 @@ def _install_rig_graph(
     writes. The read handle is the lifecycle read double over it (it refuses a write statement).
     """
     rig = installed_process_gateway().rig
-    graph = rig.graphs.open("policy_system")
+    graph = rig.graphs.open(graph_name)
     if policy is not None:
         PolicyGraphSeeder(graph).seed_policy(
             policy.id,
@@ -1129,6 +1161,22 @@ def test_update_policy_draft_success_shape(monkeypatch: pytest.MonkeyPatch) -> N
     assert result.is_error is False
     body = json.loads(_text(result))
     assert body == {"policy_id": _EXISTING_POLICY_ID, "updated_fields": ["description"]}
+
+
+def test_update_policy_draft_writes_to_the_configured_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    _configure_graph_name(monkeypatch, "custom_graph")
+    rig = _install_rig_graph(monkeypatch, _draft_fixture(), graph_name="custom_graph")
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_update_policy_draft(fields={"description": "revised text"})
+
+    assert result.is_error is False
+    (group,) = rig.store.groups
+    assert group.graph == "custom_graph"
 
 
 def test_update_policy_draft_applies_only_supplied_fields_end_to_end(
@@ -2338,6 +2386,7 @@ def _install_fixture_rig(
     policy: _PolicyFixture | None,
     *,
     fork_of: tuple[str, tuple[str, ...]] | None = None,
+    graph_name: str = "policy_system",
 ) -> GatewayRig:
     """Seed `policy` (with its tree) into the process gateway rig and read through its double.
 
@@ -2346,7 +2395,7 @@ def _install_fixture_rig(
     Policy a fork of a `deprecated` prior (not auto-deprecated) that governs `capability_ids`.
     """
     rig = installed_process_gateway().rig
-    graph = rig.graphs.open("policy_system")
+    graph = rig.graphs.open(graph_name)
     seeder = PolicyGraphSeeder(graph)
     if policy is not None:
         seeder.seed_policy(
@@ -2568,6 +2617,23 @@ def test_approve_policy_tool_is_registered_and_callable(monkeypatch: pytest.Monk
         result = _call_approve_policy()
 
     assert result.is_error is False
+
+
+def test_approve_policy_cascades_on_the_configured_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    _configure_graph_name(monkeypatch, "custom_graph")
+    rig = _install_fixture_rig(monkeypatch, _approvable_fixture(), graph_name="custom_graph")
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+    _install_manager_role(monkeypatch)
+
+    with _verified_actor(sub=_MANAGER_SUBJECT):
+        result = _call_approve_policy()
+
+    assert result.is_error is False
+    (group,) = rig.store.groups
+    assert group.graph == "custom_graph"
 
 
 def test_approve_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:

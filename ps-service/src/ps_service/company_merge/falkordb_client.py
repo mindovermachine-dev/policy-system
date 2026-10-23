@@ -2,12 +2,8 @@
 
 Holds this component's own copy of the connection helpers in
 `ps_service.domain_mapper.falkordb_client`: the `GraphHandle` and `GraphQueryResult` protocols,
-`connect`, `connect_from_config`, `check_connectivity`, `select_graph`, and the graph-name
-accessor `single_tenant_graph_name`. The copy is deliberate; it is not a shared import.
-
-`single_tenant_graph_name()` follows the same `PS_FALKORDB_GRAPH` convention (default
-`"policy_system"`) as `ps_service.mcp_interface.tool_core`: Company Merge reads the one
-single-tenant graph that `mcp_interface` exposes for read-only Cypher.
+`connect`, `connect_from_config`, `check_connectivity` and `select_graph`. The copy is
+deliberate; it is not a shared import.
 
 The surface is read-only. Every Company Merge write is a Graph Write Gateway group
 (`graph_submission.submit_group`), and no write Cypher is handed to `GraphHandle.query`. The
@@ -18,7 +14,6 @@ driver.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Protocol
 
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
@@ -27,8 +22,6 @@ from ps_service.graph_gateway.read_only import ReadOnlyDatabase, open_read_only_
 
 if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
-
-_DEFAULT_SINGLE_TENANT_GRAPH_NAME = "policy_system"
 
 
 class GraphQueryResult(Protocol):
@@ -138,24 +131,10 @@ def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:
 
     Args:
         db: Read-only connection to select from.
-        name: Final graph name, such as `single_tenant_graph_name()` or a `{short}_baseline`
+        name: Final graph name, such as `ServiceConfig.falkordb_graph` or a `{short}_baseline`
             name built by the caller.
 
     Returns:
         A read-only handle on graph `name`.
     """
     return db.select_graph(name)
-
-
-def single_tenant_graph_name() -> str:
-    """Return the name of the company's merged single-tenant regulatory graph.
-
-    This is the one graph name shared across the system for read-only query access and for
-    the gateway's writes, and it follows the `DEFAULT_GRAPH` convention of
-    `ps_service.mcp_interface.tool_core`.
-
-    Returns:
-        The value of the `PS_FALKORDB_GRAPH` environment variable, or `"policy_system"` when
-        it is unset.
-    """
-    return os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_SINGLE_TENANT_GRAPH_NAME)

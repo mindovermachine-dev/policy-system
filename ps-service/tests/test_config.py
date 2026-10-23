@@ -280,6 +280,44 @@ def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_
         load_config()
 
 
+def test_load_config_with_no_ps_falkordb_graph_returns_policy_system(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_FALKORDB_GRAPH` set -> the single-tenant graph is `policy_system`."""
+    monkeypatch.delenv("PS_FALKORDB_GRAPH", raising=False)
+
+    assert load_config().falkordb_graph == "policy_system"
+
+
+def test_load_config_honors_ps_falkordb_graph_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_FALKORDB_GRAPH` override takes effect."""
+    monkeypatch.setenv("PS_FALKORDB_GRAPH", "custom_name")
+
+    assert load_config().falkordb_graph == "custom_name"
+
+
+@pytest.mark.parametrize("invalid_falkordb_graph", ["", "   ", "\t"])
+def test_load_config_rejects_blank_ps_falkordb_graph_without_connection_details(
+    invalid_falkordb_graph: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blank `PS_FALKORDB_GRAPH` fails closed, names only that variable and leaks no host/port."""
+    monkeypatch.setenv("PS_FALKORDB_GRAPH", invalid_falkordb_graph)
+    monkeypatch.setenv("PS_FALKORDB_HOST", "db.internal.example")
+    monkeypatch.setenv("PS_FALKORDB_PORT", "6390")
+
+    with pytest.raises(ServiceConfigurationError) as excinfo:
+        load_config()
+
+    message = str(excinfo.value)
+    assert "PS_FALKORDB_GRAPH" in message
+    assert "PS_FALKORDB_HOST" not in message
+    assert "db.internal.example" not in message
+    assert "6390" not in message
+
+
 @pytest.mark.parametrize(
     "invalid_falkordb_port",
     ["not-a-number", "0", "-1", "65536", "99999"],

@@ -194,7 +194,6 @@ def _fake_dependencies(
         fetch_catalog=_fetch_catalog_through(transport),
         resolve_effective_source=_resolve_effective_source,
         open_db=lambda config: cast("FalkorDB", _FakeDb()),
-        single_tenant_graph_name=lambda config: "policy_system",
         restore=stage,
         graph_write_access=graph_write_access,
     )
@@ -225,8 +224,9 @@ def _client_with_fake(
     stage: _FakeCatalogRestoreStage,
     *,
     audit_store: InMemoryAuditStore | None = None,
+    config: ServiceConfig | None = None,
 ) -> TestClient:
-    app = create_app(_app_config())
+    app = create_app(config if config is not None else _app_config())
     store = audit_store if audit_store is not None else InMemoryAuditStore()
     app.dependency_overrides[provide_audit_store] = lambda: store
     app.dependency_overrides[provide_restore_from_catalog_dependencies] = lambda: (
@@ -276,6 +276,17 @@ def test_restore_delegate_receives_the_effective_source_url_for_the_audit_log() 
     client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
 
     assert stage.calls[0]["source"] == "https://example.com/curated-content"
+
+
+def test_the_catalog_restore_routine_receives_the_configured_single_tenant_graph() -> None:
+    """The restore delegate is handed `config.falkordb_graph`."""
+    stage = _FakeCatalogRestoreStage()
+    config = dataclasses.replace(_app_config(), falkordb_graph="custom_graph")
+    client = _client_with_fake(_valid_transport(), stage, config=config)
+
+    client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert stage.calls[0]["single_tenant_graph_name"] == "custom_graph"
 
 
 def test_checksum_mismatch_returns_422_and_never_calls_the_delegate_with_a_bad_artifact() -> None:

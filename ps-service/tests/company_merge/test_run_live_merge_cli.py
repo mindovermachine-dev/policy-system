@@ -29,11 +29,13 @@ from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 
+from company_merge._gateway_fakes import POLICY_SYSTEM
+from ps_service.config import ServiceConfig
 from ps_service.logging import facade
 from ps_service.logging.run_context import current_run_id
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping
     from types import ModuleType
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[3] / "tools" / "company-merge" / "run_live_merge.py"
@@ -176,13 +178,14 @@ def _make_graph_provider(
     *,
     baseline_rows_by_short: dict[str, list[object]],
     single_tenant_graph: _FakeSingleTenantGraph,
+    single_tenant_graph_name: str = POLICY_SYSTEM,
 ) -> tuple[object, list[str]]:
     calls: list[str] = []
     graphs: dict[str, object] = {
         cli_module.baseline_graph_name(short): _FakeBaselineGraph(rows)
         for short, rows in baseline_rows_by_short.items()
     }
-    graphs[cli_module.single_tenant_graph_name()] = single_tenant_graph
+    graphs[single_tenant_graph_name] = single_tenant_graph
 
     def provider(graph_name: str) -> object:
         calls.append(graph_name)
@@ -272,6 +275,25 @@ class _FakeWriteAccess:
         return f"audit-{len(self.audit_calls)}"
 
 
+def _configured(graph_name: str = POLICY_SYSTEM) -> Callable[[], ServiceConfig]:
+    """A configuration loader returning a complete merge configuration for `graph_name`."""
+
+    def load() -> ServiceConfig:
+        return ServiceConfig(
+            host="127.0.0.1",
+            port=8000,
+            graceful_shutdown_seconds=10,
+            logging_dir=None,
+            company_merge_capability_merge_threshold=0.9,
+            company_merge_capability_review_threshold=0.5,
+            company_merge_role_review_threshold=0.8,
+            llm_interface_embed_model="azure/text-embedding-3-large",
+            falkordb_graph=graph_name,
+        )
+
+    return load
+
+
 _FIXED_CLOCK_VALUE = datetime(2026, 9, 13, 12, 0, 0, tzinfo=UTC)
 
 
@@ -346,6 +368,7 @@ def test_no_approval_file_exits_2_with_zero_merge_calls(
         graph_provider=provider,
         merge_fn=merge_fn,
         clock=_fixed_clock,
+        load_service_config=_configured(),
     )
 
     assert exit_code == 2
@@ -373,6 +396,7 @@ def test_wrong_confirmation_phrase_for_run_kind_exits_2_with_zero_merge_calls(
         graph_provider=provider,
         merge_fn=merge_fn,
         clock=_fixed_clock,
+        load_service_config=_configured(),
     )
 
     assert exit_code == 2
@@ -403,6 +427,7 @@ def test_rerun_phrase_rejected_when_run_kind_is_initial(
         graph_provider=_unreachable_graph_provider,
         merge_fn=merge_fn,
         clock=_fixed_clock,
+        load_service_config=_configured(),
     )
 
     assert exit_code == 2
@@ -433,6 +458,7 @@ def test_precondition_violation_exits_3_with_zero_merge_calls(
         graph_provider=provider,
         merge_fn=merge_fn,
         clock=_fixed_clock,
+        load_service_config=_configured(),
     )
 
     assert exit_code == 3
@@ -731,6 +757,55 @@ def test_the_cli_passes_the_gateway_graph_names_and_an_audit_event_to_the_merge_
         for run_id in json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))["run_ids"]
     ]
     assert all(c["details"]["trigger"] == "operator_cli" for c in write_access.audit_calls)  # type: ignore[index]
+
+
+def test_the_cli_merges_into_the_configured_single_tenant_graph(
+    cli_module: ModuleType, tmp_path: Path
+) -> None:
+    """The graph provider and every merge call receive the configured graph the approval names."""
+    approval_path = _write_approval_file(tmp_path, target_graph="custom_graph")
+    provider, provider_calls = _make_graph_provider(
+        cli_module,
+        baseline_rows_by_short=_CLEAN_BASELINE_ROWS,
+        single_tenant_graph=_FakeSingleTenantGraph(),
+        single_tenant_graph_name="custom_graph",
+    )
+    merge_fn = _RecordingMergeFn()
+
+    exit_code = cli_module.main(
+        _base_argv(approval_path=approval_path, report_path=tmp_path / "report.json"),
+        graph_provider=provider,
+        merge_fn=merge_fn,
+        write_access=_FakeWriteAccess(),
+        clock=_fixed_clock,
+        load_service_config=_configured("custom_graph"),
+    )
+
+    assert exit_code == 0
+    assert "custom_graph" in provider_calls
+    assert POLICY_SYSTEM not in provider_calls
+    assert {call["single_tenant_graph_name"] for call in merge_fn.calls} == {"custom_graph"}
+
+
+def test_an_approval_for_a_different_graph_than_the_configured_one_exits_2_with_no_merge(
+    cli_module: ModuleType, tmp_path: Path
+) -> None:
+    """An approval naming `policy_system` does not authorise a run configured for another graph."""
+    approval_path = _write_approval_file(tmp_path, target_graph=POLICY_SYSTEM)
+    merge_fn = _RecordingMergeFn()
+
+    exit_code = cli_module.main(
+        _base_argv(approval_path=approval_path, report_path=tmp_path / "report.json"),
+        graph_provider=_unreachable_graph_provider,
+        merge_fn=merge_fn,
+        write_access=_FakeWriteAccess(),
+        clock=_fixed_clock,
+        load_service_config=_configured("custom_graph"),
+    )
+
+    assert exit_code == 2
+    assert merge_fn.calls == []
+    assert approval_path.exists()
 
 
 def test_the_cli_fails_closed_before_any_merge_when_no_gateway_can_be_built(

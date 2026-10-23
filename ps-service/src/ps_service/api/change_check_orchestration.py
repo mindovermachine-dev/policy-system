@@ -218,6 +218,7 @@ class TriggerReingestionCall(Protocol):
         adapter: MetadataFetchingAdapter,
         graph: GraphHandle,
         submitter: GroupSubmitter,
+        single_tenant_graph_name: str,
         audit_anchor: Callable[[], str],
         emitter: LogEmitter | None = None,
         run_id: str | None = None,
@@ -232,6 +233,8 @@ class TriggerReingestionCall(Protocol):
             adapter: Adapter used for the national-transposition metadata check.
             graph: Read handle onto the `{short_name}_native` graph, used to classify the re-ingest.
             submitter: Graph Write Gateway submitter through which every write goes.
+            single_tenant_graph_name: Name of the merged single-tenant graph the succession is
+                mirrored on.
             audit_anchor: Returns the audit event id each write group is anchored to; not called
                 when nothing is written.
             emitter: Log emitter for the entries; `None` uses the process default.
@@ -596,6 +599,7 @@ def _reingest_one(
         new_version,
         adapter=adapter,
         graph=graph,
+        single_tenant_graph_name=config.falkordb_graph,
         run_pipeline=run_pipeline,
         dependencies=dependencies,
         audit=audit,
@@ -817,6 +821,7 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
     *,
     adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
+    single_tenant_graph_name: str,
     run_pipeline: PipelineRunner,
     dependencies: ChangeCheckDependencies,
     audit: AuditContext,
@@ -842,6 +847,8 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
         new_version: The version being ingested.
         adapter: The ingestion adapter.
         graph: The opened native graph of the instrument.
+        single_tenant_graph_name: Name of the merged single-tenant graph the succession is
+            mirrored on.
         run_pipeline: The pipeline runner handed to `trigger_reingestion`.
         dependencies: The dependency bundle.
         audit: Who triggered the sweep and where the audit rows go.
@@ -874,6 +881,7 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
                 adapter=adapter,
                 graph=graph,
                 submitter=access.gateway,
+                single_tenant_graph_name=single_tenant_graph_name,
                 audit_anchor=opening,
                 emitter=emitter,
                 run_id=reingest_run_id if eager_opening_row else None,

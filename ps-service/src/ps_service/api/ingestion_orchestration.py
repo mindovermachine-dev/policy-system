@@ -499,6 +499,7 @@ class _ResolvedPipelineConfig:
         merge_threshold: Cosine similarity at or above which two Capabilities merge.
         review_threshold: Cosine similarity at or above which a Capability near miss is raised.
         role_review_threshold: Cosine similarity at or above which a Role near miss is raised.
+        single_tenant_graph_name: Graph the merge stage submits its groups to.
     """
 
     chat_model: str
@@ -506,6 +507,7 @@ class _ResolvedPipelineConfig:
     merge_threshold: float
     review_threshold: float
     role_review_threshold: float
+    single_tenant_graph_name: str
 
 
 def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
@@ -548,6 +550,7 @@ def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
         merge_threshold=threshold,
         review_threshold=review_threshold,
         role_review_threshold=role_review_threshold,
+        single_tenant_graph_name=config.falkordb_graph,
     )
 
 
@@ -1440,7 +1443,7 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
                 baseline_graph=graphs.baseline,
                 single_tenant_graph=graphs.single_tenant,
                 submitter=writes.gateway,
-                single_tenant_graph_name=_single_tenant_graph_name(),
+                single_tenant_graph_name=resolved.single_tenant_graph_name,
                 baseline_graph_name=baseline_graph_name,
                 audit_event_id=audit_event_id,
                 embed_model=resolved.embed_model,
@@ -1931,15 +1934,6 @@ def _baseline_graph_name(short_name: str) -> str:
     return baseline_graph_name(short_name)
 
 
-def _single_tenant_graph_name() -> str:
-    """The single-tenant (``policy_system``) graph name, the target of the merge's groups."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
-        single_tenant_graph_name,
-    )
-
-    return single_tenant_graph_name()
-
-
 def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators plus the caller identity; no natural grouping
     document: dict[str, object],
     *,
@@ -1957,7 +1951,7 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
     Two stages in sequence: ``internal_ingestion`` (read, validate, mint and persist, including
     the Policy/Standard/Control layer authored in the document) then ``merge``
     (``merge_baseline_graph``, which merges the internal baseline's spine and governance layer
-    into the single-tenant ``policy_system`` graph, the stage function the catalog pipeline also
+    into the configured single-tenant graph, the stage function the catalog pipeline also
     uses). Each stage is wrapped by :func:`_run_stage`, so a failure in either aborts the
     sequence and names the failing stage.
 
@@ -2056,7 +2050,7 @@ def run_internal_ingestion_pipeline(  # noqa: PLR0913 -- one run's collaborators
                     baseline_graph=baseline_graph,
                     single_tenant_graph=single_tenant_graph,
                     submitter=submitter,
-                    single_tenant_graph_name=_single_tenant_graph_name(),
+                    single_tenant_graph_name=resolved.single_tenant_graph_name,
                     baseline_graph_name=_baseline_graph_name(short_name),
                     audit_event_id=audit_event_id,
                     embed_model=resolved.embed_model,
@@ -2126,14 +2120,13 @@ def _open_baseline_graph(config: ServiceConfig, short_name: str) -> GraphHandle:
 
 
 def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
-    """Open the single-tenant (``policy_system``) graph."""
+    """Open the single-tenant graph named by ``config.falkordb_graph``."""
     from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
         connect_from_config,
         select_graph,
-        single_tenant_graph_name,
     )
 
-    return select_graph(connect_from_config(config), single_tenant_graph_name())
+    return select_graph(connect_from_config(config), config.falkordb_graph)
 
 
 def _default_ingestion_adapter() -> MetadataFetchingAdapter:

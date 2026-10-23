@@ -483,6 +483,25 @@ def test_merge_stage_receives_the_configured_merge_and_review_thresholds(
     assert merge_kwargs["role_review_threshold"] == 0.7
 
 
+def test_catalog_merge_targets_the_configured_single_tenant_graph(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
+
+    run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=replace(_complete_config(), falkordb_graph="custom_graph"),
+        run_id="run-custom-graph",
+        caller="127.0.0.1",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    merge_kwargs = next(call.kwargs for call in fake.recorder.calls if call.stage == "merge")
+    assert merge_kwargs["single_tenant_graph_name"] == "custom_graph"
+
+
 def test_unsafe_stage_exception_is_sanitized_to_generic_reason(
     make_emitter: MakeEmitter,
 ) -> None:

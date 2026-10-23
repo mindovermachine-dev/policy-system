@@ -5,13 +5,9 @@ Own copy of `ps_service.company_merge.falkordb_client`'s shape
 4 precedents: ingestion / query_engine / company_merge / domain_mapper):
 `GraphHandle`/`GraphQueryResult`/`_ConnectivityProbe` Protocols,
 `connect`/`connect_from_config`/`check_connectivity`/`select_graph`, and
-this component's own graph-naming helpers.
+this component's own graph-naming helper.
 
-Naming (PLAN_REVIEWED.md §1.3): `single_tenant_graph_name()` mirrors
-`ps_service.company_merge.falkordb_client`'s
-`os.environ.get("PS_FALKORDB_GRAPH", "policy_system")` convention exactly --
-`poll_for_amendments` reads its tracked set from that same merged
-single-tenant graph. `native_graph_name` matches Ingestion's own
+`native_graph_name` matches Ingestion's own
 `{short_name.lower()}_native` formula exactly -- `trigger_reingestion`'s
 own bookkeeping writes land in the same per-regulation native graph
 Ingestion wrote, so the formula must be identical, not just similar.
@@ -19,7 +15,6 @@ Ingestion wrote, so the formula must be identical, not just similar.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Protocol
 
 from ps_service.change_monitor.errors import ChangeMonitorConfigurationError
@@ -29,7 +24,6 @@ from ps_service.graph_gateway.read_only import ReadOnlyDatabase, open_read_only_
 if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
 
-_DEFAULT_SINGLE_TENANT_GRAPH_NAME = "policy_system"
 _NATIVE_GRAPH_SUFFIX = "_native"
 
 
@@ -118,17 +112,6 @@ def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:
     function does no naming/namespacing of its own.
     """
     return db.select_graph(name)
-
-
-def single_tenant_graph_name() -> str:
-    """The company's merged single-tenant regulatory graph name.
-
-    `PS_FALKORDB_GRAPH`, defaulting to `"policy_system"`. Mirrors
-    `ps_service.company_merge.falkordb_client.single_tenant_graph_name`
-    exactly -- `poll_for_amendments` enumerates its tracked instrument set
-    from this graph.
-    """
-    return os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_SINGLE_TENANT_GRAPH_NAME)
 
 
 def native_graph_name(short_name: str) -> str:

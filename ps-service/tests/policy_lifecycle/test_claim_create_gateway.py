@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING
 import pytest
 import redis.exceptions
 
-from policy_lifecycle._gateway_fakes import FlippingRead, PolicyReadGraph, SeedStandard
+from policy_lifecycle._gateway_fakes import (
+    POLICY_SYSTEM,
+    FlippingRead,
+    PolicyReadGraph,
+    SeedStandard,
+)
 from ps_service.policy_lifecycle.errors import (
     PolicyCapabilityAlreadyGovernedError,
     PolicyCapabilityNotFoundError,
@@ -66,6 +71,7 @@ def _claim(
         graph=rig.read if graph is None else graph,
         audit_store=rig.audit,
         submitter=rig.gateway if submitter is None else submitter,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -275,6 +281,7 @@ def test_a_fork_never_claims_and_reads_no_governors(lifecycle_rig: LifecycleRig)
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert _governors(lifecycle_rig) == {"cap_a": [], "cap_b": []}

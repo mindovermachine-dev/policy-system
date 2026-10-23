@@ -11,6 +11,7 @@ whatever `open_baseline_graph`/`open_native_graph` fake.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import re
 import tempfile
 from dataclasses import dataclass, field
@@ -175,6 +176,7 @@ def _build_dependencies(
     baseline_graph: _FakeExistenceGraph,
     stage: _FakeExportStage,
     policy_graph: ScriptedPolicyGraph | None = None,
+    opened_policy_graphs: list[str] | None = None,
 ) -> tuple[ExportDependencies, list[str], list[str]]:
     open_baseline_calls: list[str] = []
     open_native_calls: list[str] = []
@@ -190,6 +192,13 @@ def _build_dependencies(
         return object()
 
     policy = policy_graph if policy_graph is not None else ScriptedPolicyGraph()
+
+    def _open_policy(db_arg: object, graph_name: str) -> ScriptedPolicyGraph:
+        _ = db_arg
+        if opened_policy_graphs is not None:
+            opened_policy_graphs.append(graph_name)
+        return policy
+
     dependencies = ExportDependencies(
         open_db=lambda config: cast("FalkorDB", db),
         open_baseline_graph=cast("Callable[[FalkorDB, str], object]", _open_baseline),  # pyright: ignore[reportArgumentType]
@@ -197,7 +206,7 @@ def _build_dependencies(
         export=stage,
         call_embedding=None,
         graph_write_access=graph_write_access,
-        open_single_tenant_graph=lambda _db: policy,
+        open_single_tenant_graph=_open_policy,
     )
     return dependencies, open_baseline_calls, open_native_calls
 
@@ -501,6 +510,29 @@ def _run_with_reviews(
         _request(), config=_config(), actor="x", dependencies=dependencies, emitter=emitter
     )
     return stage, response
+
+
+def test_the_near_miss_gate_opens_the_configured_single_tenant_graph(
+    make_emitter: MakeEmitter,
+) -> None:
+    """The gate reads the graph named by `config.falkordb_graph`."""
+    opened: list[str] = []
+    dependencies, _open_baseline_calls, _open_native_calls = _build_dependencies(
+        db=_FakeDb(graphs=[_BASELINE_NAME]),
+        baseline_graph=_FakeExistenceGraph(properties=_PROPERTIES),
+        stage=_FakeExportStage(),
+        opened_policy_graphs=opened,
+    )
+
+    run_export(
+        _request(),
+        config=dataclasses.replace(_config(), falkordb_graph="custom_graph"),
+        actor="x",
+        dependencies=dependencies,
+        emitter=make_emitter()[0],
+    )
+
+    assert opened == ["custom_graph"]
 
 
 def test_run_export_runs_when_policy_system_holds_no_reviews(make_emitter: MakeEmitter) -> None:

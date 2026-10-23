@@ -163,7 +163,6 @@ def test_graph_cleanup_never_imports_an_llm_or_embedding_router() -> None:
         "ps_service.company_merge.similarity.cosine_similarity",
         "ps_service.company_merge.falkordb_client.connect_from_config",
         "ps_service.company_merge.falkordb_client.select_graph",
-        "ps_service.company_merge.falkordb_client.single_tenant_graph_name",
         "ps_service.company_merge.falkordb_client.GraphHandle",
         "ps_service.company_merge.errors.CompanyMergeValidationError",
         "ps_service.company_merge.errors.CompanyMergePersistenceError",

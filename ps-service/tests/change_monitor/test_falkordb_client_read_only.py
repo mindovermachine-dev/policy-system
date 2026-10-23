@@ -33,7 +33,6 @@ def test_the_public_names_are_still_there() -> None:
         "connect_from_config",
         "native_graph_name",
         "select_graph",
-        "single_tenant_graph_name",
     ):
         assert hasattr(falkordb_client, name), name
 

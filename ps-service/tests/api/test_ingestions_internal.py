@@ -343,6 +343,25 @@ def test_the_internal_pipeline_hands_the_configured_role_threshold_to_the_merge(
     assert merge_call.kwargs["role_review_threshold"] == 0.66
 
 
+def test_internal_merge_targets_the_configured_single_tenant_graph() -> None:
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    rig = GatewayRig()
+
+    run_internal_ingestion_pipeline(
+        _REAL_SEED_DOCUMENT,
+        config=replace(_app_config(), falkordb_graph="custom_graph"),
+        run_id="run-custom-graph",
+        caller="test",
+        dependencies=fake.dependencies,
+        gateway=rig.gateway,
+        system_audit=RecordingSystemAudit(rig),
+        owner=("owner-1", "https://idp"),
+    )
+
+    merge_call = next(call for call in fake.recorder.calls if call.stage == "merge")
+    assert merge_call.kwargs["single_tenant_graph_name"] == "custom_graph"
+
+
 def test_an_unset_role_threshold_refuses_the_internal_pipeline_before_any_stage() -> None:
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     rig = GatewayRig()

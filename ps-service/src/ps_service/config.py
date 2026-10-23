@@ -25,6 +25,7 @@ _MIN_PORT = 1
 _MAX_PORT = 65535
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = 6379
+_DEFAULT_FALKORDB_GRAPH = "policy_system"
 _DEFAULT_PASSKEY_SIGNING_POSTGRES_PORT = 5432
 _DEFAULT_STATE_POSTGRES_PORT = 5432
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB
@@ -82,6 +83,8 @@ class ServiceConfig:
             (`PS_LLMINTERFACE_EMBED_MODEL`); `None` when unset.
         falkordb_host: FalkorDB host (`PS_FALKORDB_HOST`); non-blank, default `127.0.0.1`.
         falkordb_port: FalkorDB port (`PS_FALKORDB_PORT`); 1 to 65535, default 6379.
+        falkordb_graph: Name of the single-tenant graph every component reads and writes
+            (`PS_FALKORDB_GRAPH`); non-blank, default `policy_system`.
         company_merge_capability_merge_threshold: Minimum embedding similarity for Company Merge to
             treat two entities as the same (`PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`); greater
             than 0.0 and at most 1.0, `None` when unset. Required only when a merge runs.
@@ -179,6 +182,7 @@ class ServiceConfig:
     llm_interface_embed_model: str | None = None
     falkordb_host: str = _DEFAULT_FALKORDB_HOST
     falkordb_port: int = _DEFAULT_FALKORDB_PORT
+    falkordb_graph: str = _DEFAULT_FALKORDB_GRAPH
     company_merge_capability_merge_threshold: float | None = None
     company_merge_capability_review_threshold: float | None = None
     company_merge_role_review_threshold: float | None = None
@@ -314,6 +318,26 @@ def _parse_falkordb_host(raw: str) -> str:
     """
     if not raw.strip():
         message = "PS_FALKORDB_HOST must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
+def _parse_falkordb_graph(raw: str) -> str:
+    """Validate `PS_FALKORDB_GRAPH`, rejecting an explicitly-set empty/whitespace-only value.
+
+    The error names only the variable: no value, host or port is included.
+
+    Args:
+        raw: The variable's value as set in the environment.
+
+    Returns:
+        `raw`, unchanged.
+
+    Raises:
+        ServiceConfigurationError: `raw` is empty or whitespace-only.
+    """
+    if not raw.strip():
+        message = "PS_FALKORDB_GRAPH must not be empty or whitespace-only"
         raise ServiceConfigurationError(message)
     return raw
 
@@ -1071,6 +1095,9 @@ def load_config() -> ServiceConfig:
         llm_interface_embed_model=llm_interface_embed_model,
         falkordb_host=falkordb_host,
         falkordb_port=falkordb_port,
+        falkordb_graph=_parse_falkordb_graph(
+            os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_FALKORDB_GRAPH)
+        ),
         company_merge_capability_merge_threshold=company_merge_capability_merge_threshold,
         company_merge_capability_review_threshold=company_merge_capability_review_threshold,
         company_merge_role_review_threshold=company_merge_role_review_threshold,

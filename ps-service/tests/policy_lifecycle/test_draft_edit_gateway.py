@@ -20,7 +20,12 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 )
 from pydantic import ValidationError
 
-from policy_lifecycle._gateway_fakes import PolicyReadGraph, SeedControl, SeedStandard
+from policy_lifecycle._gateway_fakes import (
+    POLICY_SYSTEM,
+    PolicyReadGraph,
+    SeedControl,
+    SeedStandard,
+)
 from ps_service.domain_mapper.identity import control_id, standard_id
 from ps_service.policy_lifecycle.errors import PolicyLifecycleGraphUnavailableError
 from ps_service.policy_lifecycle.service import (
@@ -59,6 +64,7 @@ def _edit(rig: LifecycleRig, fields: dict[str, object]) -> None:
         graph=PolicyReadGraph(rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -227,6 +233,7 @@ def _edit_standard(rig: LifecycleRig, fields: dict[str, object]) -> None:
         graph=PolicyReadGraph(rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -238,6 +245,7 @@ def _edit_control(rig: LifecycleRig, fields: dict[str, object]) -> None:
         graph=PolicyReadGraph(rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -250,6 +258,7 @@ def _add_standard(rig: LifecycleRig, title: str, fields: dict[str, object] | Non
         graph=PolicyReadGraph(rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     ).standard_id
 
 
@@ -268,6 +277,7 @@ def _add_control(
         graph=PolicyReadGraph(rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     ).control_id
 
 

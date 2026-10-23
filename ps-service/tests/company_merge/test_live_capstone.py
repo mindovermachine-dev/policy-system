@@ -13,9 +13,7 @@ hard-to-reverse, shared-system action CLAUDE.md requires explicit user
 permission for -- already obtained for the disposable graph, not for the
 real one).
 
-Reached via `ps_service.company_merge.falkordb_client.single_tenant_graph_name()`'s
-existing `PS_FALKORDB_GRAPH` env var override (`monkeypatch`), exactly as
-that function already supports -- no new mechanism.
+The capstone graph name is a module constant handed to the merge stage as an argument.
 
 **A deliberate, deterministic seeded duplicate for the exact-key convergence check, with an
 honest non-forcing caveat for the semantic-match and near-miss checks**: before any merge runs,
@@ -49,6 +47,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter, ReadLines
+    from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.config import ServiceConfig
 
 import os
@@ -67,7 +66,6 @@ from company_merge._live_merge_assertions import (
     _snapshot_embeddings,  # pyright: ignore[reportPrivateUsage]
 )
 from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
-from ps_service.company_merge.falkordb_client import GraphHandle, single_tenant_graph_name
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.domain_mapper.identity import (
@@ -387,7 +385,6 @@ def _live_audit_event_id(config: ServiceConfig, run_id: str) -> str:
 def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
-    monkeypatch: pytest.MonkeyPatch,
     live_baseline_graphs: ServiceConfig,
 ) -> None:
     assert _LLM_INTERFACE_EMBED_MODEL is not None  # narrows type; skipif already guards this
@@ -405,11 +402,8 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     real_node_count_before = _count(real_single_tenant_graph, "MATCH (n) RETURN count(n)")
 
     # --- Point every write this test makes at the disposable capstone graph, never at
-    # "policy_system" directly -- single_tenant_graph_name()'s own existing env-var override,
-    # not a new mechanism. ---
-    monkeypatch.setenv("PS_FALKORDB_GRAPH", _CAPSTONE_GRAPH_NAME)
-    assert single_tenant_graph_name() == _CAPSTONE_GRAPH_NAME
-    single_tenant_graph = select_graph(db, single_tenant_graph_name())
+    # "policy_system" directly. ---
+    single_tenant_graph = select_graph(db, _CAPSTONE_GRAPH_NAME)
 
     baseline_graphs = {
         fixture.short_name: select_graph(db, baseline_graph_name(fixture.short_name))
@@ -445,7 +439,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
                     role_review_threshold=ROLE_REVIEW_THRESHOLD,
                     emitter=emitter,
                     submitter=submitter,
-                    single_tenant_graph_name=single_tenant_graph_name(),
+                    single_tenant_graph_name=_CAPSTONE_GRAPH_NAME,
                     baseline_graph_name=baseline_graph_name(fixture.short_name),
                     audit_event_id=_live_audit_event_id(config, run_id),
                 )

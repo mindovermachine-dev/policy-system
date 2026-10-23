@@ -378,6 +378,7 @@ def create_policy_draft(
                 graph=graph,
                 audit_store=audit_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _CREATE_POLICY_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -468,6 +469,7 @@ def update_policy_draft(
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _UPDATE_POLICY_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -563,6 +565,7 @@ def add_standard_to_draft(
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _ADD_STANDARD_TO_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -657,6 +660,7 @@ def update_standard_draft(
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _UPDATE_STANDARD_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -772,6 +776,7 @@ def add_control_to_draft(
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _ADD_CONTROL_TO_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -869,6 +874,7 @@ def update_control_draft(
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _UPDATE_CONTROL_DRAFT_ERRORS as exc:
             return f"error: {exc}"
@@ -933,6 +939,7 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
                 # Resolved only if a backfill must be written (a read of a backfilled tree needs
                 # no gateway).
                 submitter_source=lambda: lifecycle_submitter(graph_write_access(config).gateway),
+                graph_name=config.falkordb_graph,
             )
         except _GET_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -1022,6 +1029,7 @@ def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
                 graph=graph,
                 audit_store=audit_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _PROPOSE_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -1113,6 +1121,7 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
                 audit_store=audit_store,
                 enforce_policy_manager=lifecycle_role_enforcer(_gate_environment, "approve-policy"),
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _APPROVE_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -1194,6 +1203,7 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
                 audit_store=audit_store,
                 enforce_policy_manager=lifecycle_role_enforcer(_gate_environment, "reject-policy"),
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _REJECT_POLICY_ERRORS as exc:
             return f"error: {exc}"
@@ -1266,6 +1276,7 @@ def revert_policy_to_draft(
                 graph=graph,
                 audit_store=audit_store,
                 submitter=submitter,
+                graph_name=config.falkordb_graph,
             )
         except _REVERT_POLICY_TO_DRAFT_ERRORS as exc:
             return f"error: {exc}"

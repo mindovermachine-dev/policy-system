@@ -873,6 +873,7 @@ def _never_trigger_reingestion(
     adapter: IngestionAdapter,
     graph: GraphHandle,
     submitter: GroupSubmitter,
+    single_tenant_graph_name: str,
     audit_anchor: Callable[[], str],
     emitter: LogEmitter | None = None,
     run_id: str | None = None,
@@ -887,7 +888,16 @@ def _never_trigger_reingestion(
     "no curated catalog entry" test (the missing-entry short-circuit
     happens before `trigger_reingestion` would ever be called).
     """
-    _ = (adapter, graph, submitter, audit_anchor, emitter, run_id, run_pipeline)
+    _ = (
+        adapter,
+        graph,
+        submitter,
+        single_tenant_graph_name,
+        audit_anchor,
+        emitter,
+        run_id,
+        run_pipeline,
+    )
     message = (
         "trigger_reingestion must not be called in this test "
         f"(identifier={identifier!r}, short_name={short_name!r}, new_version={new_version!r})"
@@ -922,6 +932,7 @@ class TriggerReingestionCallRecord:
     new_version: str
     adapter: IngestionAdapter
     graph: GraphHandle
+    single_tenant_graph_name: str
     run_id: str | None = None
     run_pipeline: PipelineRunner | None = None
 
@@ -1091,6 +1102,7 @@ def build_fake_change_check_dependencies(
             adapter: IngestionAdapter,
             graph: GraphHandle,
             submitter: GroupSubmitter,
+            single_tenant_graph_name: str,
             audit_anchor: Callable[[], str],
             emitter: LogEmitter | None = None,
             run_id: str | None = None,
@@ -1099,7 +1111,14 @@ def build_fake_change_check_dependencies(
             _ = (emitter, submitter, audit_anchor)
             trigger_reingestion_calls.append(
                 TriggerReingestionCallRecord(
-                    identifier, short_name, new_version, adapter, graph, run_id, run_pipeline
+                    identifier,
+                    short_name,
+                    new_version,
+                    adapter,
+                    graph,
+                    single_tenant_graph_name,
+                    run_id,
+                    run_pipeline,
                 )
             )
             if scripted is not None:

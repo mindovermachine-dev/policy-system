@@ -522,3 +522,16 @@ def test_sweep_resume_records_the_sweep_pair_and_one_gateway_row_with_the_same_r
         audit_event_id,
         audit_event_id,
     ]
+
+
+def test_the_sweep_hands_the_configured_single_tenant_graph_to_trigger_reingestion(
+    app_config: ServiceConfig, make_emitter: MakeEmitter
+) -> None:
+    emitter, _ = make_emitter()
+    fake = _fake(results=[_outcome()], tracked=(_node("CRA-1"),))
+    config = dataclasses.replace(app_config, falkordb_graph="custom_graph")
+
+    _sweep(config, fake, InMemoryAuditStore(), emitter)
+
+    (call,) = fake.trigger_reingestion_calls
+    assert call.single_tenant_graph_name == "custom_graph"

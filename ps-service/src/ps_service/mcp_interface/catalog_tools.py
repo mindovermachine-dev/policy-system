@@ -120,7 +120,7 @@ def _sanitize_restore_graph_opens(
     """Return restore `dependencies` with `open_db` wrapped by `_sanitize_graph_open`.
 
     `run_restoration_from_catalog_source` calls `open_db` directly with no error handling of its
-    own. `single_tenant_graph_name` is a pure name lookup with no I/O and needs no wrapping.
+    own.
     """
     return dataclasses.replace(dependencies, open_db=_sanitize_graph_open(dependencies.open_db))
 

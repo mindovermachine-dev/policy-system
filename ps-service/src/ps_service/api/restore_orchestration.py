@@ -169,14 +169,12 @@ class RestoreDependencies:
 
     Attributes:
         open_db: Opens the read-only graph database handle for a service configuration.
-        single_tenant_graph_name: Returns the single-tenant graph name for a service configuration.
         restore: The restore routine that verifies and writes the artifact.
         graph_write_access: Returns the Graph Write Gateway access for a service configuration; it
             raises ``GraphWriteUnavailableError`` when the service has none.
     """
 
     open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
-    single_tenant_graph_name: Callable[[ServiceConfig], str]
     restore: RestoreStage
     graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
 
@@ -271,7 +269,6 @@ class CatalogRestoreDependencies:
             persisted override when one exists, else the configured default. It raises
             ``RuntimeConfigError`` when the override cannot be read.
         open_db: Opens the read-only graph database handle for a service configuration.
-        single_tenant_graph_name: Returns the single-tenant graph name for a service configuration.
         restore: The restore routine that verifies and writes the artifact.
         graph_write_access: Returns the Graph Write Gateway access for a service configuration; it
             raises ``GraphWriteUnavailableError`` when the service has none.
@@ -281,7 +278,6 @@ class CatalogRestoreDependencies:
     fetch_catalog: FetchCatalogCall
     resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource]
     open_db: Callable[[ServiceConfig], ReadOnlyDatabase]
-    single_tenant_graph_name: Callable[[ServiceConfig], str]
     restore: CatalogRestoreStage
     graph_write_access: Callable[[ServiceConfig], GraphWriteAccess]
 
@@ -291,8 +287,7 @@ class CatalogRestoreInfra:
     """The external boundaries a caller may substitute when building catalog-restore dependencies.
 
     :func:`build_default_restore_from_catalog_dependencies` accepts exactly these four, and never
-    the restore routine itself, so a substitution replaces I/O without replacing restore logic. The
-    single-tenant graph name is left out because it is a pure lookup with no I/O.
+    the restore routine itself, so a substitution replaces I/O without replacing restore logic.
 
     Attributes:
         fetch_artifact: Fetches an instrument's manifest and blobs over HTTP from a curated-content
@@ -471,11 +466,6 @@ class _RestoreInfra(Protocol):
         ...
 
     @property
-    def single_tenant_graph_name(self) -> Callable[[ServiceConfig], str]:
-        """Return the single-tenant graph name for the configuration."""
-        ...
-
-    @property
     def graph_write_access(self) -> Callable[[ServiceConfig], GraphWriteAccess]:
         """Return the Graph Write Gateway access for the configuration; raise if there is none."""
         ...
@@ -506,7 +496,7 @@ def _perform_restore(
         instrument_id: The instrument being restored, used in failure logging.
         config: The resolved service configuration.
         actor: The requesting client host (REST) or the fixed MCP caller label.
-        dependencies: Source of the database handle, graph name and gateway access.
+        dependencies: Source of the database handle and gateway access.
         audit_event_id: Id of the opening audit row, handed to the restore routine.
         invoke: Calls the restore routine with the values above.
         emitter: Log emitter, or ``None`` for the process default.
@@ -521,8 +511,7 @@ def _perform_restore(
             (422).
         GraphWriteUnavailableError: The gateway lookup found no gateway (503); passed through
             unchanged.
-        Exception: An error from opening the database handle or resolving the graph name propagates
-            unchanged.
+        Exception: An error from opening the database handle propagates unchanged.
 
     Side Effects:
         Opens the database handle, runs the restore routine (graph writes through the gateway), and
@@ -532,7 +521,7 @@ def _perform_restore(
         config
     )
     db = dependencies.open_db(config)
-    graph_name = dependencies.single_tenant_graph_name(config)
+    graph_name = config.falkordb_graph
 
     def open_gateway() -> object:
         return dependencies.graph_write_access(config).gateway
@@ -666,8 +655,8 @@ def run_restoration(
             native blobs.
         config: The resolved service configuration.
         actor: The requesting client host, recorded as the caller.
-        dependencies: The restore collaborators (database opener, graph-name lookup, restore
-            routine, gateway access).
+        dependencies: The restore collaborators (database opener, restore routine,
+            gateway access).
         audit: The acting principal and audit store the ``instrument.restore`` rows are written to.
         owner: The restoring caller's verified ``(sub, iss)`` pair. It owns any imported draft
             Policy; ``None`` when there is no verified caller, in which case an artifact with Policy
@@ -853,16 +842,6 @@ def _default_open_db(config: ServiceConfig) -> ReadOnlyDatabase:
     return connect_from_config(config)
 
 
-def _default_single_tenant_graph_name(config: ServiceConfig) -> str:
-    """Return the single-tenant graph name; ``config`` is accepted but unused."""
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
-        single_tenant_graph_name,
-    )
-
-    _ = config
-    return single_tenant_graph_name()
-
-
 def build_default_restore_dependencies() -> RestoreDependencies:
     """Build the production :class:`RestoreDependencies`.
 
@@ -871,7 +850,7 @@ def build_default_restore_dependencies() -> RestoreDependencies:
 
     Returns:
         A :class:`RestoreDependencies` bound to the production restore routine, graph database
-        connection, graph-name lookup and Graph Write Gateway access.
+        connection and Graph Write Gateway access.
     """
     from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- function-local
         restore_instrument,
@@ -879,7 +858,6 @@ def build_default_restore_dependencies() -> RestoreDependencies:
 
     return RestoreDependencies(
         open_db=_default_open_db,
-        single_tenant_graph_name=_default_single_tenant_graph_name,
         restore=restore_instrument,
         graph_write_access=graph_write_access,
     )
@@ -930,8 +908,8 @@ def build_default_restore_from_catalog_dependencies(
             :func:`build_default_restore_from_catalog_infra`, resolved at call time.
 
     Returns:
-        A :class:`CatalogRestoreDependencies` bound to the production restore routine and graph-name
-        lookup, and to ``infra``'s boundaries.
+        A :class:`CatalogRestoreDependencies` bound to the production restore routine and to
+        ``infra``'s boundaries.
     """
     from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- function-local
         restore_instrument,
@@ -943,7 +921,6 @@ def build_default_restore_from_catalog_dependencies(
         fetch_catalog=resolved_infra.fetch_catalog,
         resolve_effective_source=resolved_infra.resolve_effective_source,
         open_db=resolved_infra.open_db,
-        single_tenant_graph_name=_default_single_tenant_graph_name,
         restore=restore_instrument,
         graph_write_access=graph_write_access,
     )

@@ -1,10 +1,9 @@
-"""Enumerate the tracked regulatory-instrument set from `policy_system`.
+"""Enumerate the tracked regulatory-instrument set from the single-tenant graph.
 
 `poll_for_amendments` polls one instrument at a time; this module is the one
 place that reads *which* instruments to poll. It runs a single fixed,
 non-parameterized Cypher read against the merged single-tenant graph
-(`ps_service.change_monitor.falkordb_client.single_tenant_graph_name`) and
-maps each row to a `TrackedInstrumentNode`.
+(the handle its caller passes in) and maps each row to a `TrackedInstrumentNode`.
 
 The query filters to `status = 'active'`, `source_type = 'external'`, and
 `instrument_type IN ['regulation', 'directive']` -- so a
@@ -44,7 +43,7 @@ def read_tracked_instruments(graph: GraphHandle) -> tuple[TrackedInstrumentNode,
     excluded so they are never polled.
 
     Args:
-        graph: Handle onto the merged `policy_system` graph. Must expose
+        graph: Handle onto the merged single-tenant graph. Must expose
             `query(cypher)` returning a result with `result_set`.
 
     Returns:

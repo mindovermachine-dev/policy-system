@@ -219,7 +219,7 @@ def _fake_dependencies(
         open_baseline_graph=cast(
             "Callable[[FalkorDB, str], object]", _baseline_opener(capability_ids)
         ),  # pyright: ignore[reportArgumentType]
-        open_single_tenant_graph=lambda _db: policy,
+        open_single_tenant_graph=lambda _db, _name: policy,
         open_native_graph=cast("Callable[[FalkorDB, str], object]", _open_native),  # pyright: ignore[reportArgumentType]
         export=stage,
         call_embedding=None,

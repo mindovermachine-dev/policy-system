@@ -15,7 +15,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
     FakeAccessRoleStore,
 )
 
-from policy_lifecycle._gateway_fakes import PolicyReadGraph, SeedStandard
+from policy_lifecycle._gateway_fakes import POLICY_SYSTEM, PolicyReadGraph, SeedStandard
 from ps_service.domain_mapper.identity import control_id, standard_id
 from ps_service.policy_lifecycle import graph_writer
 from ps_service.policy_lifecycle.graph_submission import GraphWriteTarget
@@ -52,6 +52,7 @@ def _add_standard(rig: LifecycleRig, policy_id: str, title: str) -> str:
         graph=PolicyReadGraph(rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     ).standard_id
 
 
@@ -65,6 +66,7 @@ def _add_control(rig: LifecycleRig, parent_standard_id: str, title: str) -> str:
         graph=PolicyReadGraph(rig.graph),
         access_role_store=FakeAccessRoleStore(),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     ).control_id
 
 
@@ -161,6 +163,7 @@ def test_a_created_policys_children_are_derived_from_their_parents(
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert len(_nodes(lifecycle_rig, "Standard")) == 2

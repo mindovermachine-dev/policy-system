@@ -26,7 +26,6 @@ Business Rules:
 from __future__ import annotations
 
 import dataclasses
-import os
 from typing import TYPE_CHECKING, Final
 
 from mcp.server import MCPServer
@@ -120,30 +119,11 @@ __all__ = [
 COMPONENT = "mcp_interface"
 # The `caller`/`actor` value MCP passes to ingestion and restore logging; not a user identifier.
 MCP_CALLER_LABEL: Final = "mcp"
-_DEFAULT_GRAPH_NAME = "policy_system"
 _GRAPH_UNAVAILABLE_DETAIL = "the policy graph database is not reachable"
 GRAPH_UNAVAILABLE_MESSAGE = f"error: {_GRAPH_UNAVAILABLE_DETAIL}"
 UNEXPECTED_ERROR_MESSAGE = "error: an unexpected error occurred"
 # Same CELEX pattern `api/models.py`'s `CatalogIngestionRequest.celex` already enforces.
 CELEX_PATTERN = r"^3\d{4}[A-Z]\d{4}$"
-
-
-def _graph_name() -> str:
-    """Return the company graph name used by every graph-backed tool.
-
-    Reads `PS_FALKORDB_GRAPH` directly, defaulting to `policy_system`, because the service
-    configuration deliberately has no field for it.
-
-    Returns:
-        The graph name.
-
-    Raises:
-        McpGraphUnavailableError: The variable is set but blank.
-    """
-    name = os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_GRAPH_NAME)
-    if not name.strip():
-        raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL)
-    return name
 
 
 server = MCPServer(
@@ -179,21 +159,19 @@ def resolve_graph(config: ServiceConfig) -> GraphHandle:
             `ServiceConfigurationError` raised while loading it is sanitised by the caller.
 
     Returns:
-        A `GraphHandle` for the graph named by `_graph_name()`.
+        A `GraphHandle` for the graph named by `config.falkordb_graph`.
 
     Raises:
-        McpGraphUnavailableError: The graph name is blank, or the database is unreachable or refused
-            the connection, or the driver failed while connecting or selecting the graph. The
-            message is fixed and generic, because host, port, driver and environment-variable text
-            must not cross the MCP boundary; the original cause is chained.
+        McpGraphUnavailableError: The database is unreachable or refused the connection, or the
+            driver failed while connecting or selecting the graph. The message is fixed and
+            generic, because host, port, driver and environment-variable text must not cross the
+            MCP boundary; the original cause is chained.
 
     Side Effects:
         Opens a connection to FalkorDB.
     """
     try:
-        return select_graph(connect_from_config(config), _graph_name())
-    except McpGraphUnavailableError:
-        raise
+        return select_graph(connect_from_config(config), config.falkordb_graph)
     # broad by design: every failure here is sanitised to a fixed message
     # and chained, never re-raised raw
     except Exception as exc:

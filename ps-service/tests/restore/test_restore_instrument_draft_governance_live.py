@@ -129,7 +129,12 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str, config: ServiceC
     submitter = lifecycle_submitter(build_default_graph_write_gateway(config))
 
     propose_policy(
-        actor=_OWNER, policy_id=target, graph=graph, audit_store=audit, submitter=submitter
+        actor=_OWNER,
+        policy_id=target,
+        graph=graph,
+        audit_store=audit,
+        submitter=submitter,
+        graph_name=graph_name,
     )
     with pytest.raises(PolicySelfApprovalBlockedError):
         approve_policy(
@@ -139,6 +144,7 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str, config: ServiceC
             audit_store=audit,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=submitter,
+            graph_name=graph_name,
         )
     approve_policy(
         actor=_MANAGER,
@@ -147,6 +153,7 @@ def _approve_one_restored_policy(db: FalkorDB, graph_name: str, config: ServiceC
         audit_store=audit,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=submitter,
+        graph_name=graph_name,
     )
     return target
 
@@ -171,7 +178,6 @@ def _tree_statuses(db: FalkorDB, graph_name: str, policy_id: str) -> dict[str, s
 
 
 def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
-    monkeypatch: pytest.MonkeyPatch,
     provisioned_graph_log: Provisioned,
     live_falkordb: FalkorDB,
     make_emitter: MakeEmitter,
@@ -183,7 +189,6 @@ def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_L{token}"
     graph_name = f"__gh183_single_tenant_{token}__"
-    monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)  # the lifecycle writes to this graph
     targets = (f"{short_name.lower()}_native", f"{short_name.lower()}_baseline", graph_name)
 
     try:
@@ -210,7 +215,6 @@ def test_restored_policy_can_be_proposed_and_approved_by_a_different_manager(
 
 
 def test_second_restore_after_approval_leaves_the_approved_tree_and_counts_untouched(
-    monkeypatch: pytest.MonkeyPatch,
     provisioned_graph_log: Provisioned,
     live_falkordb: FalkorDB,
     make_emitter: MakeEmitter,
@@ -222,7 +226,6 @@ def test_second_restore_after_approval_leaves_the_approved_tree_and_counts_untou
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_R{token}"
     graph_name = f"__gh183_rerestore_{token}__"
-    monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)  # the lifecycle writes to this graph
     targets = (f"{short_name.lower()}_native", f"{short_name.lower()}_baseline", graph_name)
 
     try:

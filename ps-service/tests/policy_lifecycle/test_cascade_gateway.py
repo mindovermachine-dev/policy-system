@@ -17,6 +17,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 )
 
 from policy_lifecycle._gateway_fakes import (
+    POLICY_SYSTEM,
     FlippingRead,
     PolicyReadGraph,
     SeedControl,
@@ -79,6 +80,7 @@ def _propose(rig: LifecycleRig, graph: PolicyReadGraph | None = None) -> None:
         graph=rig.read if graph is None else graph,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -89,6 +91,7 @@ def _revert(rig: LifecycleRig, *, actor: tuple[str, str] = _OWNER) -> None:
         graph=rig.read,
         audit_store=rig.audit,
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -169,6 +172,7 @@ def test_a_gate_rejection_writes_a_rejected_row_and_nothing_to_the_graph(
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert [row.outcome for row in lifecycle_rig.audit.rows] == ["rejected"]
@@ -204,6 +208,7 @@ def test_an_unrelated_write_between_the_read_and_the_submit_does_not_refuse_a_ca
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.hooked,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert lifecycle_rig.graph.nodes[("Policy", "pol_x")]["status"] == "proposed"
@@ -237,6 +242,7 @@ def test_a_rejection_cascades_the_tree_back_to_draft_under_its_own_applied_row(
         audit_store=lifecycle_rig.audit,
         enforce_policy_manager=policy_manager_enforcer(roles),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     (group,) = lifecycle_rig.store.groups

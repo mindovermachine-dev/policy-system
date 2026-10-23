@@ -34,7 +34,7 @@ from ps_service.change_monitor.errors import (
     ChangeMonitorStateError,
     NationalTranspositionNotSupportedError,
 )
-from ps_service.change_monitor.falkordb_client import native_graph_name, single_tenant_graph_name
+from ps_service.change_monitor.falkordb_client import native_graph_name
 from ps_service.change_monitor.graph_submission import SuccessionTarget
 from ps_service.change_monitor.models import LINKED, PIPELINE_STAGES, ReingestionOutcome
 from ps_service.change_monitor.succession import (
@@ -280,6 +280,7 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
     adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
     submitter: GroupSubmitter,
+    single_tenant_graph_name: str,
     audit_anchor: Callable[[], str],
     emitter: LogEmitter | None = None,
     run_id: str | None = None,
@@ -289,7 +290,7 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
 
     Every write goes through `submitter`, the Graph Write Gateway: the `ReingestProgress`
     markers, `new.version` and the native succession land on the `{short_name}_native` graph,
-    and the succession is mirrored on the merged `policy_system` graph so the tracked set and
+    and the succession is mirrored on the merged single-tenant graph so the tracked set and
     `ps-list-ingested` see the prior as `superseded`. Each group carries the audit event id
     `audit_anchor()` returns (the re-ingest's `ingestion_run.submit` row).
 
@@ -315,6 +316,8 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
         adapter: Adapter used only for the national-transposition metadata check.
         graph: Read handle onto the `{short_name}_native` graph, used for classification.
         submitter: Graph Write Gateway submitter through which every write goes.
+        single_tenant_graph_name: Name of the merged single-tenant graph the succession is
+            mirrored on.
         audit_anchor: Callable returning the audit event id each write group is anchored to;
             not called when nothing is written.
         emitter: Log emitter for the entries; `None` uses the default emitter.
@@ -347,7 +350,7 @@ def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no n
     target = SuccessionTarget(
         submitter,
         native_graph_name(short_name),
-        single_tenant_graph_name(),
+        single_tenant_graph_name,
         audit_anchor,
         emitter,
     )

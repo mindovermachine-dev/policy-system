@@ -14,8 +14,9 @@ proceed past two gates before any write:
    load_and_validate_approval`): a human-authored approval file, never written by this
    script, must already exist at `--approval-file` and validate for the given
    `--run-kind` (`initial` or `rerun`). The run kind selects one of two hardcoded
-   confirmation phrases; it is never a free-form value. Checked first, before any
-   graph is selected.
+   confirmation phrases; it is never a free-form value. Its `target_graph` must be the
+   graph named by the service configuration (`PS_FALKORDB_GRAPH`). Checked before any
+   graph is selected, right after the service configuration resolves.
 2. **Precondition check**
    (`ps_service.company_merge.preconditions.check_obligation_has_edge_cardinality`):
    re-run live, immediately before the merge, against the `cra_baseline`,
@@ -53,7 +54,8 @@ Exit codes:
     1   FalkorDB failed during the precondition check, the merge threshold or
         embedding model is not configured, or the Graph Write Gateway could not be
         built (for example the PS state database is not configured).
-    2   The approval gate failed.
+    2   The approval gate failed, including an approval whose `target_graph` is not the
+        configured graph.
     3   At least one baseline graph violates the precondition.
     4   `merge_baseline_graph` or the per-regulation audit row failed partway through;
         the report lists the error.
@@ -99,7 +101,6 @@ from typing import TYPE_CHECKING, cast
 from ps_service.company_merge.falkordb_client import (
     connect,
     select_graph,
-    single_tenant_graph_name,
 )
 from ps_service.company_merge.live_merge_approval import (
     LiveMergeApprovalError,
@@ -147,7 +148,6 @@ _RUN_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 _EXPECTED_SCOPE = ("CRA-1.0", "GDPR-1.0", "NIS2-1.0")
-_EXPECTED_TARGET_GRAPH = "policy_system"
 
 _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
@@ -168,6 +168,7 @@ if TYPE_CHECKING:
     ClockFn = Callable[[], datetime]
     GraphProvider = Callable[[str], GraphHandle]
     WriteAccessBuilder = Callable[[ServiceConfig], tuple[GroupSubmitter, SystemAuditRecorder]]
+    ConfigLoader = Callable[[], ServiceConfig]
 
 _AUDIT_TRIGGER = "operator_cli"
 
@@ -328,13 +329,16 @@ def _run_precondition_check(provider: GraphProvider) -> dict[str, tuple[object, 
     return violations_by_graph
 
 
-def _check_approval_gate(args: argparse.Namespace) -> int | None:
-    """Gate 1 (approval), checked first -- nothing else has run yet. `None` means proceed."""
+def _check_approval_gate(args: argparse.Namespace, *, target_graph: str) -> int | None:
+    """Gate 1 (approval), checked before any graph is read. `None` means proceed.
+
+    The approval file's `target_graph` must equal `target_graph`, the configured graph.
+    """
     try:
         load_and_validate_approval(
             args.approval_file,
             expected_scope=_EXPECTED_SCOPE,
-            expected_target_graph=_EXPECTED_TARGET_GRAPH,
+            expected_target_graph=target_graph,
             run_kind=cast('Literal["initial", "rerun"]', args.run_kind),
         )
     except LiveMergeApprovalError as exc:
@@ -382,9 +386,9 @@ class _MergeSettings:
     embed_model: str
 
 
-def _resolve_merge_config() -> _MergeSettings | int:
+def _resolve_merge_config(load_service_config: ConfigLoader) -> _MergeSettings | int:
     """Fail-closed config resolution, before any write. An `int` return is the exit code."""
-    config = load_config()
+    config = load_service_config()
     if config.company_merge_capability_merge_threshold is None:
         print(
             "PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD is not set -- resolve it via ServiceConfig "
@@ -466,7 +470,7 @@ def _run_all_regulations(
                     baseline_graph=baseline_graphs[short_name],
                     single_tenant_graph=single_tenant_graph,
                     submitter=submitter,
-                    single_tenant_graph_name=single_tenant_graph_name(),
+                    single_tenant_graph_name=settings.config.falkordb_graph,
                     baseline_graph_name=baseline_graph_name(short_name),
                     audit_event_id=audit_event_id,
                     embed_model=settings.embed_model,
@@ -533,6 +537,7 @@ def main(
     merge_fn: MergeFn = merge_baseline_graph,
     clock: ClockFn | None = None,
     write_access: WriteAccessBuilder = _default_write_access,
+    load_service_config: ConfigLoader = load_config,
 ) -> int:
     """Run the approval-gated, precondition-gated live merge for CRA, NIS2 and GDPR.
 
@@ -548,6 +553,8 @@ def main(
         write_access: Builds the `(submitter, audit recorder)` pair from the service
             configuration; the default builds the real Graph Write Gateway and
             recorder. Test-only seam.
+        load_service_config: Returns the service configuration; the default is
+            `load_config`. Test-only seam.
 
     Returns:
         Process exit code: `0` on full success; `1` on a FalkorDB or query failure during
@@ -579,17 +586,19 @@ def main(
         else _default_graph_provider(args.host, args.port)
     )
 
-    approval_exit_code = _check_approval_gate(args)
+    resolved_config = _resolve_merge_config(load_service_config)
+    if isinstance(resolved_config, int):
+        return resolved_config
+
+    approval_exit_code = _check_approval_gate(
+        args, target_graph=resolved_config.config.falkordb_graph
+    )
     if approval_exit_code is not None:
         return approval_exit_code
 
     precondition_exit_code = _check_precondition_gate(provider, host=args.host, port=args.port)
     if precondition_exit_code is not None:
         return precondition_exit_code
-
-    resolved_config = _resolve_merge_config()
-    if isinstance(resolved_config, int):
-        return resolved_config
 
     try:
         submitter, system_audit = write_access(resolved_config.config)
@@ -600,7 +609,7 @@ def main(
         )
         return 1
 
-    single_tenant_graph = provider(single_tenant_graph_name())
+    single_tenant_graph = provider(resolved_config.config.falkordb_graph)
     baseline_graphs = {
         short_name: provider(baseline_graph_name(short_name))
         for short_name, _regulatory_instrument_id in _RUN_ORDER

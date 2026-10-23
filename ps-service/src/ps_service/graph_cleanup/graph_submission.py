@@ -1,7 +1,7 @@
 """The Graph Cleanup side of the Graph Write Gateway seam.
 
 Graph Cleanup issues no write Cypher. A writer turns a guarded decision into gateway primitives and
-submits them as ONE group on the `policy_system` graph, through a `CleanupSubmitter`.
+submits them as ONE group on the configured single-tenant graph, through a `CleanupSubmitter`.
 `GraphWriteTarget` carries what a writer needs for that: the submitter and the graph the group goes
 to. `submit_cleanup_group` is the one place a writer's primitives reach the gateway and the one
 place a gateway failure becomes a Graph Cleanup error:
@@ -160,14 +160,12 @@ def graph_write_target(
 ) -> GraphWriteTarget:
     """The submitter and graph a cleanup write goes to, resolved at call time.
 
-    The graph name is the one the reads' opener uses (`company_merge.falkordb_client.
-    single_tenant_graph_name`), so a write never lands in a different graph than the one it
-    was guarded against. The import is function-local so importing `ps_service.main` does not
-    import Company Merge.
+    The graph name is `config.falkordb_graph`, the one the reads' opener selects, so a write
+    never lands in a different graph than the one it was guarded against.
 
     Args:
         dependencies: Holder of the lazily resolved graph write gateway.
-        config: Service configuration passed to the gateway resolver.
+        config: Service configuration passed to the gateway resolver; names the graph.
 
     Returns:
         A `GraphWriteTarget` for the single-tenant graph, not yet stamped.
@@ -175,13 +173,9 @@ def graph_write_target(
     Raises:
         GraphCleanupPersistenceError: no gateway is installed.
     """
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- function-local keeps ps_service.main off Company Merge at import
-        single_tenant_graph_name,
-    )
-
     with _mapped_failures(_STALE_DEFAULT_MESSAGE):
         submitter = dependencies.graph_write_gateway(config)
-    return GraphWriteTarget(submitter, single_tenant_graph_name())
+    return GraphWriteTarget(submitter, config.falkordb_graph)
 
 
 def edge_identity(edge_type: str, source_id: str, target_id: str) -> str:

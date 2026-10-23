@@ -282,7 +282,7 @@ def test_resume_at_merge_resolves_the_gateway_and_records_one_audit_event(
     """The merge stage writes through the gateway, so a merge-only resume needs one."""
     pipeline = build_fake_pipeline_dependencies()
 
-    _runner(pipeline, _config())(
+    _runner(pipeline, dataclasses.replace(_config(), falkordb_graph="custom_graph"))(
         stages=("merge",), run_id=_RUN_ID, on_stage_complete=lambda _s: None
     )
 
@@ -293,4 +293,4 @@ def test_resume_at_merge_resolves_the_gateway_and_records_one_audit_event(
     assert merge_call.kwargs["submitter"] is process_gateway.rig.gateway
     assert merge_call.kwargs["audit_event_id"] == audit_event_id
     assert merge_call.kwargs["baseline_graph_name"] == "cra_baseline"
-    assert merge_call.kwargs["single_tenant_graph_name"] == "policy_system"
+    assert merge_call.kwargs["single_tenant_graph_name"] == "custom_graph"

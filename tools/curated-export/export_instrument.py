@@ -17,8 +17,9 @@ builds its own gateway from the service configuration, so the PS state Postgres
 server. One `export.instrument` system audit row is recorded first and the backfill is
 anchored to it; if the row cannot be written, nothing is embedded or written
 (fail-closed). Before that, the script refuses (exit 1, nothing written) while an unresolved
-Company Merge near-miss review in `policy_system` touches one of the instrument's Capabilities:
-the review decisions live outside the exported graphs and would be lost from the artifact.
+Company Merge near-miss review in the single-tenant graph (`PS_FALKORDB_GRAPH`) touches one of
+the instrument's Capabilities: the review decisions live outside the exported graphs and would be
+lost from the artifact.
 
 Unlike the other scripts in `tools/`, this one always needs a configured LLM Provider:
 the embedding backfill is the only step that calls out to one. Example:
@@ -40,7 +41,7 @@ Exit codes:
     1   No embedding model is configured, FalkorDB is unreachable, the instrument still
         has unresolved near-miss reviews (resolve them with near_misses_list and
         near_misses_resolve first; the count and review ids go to stderr and nothing is
-        written) or `policy_system` cannot be read for that check, the audit trail is
+        written) or the single-tenant graph cannot be read for that check, the audit trail is
         unavailable, the embedding backfill could not be written, the LLM provider
         failed, or the source graphs are not exportable. A message goes to stderr.
 """
@@ -63,7 +64,7 @@ from ps_service.api.export_audit_actions import (
     ExportInstrumentDetails,
 )
 from ps_service.audit.errors import AuditTrailUnavailableError
-from ps_service.company_merge.falkordb_client import select_graph, single_tenant_graph_name
+from ps_service.company_merge.falkordb_client import select_graph
 from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 from ps_service.export.errors import ExportGraphWriteError, ExportSourceGraphError
@@ -187,7 +188,7 @@ def main(
     Returns:
         Process exit code: `0` on success; `1` when no embedding model is configured,
         FalkorDB is unreachable, unresolved near-miss reviews touch the instrument (or
-        `policy_system` cannot be read to check), the audit row cannot be recorded, the
+        the single-tenant graph cannot be read to check), the audit row cannot be recorded, the
         backfill cannot be written, the LLM provider fails, or the source graphs are not
         exportable.
 
@@ -245,13 +246,20 @@ def main(
         )
         return 1
 
-    # Same precondition as POST /exports: unresolved near-miss reviews live in `policy_system`,
-    # which export never serializes, so their decisions would be lost from the artifact.
+    # The service configuration names the single-tenant graph and carries the gateway's log
+    # (the PS state Postgres); `--host`/`--port` make the gateway write the same FalkorDB the
+    # reads hit. Contacts neither Postgres nor the gateway's FalkorDB until first used.
+    config = dataclasses.replace(
+        load_service_config(), falkordb_host=args.host, falkordb_port=args.port
+    )
+
+    # Same precondition as POST /exports: unresolved near-miss reviews live in the single-tenant
+    # graph, which export never serializes, so their decisions would be lost from the artifact.
     # Runs before any audit row, gateway or file so a refusal writes nothing.
-    policy_name = single_tenant_graph_name()
+    policy_name = config.falkordb_graph
     try:
-        # `policy_system` may not exist yet (no ingestion has run): then no review can exist,
-        # and selecting it would create an empty graph, so only select it when it is listed.
+        # The single-tenant graph may not exist yet (no ingestion has run): then no review can
+        # exist, and selecting it would create an empty graph, so only select it when it is listed.
         blocking_review_ids = (
             unresolved_near_miss_review_ids(
                 graph_query_handle(db, baseline_name), select_graph(db, policy_name)
@@ -275,11 +283,6 @@ def main(
         f"embedding via '{args.embed_model}'..."
     )
 
-    # The gateway writes the same FalkorDB the reads above hit (--host/--port), and its log is the
-    # PS state Postgres of the service configuration. Contacts neither until first used.
-    config = dataclasses.replace(
-        load_service_config(), falkordb_host=args.host, falkordb_port=args.port
-    )
     gateway = build_gateway(config)
     try:
         return _export_through_gateway(

@@ -30,7 +30,6 @@ vacuous.
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -70,12 +69,10 @@ __all__ = [
     "read_log_position",
     "refuse_unstorable_values",
     "require_caught_up",
-    "single_tenant_graph_name",
     "submit_group",
 ]
 
 _WRITE_FAILED_PREFIX = "FalkorDB write failed: "
-_DEFAULT_SINGLE_TENANT_GRAPH_NAME = "policy_system"
 _UNSTORABLE_MESSAGE = "a value cannot be stored in the graph (rejected before anything was written)"
 
 _GATEWAY_FAILURES = (
@@ -169,23 +166,6 @@ def lifecycle_submitter(gateway: GroupSubmitter) -> LifecycleSubmitter:
         message = "the installed graph write gateway cannot read the log position"
         raise TypeError(message)
     return gateway
-
-
-def single_tenant_graph_name() -> str:
-    """Return the single-tenant policy graph's name.
-
-    This component's own accessor for the convention `mcp_interface.tool_core` and Company Merge
-    share (a deliberate near-duplicate, not a shared import): the one graph name used for the
-    read-only query surface and the gateway's writes.
-
-    Returns:
-        The value of the `PS_FALKORDB_GRAPH` environment variable, or `"policy_system"` when it is
-        unset.
-
-    Side Effects:
-        Reads the process environment.
-    """
-    return os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_SINGLE_TENANT_GRAPH_NAME)
 
 
 class GraphWriteTarget:

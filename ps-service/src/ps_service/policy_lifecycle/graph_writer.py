@@ -57,7 +57,6 @@ from ps_service.policy_lifecycle.graph_submission import (
     read_log_position,
     refuse_unstorable_values,
     require_caught_up,
-    single_tenant_graph_name,
     submit_group,
 )
 
@@ -176,7 +175,11 @@ _READ_BACKFILL_STATE = (
 
 
 def backfill_governance_status(
-    graph: GraphHandle, policy_id: str, *, submitter_source: Callable[[], LifecycleSubmitter]
+    graph: GraphHandle,
+    policy_id: str,
+    *,
+    submitter_source: Callable[[], LifecycleSubmitter],
+    graph_name: str,
 ) -> None:
     """Fill a Policy's missing `version` and its tree's missing `status`, idempotently.
 
@@ -199,6 +202,7 @@ def backfill_governance_status(
         submitter_source: Zero-argument callable that resolves the gateway submitter. It is called
             only when there is something to write, so reading an already-backfilled tree needs no
             gateway.
+        graph_name: The graph the fill group is written to.
 
     Returns:
         None.
@@ -241,7 +245,7 @@ def backfill_governance_status(
                 )
     if not primitives:
         return
-    target = GraphWriteTarget(submitter_source(), single_tenant_graph_name())
+    target = GraphWriteTarget(submitter_source(), graph_name)
     submit_group(target, tuple(primitives), audit_event_id=None)
 
 

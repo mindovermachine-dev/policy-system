@@ -16,6 +16,7 @@ structural fakes throughout -- no `unittest.mock`.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from typing import TYPE_CHECKING
 
@@ -23,8 +24,10 @@ import pytest
 import redis.exceptions
 from mcp.types import CallToolResult, TextContent
 
+from ps_service.config import ServiceConfig
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
+from ps_service.mcp_interface import cypher_tools
 from ps_service.mcp_interface import tool_core as mcp_server
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.query_engine.cypher_query import (
@@ -317,6 +320,43 @@ def test_connection_failure_emits_unavailable_log_entry(
     assert "123-45-6789" not in raw
     assert "db-host" not in raw
     assert "6379" not in raw
+
+
+def _base_config() -> ServiceConfig:
+    return ServiceConfig(
+        host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
+    )
+
+
+def test_resolve_graph_opens_the_graph_named_by_the_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_db = _install_graph(monkeypatch, _FakeGraphHandle())
+    config = dataclasses.replace(_base_config(), falkordb_graph="custom_graph")
+
+    mcp_server.resolve_graph(config)
+
+    assert fake_db.selected == ["custom_graph"]
+
+
+def test_the_cypher_tool_queries_the_graph_named_by_the_loaded_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    fake_db = _install_graph(
+        monkeypatch,
+        _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]])),
+    )
+    # detroit-exception: the config handed to the tool is the specified input (load_config)
+    monkeypatch.setattr(
+        cypher_tools,
+        "load_config",
+        lambda: dataclasses.replace(_base_config(), falkordb_graph="custom_graph"),
+    )
+
+    _call_cypher("MATCH (n) RETURN n.id AS id")
+
+    assert fake_db.selected == ["custom_graph"]
 
 
 def test_resolve_graph_wraps_any_failure_as_graph_unavailable(

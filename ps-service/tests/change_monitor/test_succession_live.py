@@ -19,7 +19,6 @@ from change_monitor._legacy_reference import FROZEN_STATEMENTS
 from ps_service.change_monitor.falkordb_client import (
     check_connectivity,
     native_graph_name,
-    single_tenant_graph_name,
 )
 from ps_service.change_monitor.graph_reader import read_tracked_instruments
 from ps_service.change_monitor.succession import read_reingestion_facts
@@ -105,7 +104,7 @@ def test_policy_system_succession_drops_the_prior_from_the_tracked_set_on_real_f
     config = load_config()
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
-    graph_name = f"{single_tenant_graph_name()}_succlive"
+    graph_name = f"{config.falkordb_graph}_succlive"
     if graph_name in set(db.list_graphs()):
         db.select_graph(graph_name).delete()
     try:

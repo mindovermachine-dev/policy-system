@@ -171,7 +171,6 @@ class _FakeRestoreStage:
 def _build_dependencies(stage: _FakeRestoreStage) -> RestoreDependencies:
     return RestoreDependencies(
         open_db=lambda config: cast("FalkorDB", _FakeDb()),
-        single_tenant_graph_name=lambda config: "policy_system",
         restore=stage,
         graph_write_access=graph_write_access,
     )
@@ -214,6 +213,22 @@ def test_run_restoration_hands_the_restore_its_configured_thresholds() -> None:
         0.3,
         0.7,
     )
+
+
+def test_the_restore_routine_receives_the_configured_single_tenant_graph() -> None:
+    from dataclasses import replace
+
+    stage = _FakeRestoreStage()
+
+    run_restoration(
+        _valid_request(),
+        config=replace(_config(), falkordb_graph="custom_graph"),
+        actor="127.0.0.1",
+        dependencies=_build_dependencies(stage),
+    )
+
+    (call,) = stage.calls
+    assert call.single_tenant_graph_name == "custom_graph"
 
 
 def test_run_restoration_success_returns_accepted_response_shape() -> None:

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 import redis.exceptions
 
-from policy_lifecycle._gateway_fakes import SeedControl, SeedStandard
+from policy_lifecycle._gateway_fakes import POLICY_SYSTEM, SeedControl, SeedStandard
 from ps_service.api.errors import GraphWriteUnavailableError
 from ps_service.policy_lifecycle.errors import (
     PolicyLifecycleGraphUnavailableError,
@@ -63,6 +63,7 @@ def _read(rig: LifecycleRig, *, source: object | None = None) -> PolicyView:
         policy_id=_POLICY,
         graph=rig.read,
         submitter_source=_gateway if source is None else source,  # pyright: ignore[reportArgumentType]
+        graph_name=POLICY_SYSTEM,
     )
 
 

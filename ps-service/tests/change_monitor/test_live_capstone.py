@@ -191,7 +191,6 @@ def test_ac001_live_consolidated_version_detection() -> None:
 
 def test_consolidated_reingestion_end_to_end(
     tmp_path_factory: pytest.TempPathFactory,
-    monkeypatch: pytest.MonkeyPatch,
     provisioned_graph_log: Provisioned,
 ) -> None:
     """Seed a throwaway `{short}_native` graph with a real base-act ingest,
@@ -221,9 +220,8 @@ def test_consolidated_reingestion_end_to_end(
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
 
     graph_name = native_graph_name(_CAPSTONE_SHORT)
-    # The `policy_system` step of the succession is not part of this capstone: pointing the
-    # single-tenant graph name at the throwaway native graph makes it write the same RI nodes.
-    monkeypatch.setenv("PS_FALKORDB_GRAPH", graph_name)
+    # The merged-graph step of the succession is not part of this capstone: naming the throwaway
+    # native graph as the single-tenant graph makes it write the same RI nodes.
     log_path = tmp_path_factory.mktemp("capstone_live") / "capstone_live.jsonl"
     emitter = LogEmitter(EmitterConfig(log_path=log_path))
     adapter = CellarEliAdapter()
@@ -258,6 +256,7 @@ def test_consolidated_reingestion_end_to_end(
             adapter=adapter,
             graph=graph,
             submitter=gateway,
+            single_tenant_graph_name=graph_name,
             audit_anchor=lambda: _audit_event_id(config, "capstone-trigger"),
             emitter=emitter,
             run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway, config),
@@ -315,6 +314,7 @@ def test_consolidated_reingestion_end_to_end(
             adapter=adapter,
             graph=graph,
             submitter=gateway,
+            single_tenant_graph_name=graph_name,
             audit_anchor=lambda: _audit_event_id(config, "capstone-trigger"),
             emitter=emitter,
             run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway, config),

@@ -205,6 +205,7 @@ def capstone(
         monkeypatch.setenv("PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD", str(REVIEW_THRESHOLD))
     if not os.environ.get("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD"):
         monkeypatch.setenv("PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD", str(ROLE_REVIEW_THRESHOLD))
+    # Driven end to end through the real `load_config()`: the env is the graph name's only input.
     monkeypatch.setenv("PS_FALKORDB_GRAPH", _DISPOSABLE_GRAPH)
 
     # Built after the env above is set: it layers the provisioned state Postgres (graph log and

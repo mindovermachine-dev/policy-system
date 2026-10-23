@@ -19,6 +19,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 )
 
 from policy_lifecycle._gateway_fakes import (
+    POLICY_SYSTEM,
     FlippingRead,
     PolicyReadGraph,
     SeedControl,
@@ -89,6 +90,7 @@ def test_success_creates_policy_with_expected_shape_and_draft_children(
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.title == _TITLE
@@ -119,6 +121,7 @@ def test_duplicate_title_raises_named_error_records_rejected_audit_and_skips_gra
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.existing_policy_id == existing_id
@@ -139,6 +142,7 @@ def test_audit_write_precedes_graph_write(lifecycle_rig: LifecycleRig) -> None:
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     events = lifecycle_rig.events
@@ -159,6 +163,7 @@ def test_graph_failure_after_audit_success_records_failed_event_and_raises(
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert [row.outcome for row in lifecycle_rig.audit.rows] == ["applied", "failed"]
@@ -225,6 +230,7 @@ def test_owner_reads_own_draft_successfully_with_full_tree(lifecycle_rig: Lifecy
         policy_id="pol_x",
         graph=graph,
         submitter_source=lambda: lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -246,6 +252,7 @@ def test_non_owner_reads_a_draft(lifecycle_rig: LifecycleRig) -> None:
         policy_id="pol_x",
         graph=graph,
         submitter_source=lambda: lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -266,6 +273,7 @@ def test_non_draft_policy_is_readable_by_any_authenticated_caller(
         policy_id="pol_y",
         graph=graph,
         submitter_source=lambda: lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == status
@@ -279,6 +287,7 @@ def test_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig) -> Non
             policy_id="pol_missing",
             graph=graph,
             submitter_source=lambda: lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -379,6 +388,7 @@ def test_owner_proposes_complete_draft_succeeds_and_cascades_whole_tree(
         graph=graph,
         audit_store=audit_store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -408,6 +418,7 @@ def test_non_owner_attempt_is_rejected_with_rejected_audit(lifecycle_rig: Lifecy
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -435,6 +446,7 @@ def test_zero_standard_draft_is_rejected_as_incomplete_with_rejected_audit(
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -457,6 +469,7 @@ def test_standard_with_zero_controls_still_succeeds(lifecycle_rig: LifecycleRig)
         graph=graph,
         audit_store=audit_store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == "proposed"
@@ -478,6 +491,7 @@ def test_wrong_current_status_is_rejected_via_require_status(lifecycle_rig: Life
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -499,6 +513,7 @@ def test_propose_audit_write_precedes_graph_write(lifecycle_rig: LifecycleRig) -
         graph=graph,
         audit_store=audit_store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     events = lifecycle_rig.events
@@ -521,6 +536,7 @@ def test_propose_graph_failure_after_audit_success_records_failed_event_and_rais
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert [call.outcome for call in audit_store.rows] == ["applied", "failed"]
@@ -538,6 +554,7 @@ def test_propose_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -575,6 +592,7 @@ def test_policy_manager_non_owner_approves_successfully(lifecycle_rig: Lifecycle
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -608,6 +626,7 @@ def test_owner_who_also_holds_policy_manager_self_approval_is_blocked(
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -632,6 +651,7 @@ def test_same_subject_different_issuer_approver_succeeds(lifecycle_rig: Lifecycl
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == "approved"
@@ -654,6 +674,7 @@ def test_non_policy_manager_is_rejected_with_access_denied(lifecycle_rig: Lifecy
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -673,6 +694,7 @@ def test_policy_lifecycle_approve_denial_through_the_service_writes_no_access_ga
             audit_store=lifecycle_rig.audit,
             enforce_policy_manager=policy_manager_enforcer(FakeAccessRoleStore()),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert [r.action for r in lifecycle_rig.audit.rows if r.action == "access.gate"] == []
@@ -696,6 +718,7 @@ def test_approve_wrong_current_status_is_rejected_via_require_status(
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -719,6 +742,7 @@ def test_approve_audit_write_precedes_graph_write(lifecycle_rig: LifecycleRig) -
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     events = lifecycle_rig.events
@@ -745,6 +769,7 @@ def test_approve_graph_failure_after_audit_success_records_failed_event_and_rais
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert [call.outcome for call in audit_store.rows] == ["applied", "failed"]
@@ -765,6 +790,7 @@ def test_approve_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -789,6 +815,7 @@ def test_approving_a_superseded_by_approved_prior_auto_deprecates_it_in_the_same
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == "approved"
@@ -830,6 +857,7 @@ def test_superseded_by_prior_not_yet_approved_is_left_untouched(
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == "approved"
@@ -850,6 +878,7 @@ def _approve_fork(rig: LifecycleRig, graph: PolicyReadGraph, policy_id: str) -> 
         audit_store=rig.audit,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
 
@@ -1001,6 +1030,7 @@ def test_approve_gate_failure_rejects_before_any_governance_read(
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert not any("collect(cap.id)" in q for q in lifecycle_rig.read.statements)
@@ -1058,6 +1088,7 @@ def test_policy_manager_non_owner_rejects_successfully_and_cascades_to_draft(
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -1090,6 +1121,7 @@ def test_owner_who_also_holds_policy_manager_self_rejection_is_blocked(
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -1114,6 +1146,7 @@ def test_same_subject_different_issuer_rejecter_succeeds(lifecycle_rig: Lifecycl
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == "draft"
@@ -1138,6 +1171,7 @@ def test_non_policy_manager_rejecter_is_rejected_with_access_denied(
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -1161,6 +1195,7 @@ def test_reject_wrong_current_status_is_rejected_via_require_status(
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -1184,6 +1219,7 @@ def test_reject_audit_write_precedes_graph_write(lifecycle_rig: LifecycleRig) ->
         audit_store=audit_store,
         enforce_policy_manager=policy_manager_enforcer(store),
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     events = lifecycle_rig.events
@@ -1210,6 +1246,7 @@ def test_reject_graph_failure_after_audit_success_records_failed_event_and_raise
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert [call.outcome for call in audit_store.rows] == ["applied", "failed"]
@@ -1230,6 +1267,7 @@ def test_reject_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig)
             audit_store=audit_store,
             enforce_policy_manager=policy_manager_enforcer(store),
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1254,6 +1292,7 @@ def test_owner_reverts_own_proposed_policy_succeeds_and_cascades_to_draft(
         graph=graph,
         audit_store=audit_store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -1284,6 +1323,7 @@ def test_revert_non_owner_policy_manager_is_rejected_proving_owner_only_not_role
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -1307,6 +1347,7 @@ def test_revert_wrong_current_status_is_rejected_via_require_status(
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -1327,6 +1368,7 @@ def test_revert_audit_write_precedes_graph_write(lifecycle_rig: LifecycleRig) ->
         graph=graph,
         audit_store=audit_store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     events = lifecycle_rig.events
@@ -1350,6 +1392,7 @@ def test_revert_graph_failure_after_audit_success_records_failed_event_and_raise
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert [call.outcome for call in audit_store.rows] == ["applied", "failed"]
@@ -1367,6 +1410,7 @@ def test_revert_nonexistent_policy_raises_not_found(lifecycle_rig: LifecycleRig)
             graph=graph,
             audit_store=audit_store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1400,6 +1444,7 @@ def test_update_policy_draft_applies_only_supplied_fields(lifecycle_rig: Lifecyc
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -1428,6 +1473,7 @@ def test_update_policy_draft_clears_a_field_via_explicit_none(lifecycle_rig: Lif
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.updated_fields == ("scope_out",)
@@ -1448,6 +1494,7 @@ def test_update_policy_draft_rejects_non_owner_non_elevated(lifecycle_rig: Lifec
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
     assert lifecycle_rig.logged_groups == 0
 
@@ -1465,6 +1512,7 @@ def test_update_policy_draft_allows_system_owner_override(lifecycle_rig: Lifecyc
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -1485,6 +1533,7 @@ def test_update_policy_draft_rejects_non_draft_status(lifecycle_rig: LifecycleRi
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.action == "edit"
@@ -1506,6 +1555,7 @@ def test_update_policy_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> No
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1525,6 +1575,7 @@ def test_update_policy_draft_graph_failure_raises_translated_error(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1584,6 +1635,7 @@ def test_add_standard_to_draft_creates_standard_with_deterministic_id(
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -1615,6 +1667,7 @@ def test_add_standard_to_draft_implementation_status_independent_of_governance_s
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == "draft"
@@ -1637,6 +1690,7 @@ def test_add_standard_to_draft_rejects_non_owner_non_elevated(lifecycle_rig: Lif
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
     assert lifecycle_rig.logged_groups == 0
 
@@ -1655,6 +1709,7 @@ def test_add_standard_to_draft_allows_system_owner_override(lifecycle_rig: Lifec
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.policy_id == "pol_x"
@@ -1677,6 +1732,7 @@ def test_add_standard_to_draft_rejects_non_draft_parent_status(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.action == "edit"
@@ -1701,6 +1757,7 @@ def test_add_standard_to_draft_raises_not_found_for_missing_parent_policy(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1721,6 +1778,7 @@ def test_add_standard_to_draft_graph_failure_raises_translated_error(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1739,6 +1797,7 @@ def test_update_standard_draft_applies_only_supplied_fields(lifecycle_rig: Lifec
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.standard_id == "std-1"
@@ -1765,6 +1824,7 @@ def test_update_standard_draft_rejects_non_owner_non_elevated(lifecycle_rig: Lif
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
     assert lifecycle_rig.logged_groups == 0
 
@@ -1788,6 +1848,7 @@ def test_update_standard_draft_ownership_is_transitive_from_parent_policy(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1804,6 +1865,7 @@ def test_update_standard_draft_allows_system_owner_override(lifecycle_rig: Lifec
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.standard_id == "std-1"
@@ -1823,6 +1885,7 @@ def test_update_standard_draft_rejects_non_draft_status(lifecycle_rig: Lifecycle
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.action == "edit"
@@ -1844,6 +1907,7 @@ def test_update_standard_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> 
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1863,6 +1927,7 @@ def test_update_standard_draft_graph_failure_raises_translated_error(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -1887,6 +1952,7 @@ def test_update_standard_draft_backfills_legacy_null_status_before_gating(
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.standard_id == "std-1"
@@ -1914,6 +1980,7 @@ def test_add_control_to_draft_creates_control_with_deterministic_id(
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.standard_id == "std-1"
@@ -1948,6 +2015,7 @@ def test_add_control_to_draft_defaults_implementation_status_planned_not_draft(
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.status == "draft"
@@ -1971,6 +2039,7 @@ def test_add_control_to_draft_rejects_non_owner_non_elevated(lifecycle_rig: Life
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
     assert lifecycle_rig.logged_groups == 0
 
@@ -1995,6 +2064,7 @@ def test_add_control_to_draft_ownership_is_transitive_from_parent_policy(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -2013,6 +2083,7 @@ def test_add_control_to_draft_allows_system_owner_override(lifecycle_rig: Lifecy
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.standard_id == "std-1"
@@ -2036,6 +2107,7 @@ def test_add_control_to_draft_rejects_non_draft_parent_status(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.action == "edit"
@@ -2061,6 +2133,7 @@ def test_add_control_to_draft_raises_not_found_for_missing_parent_standard(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -2082,6 +2155,7 @@ def test_add_control_to_draft_graph_failure_raises_translated_error(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -2107,6 +2181,7 @@ def test_add_control_to_draft_backfills_legacy_null_status_before_gating(
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.standard_id == "std-1"
@@ -2129,6 +2204,7 @@ def test_update_control_draft_applies_only_supplied_fields(lifecycle_rig: Lifecy
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.control_id == "ctrl-1"
@@ -2157,6 +2233,7 @@ def test_update_control_draft_rejects_non_owner_non_elevated(lifecycle_rig: Life
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
     assert lifecycle_rig.logged_groups == 0
 
@@ -2179,6 +2256,7 @@ def test_update_control_draft_ownership_traverses_two_hops_not_one(
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.control_id == "ctrl-1"
@@ -2193,6 +2271,7 @@ def test_update_control_draft_ownership_traverses_two_hops_not_one(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -2209,6 +2288,7 @@ def test_update_control_draft_allows_system_owner_override(lifecycle_rig: Lifecy
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.control_id == "ctrl-1"
@@ -2228,6 +2308,7 @@ def test_update_control_draft_rejects_non_draft_status(lifecycle_rig: LifecycleR
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.action == "edit"
@@ -2249,6 +2330,7 @@ def test_update_control_draft_raises_not_found(lifecycle_rig: LifecycleRig) -> N
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -2268,6 +2350,7 @@ def test_update_control_draft_graph_failure_raises_translated_error(
             graph=graph,
             access_role_store=store,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
 
@@ -2292,6 +2375,7 @@ def test_update_control_draft_backfills_legacy_null_status_before_gating(
         graph=graph,
         access_role_store=store,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.control_id == "ctrl-1"
@@ -2355,6 +2439,7 @@ def test_supersede_fork_mints_new_policy_with_successor_version(
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert result.version == "6"
@@ -2374,6 +2459,7 @@ def test_supersede_fork_writes_superseded_by_edge_prior_to_new(
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     edges = [key for key in lifecycle_rig.graph.edges if key[0] == "SUPERSEDED_BY"]
@@ -2393,6 +2479,7 @@ def test_supersede_fork_forks_full_standard_control_content_not_just_titles(
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     nodes = lifecycle_rig.graph.nodes
@@ -2417,6 +2504,7 @@ def test_supersede_fork_forked_children_are_draft_not_copied_from_approved_sourc
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     nodes = lifecycle_rig.graph.nodes
@@ -2441,6 +2529,7 @@ def test_supersede_fork_never_writes_to_prior_tree_nodes(lifecycle_rig: Lifecycl
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     for key, properties in before.items():
@@ -2464,6 +2553,7 @@ def test_supersede_missing_prior_raises_not_found(lifecycle_rig: LifecycleRig) -
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert lifecycle_rig.store.groups == []
@@ -2485,6 +2575,7 @@ def test_supersede_non_approved_prior_raises_named_error(lifecycle_rig: Lifecycl
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.policy_id == _PRIOR_POLICY_ID
@@ -2509,6 +2600,7 @@ def test_supersede_records_audit_event_with_supersedes_policy_id(
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     applied_rows = [row for row in lifecycle_rig.audit.rows if row.outcome == "applied"]
@@ -2530,6 +2622,7 @@ def test_ordinary_create_policy_draft_still_has_null_supersedes_policy_id_in_aud
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert lifecycle_rig.audit.rows[0].details.get("supersedes_policy_id") is None
@@ -2551,6 +2644,7 @@ def test_fresh_draft_with_capability_ids_issues_guarded_claim_and_audits_ids(
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     governed = {key[2] for key in lifecycle_rig.graph.edges if key[0] == "GOVERNED_BY"}
@@ -2580,6 +2674,7 @@ def test_fresh_draft_with_duplicate_capability_ids_dedupes_preserving_order(
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert lifecycle_rig.audit.rows[0].details["capability_ids"] == ["cap_b", "cap_a"]
@@ -2595,6 +2690,7 @@ def test_fresh_draft_without_capability_ids_reads_no_governors_and_audits_empty_
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert lifecycle_rig.audit.rows[0].details["capability_ids"] == []
@@ -2615,6 +2711,7 @@ def test_missing_capability_id_raises_named_error_rejected_audit_and_zero_writes
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.capability_ids == ("cap_missing",)
@@ -2642,6 +2739,7 @@ def test_already_governed_capability_raises_named_error_rejected_audit_and_zero_
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     assert exc_info.value.capability_ids == ("cap_b",)
@@ -2666,6 +2764,7 @@ def test_lost_claim_race_records_failed_audit_with_empty_ids_and_writes_no_child
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.hooked,
+            graph_name=POLICY_SYSTEM,
         )
 
     # Only the unrelated group is in the log: no Policy, edge, Standard or Control of the claim.
@@ -2690,6 +2789,7 @@ def test_fork_ignores_capability_ids_reads_no_governors_and_writes_no_governed_b
         graph=lifecycle_rig.read,
         audit_store=lifecycle_rig.audit,
         submitter=lifecycle_rig.gateway,
+        graph_name=POLICY_SYSTEM,
     )
 
     assert not any(key[0] == "GOVERNED_BY" for key in lifecycle_rig.graph.edges)
@@ -2714,6 +2814,7 @@ def test_every_capability_claim_audit_payload_validates_against_the_registered_m
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.hooked,
+            graph_name=POLICY_SYSTEM,
         )
     with pytest.raises(PolicyCapabilityNotFoundError):
         create_policy_draft(
@@ -2723,6 +2824,7 @@ def test_every_capability_claim_audit_payload_validates_against_the_registered_m
             graph=lifecycle_rig.read,
             audit_store=lifecycle_rig.audit,
             submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
         )
 
     rows = lifecycle_rig.audit.rows
