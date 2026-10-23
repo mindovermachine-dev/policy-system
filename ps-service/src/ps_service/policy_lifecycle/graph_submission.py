@@ -174,7 +174,7 @@ def lifecycle_submitter(gateway: GroupSubmitter) -> LifecycleSubmitter:
 def single_tenant_graph_name() -> str:
     """Return the single-tenant policy graph's name.
 
-    This component's own accessor for the convention `mcp_interface.mcp_server` and Company Merge
+    This component's own accessor for the convention `mcp_interface.tool_core` and Company Merge
     share (a deliberate near-duplicate, not a shared import): the one graph name used for the
     read-only query surface and the gateway's writes.
 

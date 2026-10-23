@@ -34,7 +34,7 @@ from ps_service.change_monitor.models import (
     TrackedInstrumentNode,
 )
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 
@@ -43,7 +43,7 @@ _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Keep the audit rows off Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 
@@ -82,7 +82,7 @@ def _amended_instrument(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ig
         ),
     )
     monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: fake.dependencies
+        ingestion_tools, "build_default_change_check_dependencies", lambda: fake.dependencies
     )
 
 
@@ -109,7 +109,7 @@ def test_check_regulations_audits_the_caller_as_actor(
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
         result = _call()

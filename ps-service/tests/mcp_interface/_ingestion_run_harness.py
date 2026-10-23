@@ -23,7 +23,7 @@ from mcp_interface.test_ingest_regulation_tool import (
 from ps_service.api import run_status
 from ps_service.api.ingestion_orchestration import GraphOpeners
 from ps_service.ingestion_runs import dispatch
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, mcp_server
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,7 +46,7 @@ def install_ingestion_run_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryInge
     def _factory(_config: object, **_kwargs: object) -> InMemoryIngestionRunStore:
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgIngestionRunStore", _factory)
+    monkeypatch.setattr(ingestion_tools, "PsycopgIngestionRunStore", _factory)
     return store
 
 
@@ -144,7 +144,7 @@ def use_gated_real_pipeline(
     `short_name` (the single-tenant graph stays shared) and each native graph has its own gate.
     """
     _use_real_pipeline_stages(monkeypatch)
-    deps = mcp_server.build_default_pipeline_dependencies()
+    deps = ingestion_tools.build_default_pipeline_dependencies()
     gate = threading.Event()
     short_name_gates: dict[str, threading.Event] = {}
     graphs = deps.graphs
@@ -191,5 +191,5 @@ def use_gated_real_pipeline(
     # a gate before delegating, and (per-short_name mode) the graph openers hand out one
     # `_MiniGraph` per short_name, the same fake-FalkorDB category. Every stage's business
     # logic still runs for real.
-    monkeypatch.setattr(mcp_server, "build_default_pipeline_dependencies", lambda: gated)
+    monkeypatch.setattr(ingestion_tools, "build_default_pipeline_dependencies", lambda: gated)
     return GatedPipeline(gate=gate, short_name_gates=short_name_gates)

@@ -25,7 +25,7 @@ from mcp.types import CallToolResult, TextContent
 
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import tool_core as mcp_server
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
@@ -328,7 +328,7 @@ def test_resolve_graph_wraps_any_failure_as_graph_unavailable(
     monkeypatch.setattr(mcp_server, "connect_from_config", boom)
 
     with pytest.raises(McpGraphUnavailableError) as excinfo:
-        mcp_server._resolve_graph(  # pyright: ignore[reportPrivateUsage]  # test drives the module-internal graph resolver directly
+        mcp_server.resolve_graph(  # pyright: ignore[reportPrivateUsage]  # test drives the module-internal graph resolver directly
             mcp_server.load_config()
         )
 

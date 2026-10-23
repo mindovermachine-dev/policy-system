@@ -2,7 +2,8 @@
 
 Re-exports the component's sanitised boundary exception types and the injectable
 `handle_mcp_tool_call` core. The MCP server definition (tools and the `psdomain://concepts`
-resource) is imported from `ps_service.mcp_interface.mcp_server` directly; its Streamable HTTP
+resource) lives in `tool_core` and one `*_tools` module per tool group, and `mcp_server.server` is
+the front door that imports them all; its Streamable HTTP
 transport lives in `ps_service.mcp_interface.http_transport`.
 """
 

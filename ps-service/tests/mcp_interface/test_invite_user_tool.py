@@ -39,7 +39,7 @@ from ps_service.authz.service import list_audit_events
 from ps_service.invitations.client import AuthentikTransport, create_invitation
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,7 +56,7 @@ _BASE_URL = "https://authentik.example.com"
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Every invite writes `user.invite` rows: keep them off a real Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 
@@ -92,11 +92,11 @@ def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     transport = _RecordingTransport(json.dumps({"pk": "tok-abc"}).encode())
     monkeypatch.setattr(
-        mcp_server,
+        catalog_tools,
         "create_invitation",
         functools.partial(create_invitation, transport=transport),
     )
@@ -133,7 +133,7 @@ def test_malformed_email_rejected_before_any_authentik_call(
 
     transport = _RecordingTransport(json.dumps({"pk": "unused"}).encode())
     monkeypatch.setattr(
-        mcp_server,
+        catalog_tools,
         "create_invitation",
         functools.partial(create_invitation, transport=transport),
     )
@@ -161,7 +161,7 @@ def test_authentik_unreachable_returns_sanitized_error_no_stack_trace_no_token(
 
     transport = _HttpErrorTransport(503, "Service Unavailable")
     monkeypatch.setattr(
-        mcp_server,
+        catalog_tools,
         "create_invitation",
         functools.partial(create_invitation, transport=transport),
     )
@@ -210,12 +210,12 @@ def _as_admin(monkeypatch: pytest.MonkeyPatch) -> None:
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
 
 def _use_transport(monkeypatch: pytest.MonkeyPatch, transport: AuthentikTransport) -> None:
     monkeypatch.setattr(
-        mcp_server,
+        catalog_tools,
         "create_invitation",
         functools.partial(create_invitation, transport=transport),
     )

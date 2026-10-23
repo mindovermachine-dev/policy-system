@@ -57,7 +57,7 @@ from ps_service.change_monitor.models import (
 )
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, mcp_server
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 
 if TYPE_CHECKING:
@@ -200,7 +200,7 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_and_logs_no_principal(
         reingestion_results=(reingestion_outcome, skip_exc),
     )
     monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: fake.dependencies
+        ingestion_tools, "build_default_change_check_dependencies", lambda: fake.dependencies
     )
 
     result = _call_check_regulations()
@@ -262,7 +262,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
     emitter = configure()
     fake = build_fake_change_check_dependencies()
     monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: fake.dependencies
+        ingestion_tools, "build_default_change_check_dependencies", lambda: fake.dependencies
     )
     dependency_health.mark_unhealthy(dependency_health.LLM_INTERFACE, error=RuntimeError("down"))
 
@@ -308,7 +308,7 @@ def test_graph_unavailable_returns_named_error_when_single_tenant_graph_open_fai
         fake.dependencies, open_single_tenant=_raising_open_single_tenant
     )
     monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: broken_dependencies
+        ingestion_tools, "build_default_change_check_dependencies", lambda: broken_dependencies
     )
 
     result = _call_check_regulations()
@@ -344,7 +344,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
         fake.dependencies, read_tracked_instruments=_raising_read_tracked_instruments
     )
     monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: broken_dependencies
+        ingestion_tools, "build_default_change_check_dependencies", lambda: broken_dependencies
     )
 
     result = _call_check_regulations()
@@ -385,7 +385,7 @@ def test_sanitizer_wraps_the_pipeline_baseline_opener_so_a_driver_error_never_le
         ),
     )
 
-    sanitized = mcp_server._sanitize_change_check_graph_opens(broken)  # pyright: ignore[reportPrivateUsage]
+    sanitized = ingestion_tools._sanitize_change_check_graph_opens(broken)  # pyright: ignore[reportPrivateUsage]
 
     with pytest.raises(McpGraphUnavailableError) as raised:
         sanitized.pipeline.graphs.baseline(object(), "CRA")  # pyright: ignore[reportArgumentType]

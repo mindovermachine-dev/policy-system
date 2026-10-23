@@ -112,8 +112,8 @@ _DRAFT_VISIBILITY_OVERRIDE_ROLES = frozenset({AccessRole.SYSTEM_OWNER, AccessRol
 # `update-policy-draft`'s patchable-field allow-list, derived from the domain schema's property
 # flags: every Policy property not flagged identity-bearing (`title`, `owner_id`,
 # `owner_subject`, `owner_issuer`) or lifecycle-managed (`status`, `version`). Declared once here
-# and imported into `mcp_interface.mcp_server` (its `_parse_patch_fields` call site) so the two
-# layers cannot drift.
+# and imported into `mcp_interface.policy_lifecycle_tools` (its `_parse_patch_fields` call site) so
+# the two layers cannot drift.
 _POLICY_PATCHABLE_FIELDS = patchable_fields("Policy")
 
 # `add-standard-to-draft`'s and `update-standard-draft`'s patchable-field allow-list, derived
@@ -129,7 +129,7 @@ _STANDARD_IMPLEMENTATION_STATUS_VALUES = enum_values("Standard", "implementation
 # content-derived from it) and `status` (governance status, lifecycle-managed only). Unlike
 # `_STANDARD_PATCHABLE_FIELDS` it includes `"type"`, because `update-control-draft` is the only
 # post-creation path to change it. This is the full set; `add-control-to-draft` narrows it by
-# `"type"` at the MCP boundary (`mcp_interface.mcp_server`'s
+# `"type"` at the MCP boundary (`mcp_interface.policy_lifecycle_tools`'s
 # `_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS`), since creation sets the type through `control_type`.
 _CONTROL_PATCHABLE_FIELDS = patchable_fields("Control")
 _CONTROL_IMPLEMENTATION_STATUS_VALUES = enum_values("Control", "implementation_status")

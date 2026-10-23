@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ps_service.domain_schema import enum_values, patchable_fields
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import policy_lifecycle_tools as mcp_server
 
 
 def test_add_control_to_draft_fields_are_the_control_set_without_type() -> None:

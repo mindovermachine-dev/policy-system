@@ -26,7 +26,7 @@ from mcp.types import CallToolResult, TextContent
 
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -80,7 +80,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: object) -> _ForbiddenGraphO
         "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
         _opener_factory(opener),
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
     return opener
 
 

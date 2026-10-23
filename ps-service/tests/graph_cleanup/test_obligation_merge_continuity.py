@@ -24,7 +24,7 @@ from passkey_signing.test_graph_cleanup_obligation_signing_to_merge import world
 from graph_cleanup._fakes import OBL_ABSORBED, OBL_SURVIVOR
 from graph_cleanup._mcp_calls import call_tool, factory
 from ps_service.audit.models import AuditEventRow
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import tool_core
 
 if TYPE_CHECKING:
     import pytest
@@ -40,9 +40,9 @@ _OWNER = ("owner", "https://issuer.example.com/")
 def test_preview_sign_execute_one_group_and_the_audit_row_it_is_linked_to(
     monkeypatch: pytest.MonkeyPatch, world: _World
 ) -> None:
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", factory(world.pending))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", factory(world.roles))
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", factory(world.audit))
+    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", factory(world.pending))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", factory(world.roles))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", factory(world.audit))
     officer = (ACTOR_SUBJECT, ACTOR_ISSUER)
 
     # 1. The MCP tool previews and creates the approval; nothing is written yet.

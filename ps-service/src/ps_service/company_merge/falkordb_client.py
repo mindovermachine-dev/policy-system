@@ -6,7 +6,7 @@ Holds this component's own copy of the connection helpers in
 accessor `single_tenant_graph_name`. The copy is deliberate; it is not a shared import.
 
 `single_tenant_graph_name()` follows the same `PS_FALKORDB_GRAPH` convention (default
-`"policy_system"`) as `ps_service.mcp_interface.mcp_server`: Company Merge reads the one
+`"policy_system"`) as `ps_service.mcp_interface.tool_core`: Company Merge reads the one
 single-tenant graph that `mcp_interface` exposes for read-only Cypher.
 
 The surface is read-only. Every Company Merge write is a Graph Write Gateway group
@@ -152,7 +152,7 @@ def single_tenant_graph_name() -> str:
 
     This is the one graph name shared across the system for read-only query access and for
     the gateway's writes, and it follows the `DEFAULT_GRAPH` convention of
-    `ps_service.mcp_interface.mcp_server`.
+    `ps_service.mcp_interface.tool_core`.
 
     Returns:
         The value of the `PS_FALKORDB_GRAPH` environment variable, or `"policy_system"` when

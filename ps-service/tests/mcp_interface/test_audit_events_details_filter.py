@@ -18,7 +18,7 @@ from mcp_interface.test_catalog_source_authz_gate import (
 )
 from ps_service.audit import AuditDetails, register_audit_action, register_audit_resource_type
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 
 class _RestoreLikeDetails(AuditDetails):
@@ -37,8 +37,8 @@ _ACTOR = ("actor-sub", "https://issuer.example.com/")
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
     return store
 
 

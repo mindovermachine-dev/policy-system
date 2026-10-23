@@ -27,7 +27,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.graph_cleanup.executors import execute_capability_merge
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.passkey_signing.errors import PendingApprovalPersistenceError
 
 if TYPE_CHECKING:
@@ -68,8 +68,8 @@ class _Env:
             incoming_created_at=_NEW,
             existing_created_at=_OLD,
         )
-        monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", factory(access_roles or roles()))
-        monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", factory(self.store))
+        monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", factory(access_roles or roles()))
+        monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", factory(self.store))
 
         def _open(_config: object) -> CleanupReadGraph:
             return rig.read
@@ -478,7 +478,7 @@ def test_an_unexpected_or_store_failure_gives_the_fixed_message_and_no_approval(
             _ = kwargs
             raise failure
 
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", factory(_RaisingStore()))
+    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", factory(_RaisingStore()))
     before = env.snapshot()
 
     text = env.resolve_merge()

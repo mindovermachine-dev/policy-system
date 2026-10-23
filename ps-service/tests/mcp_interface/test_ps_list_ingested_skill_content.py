@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ps_service.mcp_interface.mcp_server import (
+from ps_service.mcp_interface.tool_core import (
     _GRAPH_UNAVAILABLE_DETAIL,  # pyright: ignore[reportPrivateUsage]  # test pins the exact error text the skill must name
-    _UNEXPECTED_ERROR_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact error text the skill must name
+)
+from ps_service.mcp_interface.tool_core import (
+    UNEXPECTED_ERROR_MESSAGE as _UNEXPECTED_ERROR_MESSAGE,
 )
 from ps_service.query_engine.cypher_query import (
     _GRAPH_UNSEEDED_DETAIL,  # pyright: ignore[reportPrivateUsage]  # test pins the exact error text the skill must name

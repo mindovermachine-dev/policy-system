@@ -55,7 +55,7 @@ from ps_service.config import ServiceConfig
 from ps_service.invitations.service import invite_user_audited
 from ps_service.logging import configure
 from ps_service.main import create_app
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
 from ps_service.passkey_signing.router import post_enroll_verify
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
@@ -104,10 +104,10 @@ def test_mcp_and_rest_sweeps_record_the_same_rows(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     mcp_store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(mcp_store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(mcp_store))
     fake_mcp = _amended_fake()
     monkeypatch.setattr(
-        mcp_server,
+        ingestion_tools,
         "build_default_change_check_dependencies",
         lambda: fake_mcp.dependencies,
     )
@@ -206,8 +206,8 @@ def test_mcp_and_rest_denials_record_the_same_row_shape(monkeypatch: pytest.Monk
 
     mcp_store = InMemoryAuditStore()
     monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(mcp_store))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(mcp_store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
     configure()
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         asyncio.run(mcp_server.server.call_tool("check_regulations", {}))

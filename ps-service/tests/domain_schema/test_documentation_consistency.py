@@ -19,13 +19,13 @@ _SKILL = _REPO / "ps-skills" / "ps-plugin" / "skills" / "ps-qna" / "SKILL.md"
 _DOC = _REPO / "docs" / "artifacts" / "ps-domain-concepts.md"
 _SEARCH_ROOTS = ("ps-service/src", "ps-service/tests", "docs", "ps-skills")
 _SUFFIXES = {".py", ".md"}
-_MCP_SERVER_SRC = Path(mcp_server.__file__).read_text(encoding="utf-8")
+_MCP_INTERFACE = Path(mcp_server.__file__).parent
 
 # Sentences that legitimately say "verbatim" about the RESOURCE (never the tool).
 # key: (path relative to repo, exact sentence fragment) -> justification.
 _RESOURCE_VERBATIM_WHITELIST = {
     (
-        "ps-service/src/ps_service/mcp_interface/mcp_server.py",
+        "ps-service/src/ps_service/mcp_interface/cypher_tools.py",
         'description="The canonical PS compliance-graph vocabulary and schema, served verbatim."',
     ): "MCP resource description: the RESOURCE is the verbatim document",
     (
@@ -39,23 +39,28 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _tool_docstring() -> str:
-    tree = ast.parse(_MCP_SERVER_SRC)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "domain_concepts":
-            return ast.get_docstring(node) or ""
+def _mcp_trees(directory: Path = _MCP_INTERFACE) -> list[ast.Module]:
+    """The parsed module of every file of the MCP interface, found by glob."""
+    return [ast.parse(_read(path)) for path in sorted(directory.glob("*.py"))]
+
+
+def _tool_docstring(directory: Path = _MCP_INTERFACE) -> str:
+    for tree in _mcp_trees(directory):
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "domain_concepts":
+                return ast.get_docstring(node) or ""
     raise AssertionError("domain_concepts not found")
 
 
-def _instructions() -> str:
-    tree = ast.parse(_MCP_SERVER_SRC)
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.keyword)
-            and node.arg == "instructions"
-            and isinstance(node.value, ast.Constant | ast.JoinedStr)
-        ):
-            return ast.unparse(node.value)
+def _instructions(directory: Path = _MCP_INTERFACE) -> str:
+    for tree in _mcp_trees(directory):
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.keyword)
+                and node.arg == "instructions"
+                and isinstance(node.value, ast.Constant | ast.JoinedStr)
+            ):
+                return ast.unparse(node.value)
     raise AssertionError("instructions not found")
 
 
@@ -131,3 +136,32 @@ def test_no_text_describes_the_tool_as_verbatim_or_the_same_text_as_the_resource
                 offenders.append(f"{relative}: {flat[:120]}")
 
     assert not offenders, "\n".join(offenders)
+
+
+def test_the_docstring_and_instruction_scans_reach_a_probe_in_any_module(tmp_path: Path) -> None:
+    (tmp_path / "probe_tools.py").write_text(
+        'def domain_concepts() -> None:\n    """probe docstring"""\n'
+        'server = MCPServer(name="x", instructions="probe instructions")\n',
+        encoding="utf-8",
+    )
+
+    assert _tool_docstring(tmp_path) == "probe docstring"
+    assert _instructions(tmp_path) == "'probe instructions'"
+
+
+def test_the_domain_concepts_tool_and_server_instructions_are_each_defined_once() -> None:
+    tools = [
+        node
+        for tree in _mcp_trees()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "domain_concepts"
+    ]
+    instructions = [
+        node
+        for tree in _mcp_trees()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.keyword) and node.arg == "instructions"
+    ]
+
+    assert len(tools) == 1
+    assert len(instructions) == 1

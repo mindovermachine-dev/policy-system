@@ -29,7 +29,7 @@ from ps_service.audit.models import AuditEventRow, resolve_details_model
 from ps_service.authz.models import AccessRole
 from ps_service.graph_cleanup import audit_actions
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
 
 if TYPE_CHECKING:
@@ -121,9 +121,9 @@ def test_an_unreachable_graph_never_leaks_internals_from_any_tool(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     configure()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(_roles()))
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _factory(FakeApprovalStore()))
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _factory(RecordingAuditStore()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_roles()))
+    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(FakeApprovalStore()))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory(RecordingAuditStore()))
 
     def _boom(_config: object) -> object:
         message = "connection refused to 10.0.0.1:6379 relation x"
@@ -174,9 +174,9 @@ def test_list_audit_events_filtered_by_each_cleanup_action_returns_its_rows(
         )
         for index, each in enumerate(CLEANUP_ACTIONS)
     ]
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(_roles()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_roles()))
     monkeypatch.setattr(
-        mcp_server, "PsycopgAuditStore", _factory(RecordingAuditStore(history=history))
+        tool_core, "PsycopgAuditStore", _factory(RecordingAuditStore(history=history))
     )
 
     body = json.loads(_call("list-audit-events", {"action": action}, sub=_OWNER))
@@ -192,8 +192,8 @@ def test_the_new_resource_types_are_accepted_as_audit_filters(
     monkeypatch: pytest.MonkeyPatch, resource_type: str
 ) -> None:
     configure()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(_roles()))
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _factory(RecordingAuditStore()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_roles()))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory(RecordingAuditStore()))
 
     body = json.loads(_call("list-audit-events", {"resource_type": resource_type}, sub=_OWNER))
 

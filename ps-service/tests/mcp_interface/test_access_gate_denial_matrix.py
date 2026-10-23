@@ -26,7 +26,7 @@ from mcp_interface.test_catalog_source_skills import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
 
 _ISSUER = "https://issuer.example.com/"
@@ -79,8 +79,8 @@ _REFUSING_TOOLS = sorted(
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # injected by name
     configure()
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
     _install_store(monkeypatch)
     return store
 

@@ -68,7 +68,7 @@ import ps_service.main as main_module
 from ps_service.config import ServiceConfig
 from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
 from ps_service.main import create_app
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import cypher_tools, tool_core
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
@@ -638,7 +638,7 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
     def stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", stub_mcp_connect_from_config)
+    monkeypatch.setattr(tool_core, "connect_from_config", stub_mcp_connect_from_config)
 
     app = create_app(config)
 
@@ -646,7 +646,7 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
     # proof (a refused bind would raise here); no credential/header/token of
     # any kind is passed to `cypher` below.
     with TestClient(app):
-        result = mcp_server.cypher("MATCH (n) RETURN n.id")
+        result = cypher_tools.cypher("MATCH (n) RETURN n.id")
 
     assert not (isinstance(result, str) and result.startswith("error:"))
 

@@ -43,7 +43,7 @@ from mcp_interface.test_catalog_source_skills import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -133,7 +133,7 @@ def test_authenticated_user_only_caller_is_denied(
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     store_of_overrides = _install_store(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -172,7 +172,7 @@ def test_system_admin_caller_succeeds_exactly_as_documented(
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     _install_store(monkeypatch)
 
     with _verified_actor(sub=_NEW_SYSTEM_ADMIN_SUBJECT):
@@ -194,7 +194,7 @@ def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
     """
     configure()
     monkeypatch.setattr(
-        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
+        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
     store_of_overrides = _install_store(monkeypatch)
 
@@ -217,7 +217,7 @@ def test_sole_bootstrapped_system_owner_also_satisfies_the_system_admin_gate(
     """
     configure()
     store = FakeAccessRoleStore(expected_owner=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     _install_store(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):

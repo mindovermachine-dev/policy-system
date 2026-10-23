@@ -29,7 +29,7 @@ from mcp_interface.test_near_miss_merge_via_cleanup import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ def cleanup_rig() -> Iterator[CleanupRig]:
 @pytest.fixture
 def audit_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 

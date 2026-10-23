@@ -18,7 +18,7 @@ from mcp.types import CallToolResult, TextContent
 
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -97,7 +97,7 @@ def _officer_store() -> FakeAccessRoleStore:
 def test_compliance_officer_gets_the_ac_bi_004_wire_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
     graph = _Graph()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _store_factory(_officer_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(_officer_store()))
     monkeypatch.setattr(
         "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
         _opener_factory(lambda _config: graph),
@@ -132,7 +132,7 @@ def test_compliance_officer_gets_the_ac_bi_004_wire_shape(monkeypatch: pytest.Mo
 
 def test_unreachable_graph_returns_the_sanitised_error(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _store_factory(_officer_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(_officer_store()))
 
     def _boom(_config: object) -> object:
         message = "connection refused to 10.0.0.1:6379"

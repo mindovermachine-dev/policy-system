@@ -30,7 +30,7 @@ from graph_gateway._fakes import close_all_rigs
 from ps_service.authz.models import AccessRole
 from ps_service.graph_cleanup.executors import execute_role_merge
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -61,8 +61,8 @@ class _Env:
         rig.seed_near_miss_review(
             _REVIEW, incoming_id=ROLE_SURVIVOR, existing_id=ROLE_ABSORBED, kind="Role"
         )
-        monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", factory(access_roles or roles()))
-        monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", factory(self.store))
+        monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", factory(access_roles or roles()))
+        monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", factory(self.store))
 
         def _open(_config: object) -> CleanupReadGraph:
             return rig.read

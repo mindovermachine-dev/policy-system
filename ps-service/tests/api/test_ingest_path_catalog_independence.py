@@ -22,7 +22,7 @@ import pytest
 _INGEST_PATH_MODULES = (
     "ps_service.api.ingestion_orchestration",
     "ps_service.api.routes",
-    "ps_service.mcp_interface.mcp_server",
+    "ps_service.mcp_interface.ingestion_tools",
 )
 _FORBIDDEN_NAMES = frozenset(
     {

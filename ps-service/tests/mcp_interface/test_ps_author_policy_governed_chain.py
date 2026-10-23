@@ -31,7 +31,7 @@ from policy_lifecycle._gateway_fakes import PolicyGraphSeeder, PolicyReadGraph, 
 
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  -- pins the exact seed-check query text, mirrors test_cypher_tool.py
 )
@@ -175,9 +175,9 @@ def _install(monkeypatch: pytest.MonkeyPatch, graph: _ChainGraph) -> None:
     def _role_store(_config: object, **_kwargs: object) -> object:
         return roles
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect)
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _audit)
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _role_store)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _audit)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _role_store)
 
 
 def _call(tool: str, args: dict[str, object]) -> dict[str, object]:

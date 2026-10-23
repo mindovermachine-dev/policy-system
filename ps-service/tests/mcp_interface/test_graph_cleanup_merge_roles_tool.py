@@ -34,7 +34,7 @@ from mcp.types import CallToolResult, TextContent
 
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.passkey_signing.errors import PendingApprovalPersistenceError
 
 if TYPE_CHECKING:
@@ -84,8 +84,8 @@ class _Env:
         self.rig = CleanupRig()
         self.rig.seed_role_merge_world()
         self.pending = FakeApprovalStore()
-        monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(_officers()))
-        monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _factory(self.pending))
+        monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_officers()))
+        monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(self.pending))
         monkeypatch.setattr(
             "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
             _factory(self._open_graph),
@@ -459,7 +459,7 @@ def test_an_unreachable_approval_store_returns_a_fixed_message_and_leaves_no_tra
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     down = _DownApprovalStore()
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _factory(down))
+    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(down))
     before = env.graph_state()
 
     text = env.call("merge-roles", _MERGE_ARGS)

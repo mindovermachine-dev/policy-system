@@ -308,9 +308,9 @@ Control cardinality question in this session has been answered "finish".
 
 Report every non-success outcome below as its own named state -- never
 collapsed into a generic "action failed". Sourced from
-`ps_service.policy_lifecycle.errors` (exact message text), `mcp_server.py`'s
+`ps_service.policy_lifecycle.errors` (exact message text), `policy_lifecycle_tools.py`'s
 `_parse_patch_fields`/`add-control-to-draft`'s own `control_type` check, and
-the `cypher` tool's own docstring -- every message below was verified
+`cypher_tools.py`'s `cypher` tool docstring -- every message below was verified
 against that real source, not copied from paraphrase:
 
 | Tool result shape                                                                                                                                                                                                | Named state to report                                                                                                                                                                                                        | Applies to                                                                                                                                                                  |

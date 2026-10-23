@@ -7,7 +7,7 @@ released, so "row still `running` and no slot held" reliably means "no worker is
 
 Threads are daemons so a graceful shutdown never waits on a multi-minute ingestion; a run
 cut short that way keeps a `running` row, which `_reconcile_orphaned_run` in
-`ps_service.mcp_interface.mcp_server` later reconciles.
+`ps_service.mcp_interface.ingestion_tools` later reconciles.
 The registry is process-local: it assumes the single-replica deployment.
 """
 

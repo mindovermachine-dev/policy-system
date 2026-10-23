@@ -100,7 +100,7 @@ from mcp.types import CallToolResult, TextContent
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.passkey_signing.models import PendingApprovalRow
 
 if TYPE_CHECKING:
@@ -405,7 +405,7 @@ def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
         installed_process_gateway().rig.store.audit_rows.add(event_id)
 
     store = InMemoryAuditStore(event_id_sink=_register)
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 
@@ -511,7 +511,7 @@ def test_check_approval_unknown_id_gets_generic_not_found(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     monkeypatch.setattr(
-        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
+        tool_core, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
     )
 
     with _verified_actor():
@@ -553,7 +553,7 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
         actor_issuer=_ACTOR_ISSUER,
         display_summary={},
     )
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _fake_store_factory(store))
 
     result = asyncio.run(
         mcp_server.server.call_tool("near_misses_check_approval", {"pending_approval_id": row.id})
@@ -589,7 +589,7 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
         actor_issuer=_ACTOR_ISSUER,
         display_summary={},
     )
-    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _fake_store_factory(store))
 
     with _verified_actor(sub="someone-else", iss=_ACTOR_ISSUER):
         result = asyncio.run(

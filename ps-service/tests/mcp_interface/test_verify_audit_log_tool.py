@@ -30,7 +30,7 @@ from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.audit.models import AuditChainBreak, AuditChainVerification
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure, reset_for_tests
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -86,8 +86,8 @@ def _install(
     monkeypatch: pytest.MonkeyPatch, *, audit: FakeAuditStore, roles: object | None = None
 ) -> FakeAccessRoleStore:
     access = FakeAccessRoleStore(expected_owner=(_OWNER, _ISSUER))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(roles or access))
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _factory(audit))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(roles or access))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory(audit))
     return access
 
 

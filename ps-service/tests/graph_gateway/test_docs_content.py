@@ -876,7 +876,7 @@ def test_operations_guide_says_policy_lifecycle_tools_answer_an_error_without_a_
 
 # --- Graph Cleanup writes through the gateway ----------------------------------------
 
-_MCP_SERVER = _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "mcp_server.py"
+_MCP_INTERFACE = _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface"
 _EXECUTORS = _REPO / "ps-service" / "src" / "ps_service" / "graph_cleanup" / "executors.py"
 _CLEANUP_TOOL_FUNCTIONS = (
     "merge_capabilities_tool",
@@ -988,13 +988,14 @@ def test_operations_guide_says_graph_cleanup_without_a_gateway_records_a_failed_
     assert "`failed`" in ops
 
 
-def _tool_docstrings() -> dict[str, str]:
-    tree = ast.parse(_read(_MCP_SERVER))
-    return {
-        node.name: ast.get_docstring(node) or ""
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name in _CLEANUP_TOOL_FUNCTIONS
-    }
+def _tool_docstrings(directory: Path = _MCP_INTERFACE) -> dict[str, str]:
+    """Docstring of each cleanup tool function, in whichever module of `directory` defines it."""
+    found: dict[str, str] = {}
+    for path in sorted(directory.glob("*.py")):
+        for node in ast.walk(ast.parse(_read(path))):
+            if isinstance(node, ast.FunctionDef) and node.name in _CLEANUP_TOOL_FUNCTIONS:
+                found[node.name] = ast.get_docstring(node) or ""
+    return found
 
 
 def test_the_four_cleanup_mcp_descriptions_say_one_all_or_nothing_graph_write() -> None:
@@ -1743,3 +1744,22 @@ def test_helm_values_reference_shows_the_anonymous_and_the_authenticated_ready_a
 
     assert 'anonymous: {"status":"ready"}' in valref
     assert "Authorization: Bearer $ACCESS_TOKEN" in valref
+
+
+def test_the_cleanup_docstring_scan_reaches_a_probe_in_any_tool_module(tmp_path: Path) -> None:
+    (tmp_path / "probe_tools.py").write_text(
+        'def merge_capabilities_tool() -> None:\n    """probe docstring"""\n', encoding="utf-8"
+    )
+
+    assert _tool_docstrings(tmp_path) == {"merge_capabilities_tool": "probe docstring"}
+
+
+def test_each_cleanup_tool_function_is_defined_in_exactly_one_module() -> None:
+    owners = [
+        path.name
+        for path in sorted(_MCP_INTERFACE.glob("*.py"))
+        for node in ast.walk(ast.parse(_read(path)))
+        if isinstance(node, ast.FunctionDef) and node.name in _CLEANUP_TOOL_FUNCTIONS
+    ]
+
+    assert len(owners) == len(_CLEANUP_TOOL_FUNCTIONS)

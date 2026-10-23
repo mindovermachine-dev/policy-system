@@ -34,7 +34,7 @@ from mcp_interface.test_ingest_regulation_tool import (
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import tool_core
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 
@@ -43,7 +43,7 @@ _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Every sync ingest writes `ingestion_run.*` rows: keep them off Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 
@@ -54,7 +54,7 @@ def _grant_compliance_officer(monkeypatch: pytest.MonkeyPatch) -> None:
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
 
 
 def test_ingest_regulation_audits_verified_actor_and_bound_run_id(

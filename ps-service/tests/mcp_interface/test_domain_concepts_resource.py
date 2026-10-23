@@ -29,7 +29,7 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError
 from mcp.types import CallToolResult, TextContent
 
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import cypher_tools as mcp_server
 from ps_service.mcp_interface.errors import McpResourceUnavailableError
 
 _KNOWN_MARKDOWN = "# PS domain concepts\n\nRegulation → Obligation -- café ✅\n"

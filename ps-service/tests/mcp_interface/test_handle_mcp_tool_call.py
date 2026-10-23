@@ -13,14 +13,14 @@ Hand-written structural fakes throughout, per repo convention -- no
 from __future__ import annotations
 
 import ast
-import inspect
 from typing import TYPE_CHECKING
 
 import pytest
 
 import ps_service.query_engine
+from mcp_interface._source_modules import merged_tool_tree
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import cypher_tools as mcp_server
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
     _WRITE_CLAUSE_REJECTION_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
@@ -217,7 +217,7 @@ def test_falkordb_execution_error_surfaced_verbatim(emitter: LogEmitter) -> None
 
 
 def _module_ast() -> ast.Module:
-    return ast.parse(inspect.getsource(mcp_server))
+    return merged_tool_tree()
 
 
 def _func_renders_as(func: ast.expr) -> str:

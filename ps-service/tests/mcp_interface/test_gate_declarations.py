@@ -21,6 +21,7 @@ from fastapi import APIRouter
 from fastapi.routing import APIRoute
 from mcp.server import MCPServer
 
+from mcp_interface._source_modules import tool_source_trees
 from mcp_interface.test_access_gate_denial_matrix import (
     _ROLE_TOOLS,  # pyright: ignore[reportPrivateUsage]  -- the matrix's own tool list is the denial-test coverage under check
 )
@@ -159,37 +160,39 @@ def test_an_authenticated_only_route_must_state_a_reason() -> None:
         authenticated_only("")
 
 
-def _gated_tool_functions() -> dict[str, ast.FunctionDef]:
-    """Map each `@_gated_tool("<name>", ...)` function in `mcp_server.py` by tool name."""
+def _gated_tool_functions(directory: Path | None = None) -> dict[str, ast.FunctionDef]:
+    """Map each `@_gated_tool("<name>", ...)` function in the tool modules by tool name."""
     source_file = inspect.getsourcefile(mcp_server)
     assert source_file is not None
-    tree = ast.parse(Path(source_file).read_text(encoding="utf-8"))
+    trees = tool_source_trees(directory or Path(source_file).parent)
     found: dict[str, ast.FunctionDef] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for decorator in node.decorator_list:
-            if (
-                isinstance(decorator, ast.Call)
-                and isinstance(decorator.func, ast.Name)
-                and decorator.func.id == "_gated_tool"
-                and isinstance(decorator.args[0], ast.Constant)
-            ):
-                found[str(decorator.args[0].value)] = node
+    for tree in trees:
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                if (
+                    isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "_gated_tool"
+                    and isinstance(decorator.args[0], ast.Constant)
+                ):
+                    found[str(decorator.args[0].value)] = node
     return found
 
 
-def _names_holding_access_denied() -> set[str]:
-    """Module-level tuple constants in `mcp_server.py` that include `AccessDeniedError`."""
+def _names_holding_access_denied(directory: Path | None = None) -> set[str]:
+    """Module-level tuple constants in the tool modules that include `AccessDeniedError`."""
     source_file = inspect.getsourcefile(mcp_server)
     assert source_file is not None
-    tree = ast.parse(Path(source_file).read_text(encoding="utf-8"))
+    trees = tool_source_trees(directory or Path(source_file).parent)
     names: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Tuple):
-            elements = {e.id for e in node.value.elts if isinstance(e, ast.Name)}
-            if "AccessDeniedError" in elements:
-                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    for tree in trees:
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Tuple):
+                elements = {e.id for e in node.value.elts if isinstance(e, ast.Name)}
+                if "AccessDeniedError" in elements:
+                    names.update(t.id for t in node.targets if isinstance(t, ast.Name))
     return names
 
 
@@ -216,3 +219,34 @@ def test_no_gated_tool_body_catches_access_denied_error() -> None:
                 if called in _GATE_CALLS:
                     offenders.append(f"{name}: calls {called}")
     assert offenders == []
+
+
+def test_the_ast_walks_see_a_probe_in_any_tool_group_module(tmp_path: Path) -> None:
+    probe = tmp_path / "probe_tools.py"
+    probe.write_text(
+        "_DENIED = (AccessDeniedError, ValueError)\n"
+        '@_gated_tool("probe-tool")\n'
+        "def probe_tool() -> str:\n"
+        '    return "x"\n',
+        encoding="utf-8",
+    )
+
+    assert "probe-tool" in _gated_tool_functions(tmp_path)
+    assert "_DENIED" in _names_holding_access_denied(tmp_path)
+    assert "probe-tool" not in _gated_tool_functions()
+
+
+def test_every_gated_tool_name_is_defined_exactly_once() -> None:
+    names = [
+        decorator.args[0].value
+        for tree in tool_source_trees()
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Name)
+        and decorator.func.id == "_gated_tool"
+        and isinstance(decorator.args[0], ast.Constant)
+    ]
+
+    assert len(names) == len(set(names))

@@ -7,8 +7,8 @@ request gate (`ps_service.authz.request_gate.enforce_role_gate`, which writes th
 audit row on a denial) and turns a denial into the tool's usual `error: ...` return value, logged
 through the same started/failed pair as any other handled tool failure.
 
-This module cannot import `ps_service.mcp_interface.mcp_server` (the server imports this module),
-so the server passes a `GateEnvironment` of callables that look up its configuration loader, caller
+This module cannot import `ps_service.mcp_interface.tool_core` (`tool_core` imports this module),
+so `tool_core` passes a `GateEnvironment` of callables that look up its configuration loader, caller
 resolvers, store constructors and action runner at call time.
 
 Public names: `GateKind`, `BypassPolicy`, `ToolGate`, `GateEnvironment`, `TOOL_GATES`, `gated_tool`,

@@ -33,7 +33,7 @@ from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -126,7 +126,7 @@ def _serve_a_seeded_fake_graph(monkeypatch: pytest.MonkeyPatch) -> None:
     def _connect_from_config(_config: object) -> _FakeFalkorDB:
         return fake_db
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
 
 
 def _call_cypher_tool_over_bearer_http(*, auth_context: AuthContext, token: str) -> Response:
@@ -239,7 +239,7 @@ def test_bearer_authenticated_cypher_call_logs_no_principal_and_audits_the_actor
     """
     emitter = configure()
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-42"
     token = mock_oidc_provider.mint_token(sub=token_sub)

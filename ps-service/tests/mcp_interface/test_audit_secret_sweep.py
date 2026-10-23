@@ -65,7 +65,7 @@ from ps_service.ingestion_runs.audit_actions import completion_audit_entry
 from ps_service.invitations.errors import AuthentikInvitationError
 from ps_service.invitations.service import invite_user_audited
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from api._fakes import MakeEmitter, ReadLines
@@ -297,7 +297,7 @@ def test_cypher_failure_rows_and_logs_contain_no_secret(
         if failing == "audit_store"
         else {}
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     _install_graph(monkeypatch, _FakeGraphHandle(error=RuntimeError(_LEAK)))
 
     asyncio.run(mcp_server.server.call_tool("cypher", {"query": f"MATCH (n) RETURN n // {_LEAK}"}))

@@ -42,7 +42,7 @@ from mcp_interface.test_ingest_regulation_tool import (
 from ps_service.authz.models import AccessRole
 from ps_service.ingestion_runs import dispatch
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
@@ -147,7 +147,7 @@ def test_callers_below_compliance_officer_get_the_same_denial_as_ingest_regulati
             target=(subject, _CALLER_ISSUER),
             access_role=role,
         )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
 
     with _verified_actor(sub=subject):
         assert _call(tool) == _ACCESS_DENIED_MESSAGE
@@ -161,7 +161,7 @@ def test_an_access_store_outage_fails_closed_for_every_tool(
     tool: str, runs: InMemoryIngestionRunStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
+        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -185,7 +185,7 @@ def test_status_denial_is_identical_for_an_unseen_and_an_existing_run_id(
     runs: InMemoryIngestionRunStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The denial never reveals whether a run id exists, and no read happens first."""
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
     unseen = str(uuid.uuid4())
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -211,7 +211,7 @@ def test_a_granted_compliance_officer_reaches_the_tool_body(
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
     _use_real_pipeline_stages(monkeypatch)
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):

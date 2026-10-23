@@ -47,7 +47,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
@@ -148,7 +148,7 @@ def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _GraphHandleDouble) 
     def _connect_from_config(_config: object) -> _FakeFalkorDB:
         return _FakeFalkorDB(handle)
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
 
 
 @dataclass
@@ -226,7 +226,7 @@ def _install_audit_store(monkeypatch: pytest.MonkeyPatch, store: _FakeAuditStore
     def _factory(_config: object) -> _FakeAuditStore:
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _factory)
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory)
 
 
 def _call_create_policy_draft(
@@ -904,7 +904,7 @@ def _install_access_role_store(monkeypatch: pytest.MonkeyPatch, store: object) -
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
 
 
 def _call_get_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:

@@ -57,6 +57,11 @@ def _checked() -> list[Path]:
     return _modules()
 
 
+def _mcp_modules(directory: Path = _MCP) -> list[Path]:
+    """Every module of the MCP interface package, found by glob so a moved tool is still scanned."""
+    return sorted(directory.glob("*.py"))
+
+
 def _param(path: Path) -> object:
     return pytest.param(path, id=f"{path.parent.name}/{path.name}")
 
@@ -119,7 +124,7 @@ def test_no_legacy_restore_module_remains() -> None:
             *_checked(),
             *_API.glob("restore*.py"),
             _API / "routes_restorations.py",
-            _MCP / "mcp_server.py",
+            *_mcp_modules(),
         )
         if path.is_file()
     ],
@@ -191,3 +196,14 @@ def test_the_legacy_check_finds_a_planted_use(source: str) -> None:
 def test_the_guards_ignore_prose_and_reads(source: str) -> None:
     assert scan_source(source) == []
     assert _used_legacy(ast.parse(source)) == []
+
+
+def test_the_legacy_scan_reaches_a_probe_in_any_mcp_tool_module(tmp_path: Path) -> None:
+    probe = tmp_path / "probe_tools.py"
+    probe.write_text("def f(g):\n    return stage_graph(g)\n", encoding="utf-8")
+
+    scanned = _mcp_modules(tmp_path)
+
+    assert scanned == [probe]
+    assert _used_legacy(ast.parse(probe.read_text(encoding="utf-8"))) == ["stage_graph"]
+    assert (_MCP / "mcp_server.py") in _mcp_modules()

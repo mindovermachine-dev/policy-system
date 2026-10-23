@@ -36,7 +36,7 @@ from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import cypher_tools, tool_core
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -99,7 +99,7 @@ def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _FakeGraphHandle) ->
     def _connect_from_config(_config: object) -> _FakeFalkorDB:
         return fake_db
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
 
 
 def _wrapped_test_client(*, host: str = "127.0.0.1") -> TestClient:
@@ -234,7 +234,7 @@ def test_domain_concepts_resource_reachable_through_the_built_app(
     """
     md_file = tmp_path / "ps-domain-concepts.md"
     md_file.write_text("# PS domain concepts\n\nRegulation -> Obligation\n", encoding="utf-8")
-    monkeypatch.setattr(mcp_server, "_domain_concepts_path", lambda: md_file)
+    monkeypatch.setattr(cypher_tools, "_domain_concepts_path", lambda: md_file)
 
     with _wrapped_test_client() as client:
         session_id = _initialize_session(client)

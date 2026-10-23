@@ -36,7 +36,7 @@ from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.invitations.client import AuthentikTransport, create_invitation
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,7 +52,7 @@ _GENERIC_ERROR = "error: an unexpected error occurred"
 def _audit_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse
     """Gate and invite audit rows go to an in-memory store, never a real Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 
@@ -68,7 +68,9 @@ def _authentik_configured(monkeypatch: pytest.MonkeyPatch, transport: AuthentikT
     monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
     monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
     monkeypatch.setattr(
-        mcp_server, "create_invitation", functools.partial(create_invitation, transport=transport)
+        catalog_tools,
+        "create_invitation",
+        functools.partial(create_invitation, transport=transport),
     )
 
 
@@ -79,7 +81,7 @@ def _as_system_admin(monkeypatch: pytest.MonkeyPatch) -> None:
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
 
 def _invite_user_lines(read_lines: ReadLines) -> tuple[str, list[dict[str, object]]]:
@@ -98,7 +100,7 @@ def test_tool_call_refused_by_its_role_gate_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     emitter = configure()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         text = _call_invite_user()
@@ -162,7 +164,7 @@ def test_tool_call_whose_body_raises_logs_no_principal(
     _as_system_admin(monkeypatch)
     monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
     monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
-    monkeypatch.setattr(mcp_server, "create_invitation", _raise)
+    monkeypatch.setattr(catalog_tools, "create_invitation", _raise)
 
     with _verified_actor(sub=_NEW_SYSTEM_ADMIN_SUBJECT):
         text = _call_invite_user()

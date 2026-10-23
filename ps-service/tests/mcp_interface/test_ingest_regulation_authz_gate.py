@@ -52,7 +52,7 @@ from mcp_interface.test_ingest_regulation_tool import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -139,7 +139,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     _configure_complete_llm_env(monkeypatch)
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     # No pipeline-dependencies patch needed: the role gate denies inside
     # `_body()` before `_resolve_and_ingest`/`build_default_pipeline_dependencies`
     # is ever reached, so the real, unpatched factory is simply never called.
@@ -165,7 +165,7 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
         target=(_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     # No pipeline-dependencies patch needed -- same reasoning as
     # `test_authenticated_user_only_caller_is_denied` above.
 
@@ -186,7 +186,7 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
     _configure_complete_llm_env(monkeypatch)
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     # No pipeline-dependencies patch needed -- same reasoning as
     # `test_authenticated_user_only_caller_is_denied` above.
 
@@ -210,7 +210,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     _use_real_pipeline_stages(monkeypatch)
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
@@ -238,7 +238,7 @@ def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_complete_llm_env(monkeypatch)
     configure()
     monkeypatch.setattr(
-        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
+        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
     # No pipeline-dependencies patch needed -- same reasoning as
     # `test_authenticated_user_only_caller_is_denied` above.

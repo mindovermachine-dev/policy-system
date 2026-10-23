@@ -13,12 +13,12 @@ import asyncio
 from mcp.types import CallToolResult, TextContent
 
 from ps_service.domain_schema import DOMAIN_SCHEMA, EnumType
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import cypher_tools, mcp_server
 
 
 def _domain_text() -> str:
-    mcp_server._domain_concepts_path.cache_clear()  # pyright: ignore[reportPrivateUsage]  # reset module-internal cache so the real packaged file is read
-    return mcp_server.read_domain_concepts()
+    cypher_tools._domain_concepts_path.cache_clear()  # pyright: ignore[reportPrivateUsage]  # reset module-internal cache so the real packaged file is read
+    return cypher_tools.read_domain_concepts()
 
 
 def _tool_text() -> str:

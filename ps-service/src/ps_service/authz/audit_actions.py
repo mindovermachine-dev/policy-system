@@ -3,7 +3,7 @@
 Registers each model with `ps_service.audit.models.register_audit_action` at import
 time, and registers the `principal` audit resource type. Registration happens on import
 of this module, the same way `@server.tool()` decorators populate the tool registry when
-`ps_service.mcp_interface.mcp_server` is imported.
+`ps_service.mcp_interface` is imported (its front door imports every tool-group module).
 
 `ps_service.authz.store` imports this module for its side effect, so the actions are
 registered before any grant, revoke or bootstrap call reaches `AuditStore.record`.

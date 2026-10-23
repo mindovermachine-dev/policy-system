@@ -26,7 +26,7 @@ from mcp_interface.test_catalog_source_authz_gate import (
 )
 from ps_service.audit.models import AuditEventRow, AuditQueryFilters, AuditQueryPage
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.mcp_interface.audit_actions import QUERY_CYPHER_ACTION
 
 if TYPE_CHECKING:
@@ -106,8 +106,8 @@ def _write(
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> _TimedAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     store = _TimedAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
     _write(
         store,
         actor=_DENIED,

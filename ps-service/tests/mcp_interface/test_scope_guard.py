@@ -1,17 +1,18 @@
-"""Scope guards for `mcp_server.py`.
+"""Scope guards for the MCP tool surface (`tool_core.py` holds the `MCPServer(...)` call).
 
-These prove -- structurally, by parsing the module's AST -- that
-`mcp_server.py` stays a pure surface definition: it binds no transport and
-constructs its module-level `MCPServer(...)` singleton with zero auth
-kwargs, forever. Transport (and real per-user auth) both
+These prove -- structurally, by parsing the modules' AST -- that the tool surface stays a pure
+surface definition: it binds no transport and constructs its module-level `MCPServer(...)`
+singleton, in `tool_core.py`, with zero auth kwargs, forever. The `mcp_server.py` front door
+re-exports that `server`. Transport (and real per-user auth) both
 belong to the sibling `http_transport.py` module, so neither may leak back
-into this module. They inspect `ast.Call` / `ast.keyword` / `ast.Constant`
+into these modules. They inspect `ast.Call` / `ast.keyword` / `ast.Constant`
 nodes and MUST NOT substring-scan the source: a bare scan false-fails on
 the `cypher` docstring's `CREATE/MERGE/...` clause list (F-03, Residual
 risk 6).
 
-These guards describe `mcp_server.py`'s own source only (`inspect.getsource`
-against that one module). The Streamable HTTP transport -- the
+These guards describe the tool-surface modules' own source only (`tool_core.py`, the
+`*_tools.py` tool-group modules and `mcp_server.py`, found by glob). The Streamable HTTP
+transport -- the
 only transport, since MCP's stdio entrypoint was removed -- and the
 real auth wiring both live in the sibling
 `ps_service.mcp_interface.http_transport` module, out of this file's AST
@@ -33,15 +34,17 @@ post-construction wiring actually happens.
 from __future__ import annotations
 
 import ast
-import inspect
 
+from mcp_interface._source_modules import merged_tool_tree, tool_source_paths
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
-from ps_service.mcp_interface import http_transport, mcp_server
+from ps_service.mcp_interface import http_transport
+from ps_service.mcp_interface import tool_core as mcp_server
 
 
 def _module_ast() -> ast.Module:
-    return ast.parse(inspect.getsource(mcp_server))
+    """The union of the tool-surface modules (not the transport)."""
+    return merged_tool_tree()
 
 
 def _func_renders_as(func: ast.expr) -> str:
@@ -166,3 +169,18 @@ def test_mcp_disarms_token_verifier_when_auth_not_configured() -> None:
 
     assert mcp_server.server._token_verifier is None  # pyright: ignore[reportPrivateUsage]
     assert mcp_server.server.settings.auth is None
+
+
+def test_the_module_holding_the_mcpserver_call_is_named_in_this_docstring() -> None:
+    holders = [
+        path.name
+        for path in tool_source_paths()
+        if any(
+            isinstance(node, ast.Call) and _func_renders_as(node.func) == "MCPServer"
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        )
+    ]
+
+    assert len(holders) == 1
+    assert __doc__ is not None
+    assert holders[0] in __doc__

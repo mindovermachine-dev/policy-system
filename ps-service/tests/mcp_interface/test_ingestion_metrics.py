@@ -14,7 +14,7 @@ from metrics._scrape import samples
 
 from ps_service.config import ServiceConfig
 from ps_service.logging import facade
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools as mcp_server
 from ps_service.metrics import build_metrics
 
 if TYPE_CHECKING:

@@ -20,7 +20,7 @@ from mcp.types import CallToolResult, TextContent
 
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -99,7 +99,7 @@ def test_compliance_officer_gets_the_full_ac_bi_003_wire_shape(
 ) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
     monkeypatch.setattr(
         "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
         _opener_factory(_open_graph),
@@ -140,7 +140,7 @@ def test_compliance_officer_gets_the_full_ac_bi_003_wire_shape(
 def test_unreachable_graph_returns_the_sanitised_error(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
 
     def _boom(_config: object) -> object:
         message = "connection refused to 10.0.0.1:6379"
@@ -163,7 +163,7 @@ def test_min_similarity_outside_the_bounds_is_rejected_at_the_schema(
 ) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
 
     with _actor(_OFFICER), pytest.raises(ToolError):
         asyncio.run(
@@ -176,7 +176,7 @@ def test_min_similarity_is_passed_through_and_embedding_groups_are_reported(
 ) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
 
     class _EmbeddingGraph:
         def query(self, q: str, params: dict[str, object] | None = None) -> _Result:

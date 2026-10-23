@@ -1,6 +1,7 @@
 """Streamable HTTP ASGI transport for the MCP Interface.
 
-Wraps `mcp_server.server` (the `MCPServer` instance that `mcp_server.py` defines) in the MCP SDK's
+Wraps `mcp_server.server` (the `MCPServer` instance that `tool_core.py` defines and the front
+door re-exports) in the MCP SDK's
 Streamable HTTP Starlette sub-app, so every registered tool and the `psdomain://concepts` resource
 are reachable from a client on a different machine. The sub-app is mounted into the same FastAPI
 app that `ps_service.main.create_app` builds, never into a second process or port.

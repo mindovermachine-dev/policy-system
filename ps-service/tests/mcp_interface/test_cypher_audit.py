@@ -36,7 +36,7 @@ from ps_service.audit.models import AuditQueryFilters, is_known_resource_type, r
 from ps_service.authz.service import list_audit_events
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.mcp_interface.audit_actions import QueryCypherDetails
 from ps_service.query_engine import cypher_query
 
@@ -59,7 +59,7 @@ def audit(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
     """Route the tool's audit rows to memory."""
     configure()
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 
@@ -148,7 +148,7 @@ def test_unreachable_graph_writes_one_failed_row_with_graph_unavailable_reason(
     def _boom(_config: object) -> object:
         raise ConnectionError("refused")
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _boom)
+    monkeypatch.setattr(tool_core, "connect_from_config", _boom)
     result = _cypher(_MATCH)
     assert _text(result) == "error: the policy graph database is not reachable"
     row = _only_row(audit)

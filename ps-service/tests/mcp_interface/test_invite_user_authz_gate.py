@@ -32,7 +32,7 @@ from mcp_interface.test_catalog_source_authz_gate import (
 )
 from ps_service.invitations.client import InvitationResult
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
 
 if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
@@ -44,7 +44,7 @@ _EMAIL = "target@example.com"
 def _in_memory_audit_store(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]  # autouse
     """Invites write `user.invite` rows: keep them off a real Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
 
 
 def _call(args: dict[str, object] | None = None) -> CallToolResult:
@@ -84,8 +84,8 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    monkeypatch.setattr(mcp_server, "create_invitation", _never_called_create_invitation)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(catalog_tools, "create_invitation", _never_called_create_invitation)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call()
@@ -101,7 +101,7 @@ def test_local_test_bypass_skips_role_check_entirely(monkeypatch: pytest.MonkeyP
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    monkeypatch.setattr(mcp_server, "create_invitation", _canned_create_invitation)
+    monkeypatch.setattr(catalog_tools, "create_invitation", _canned_create_invitation)
 
     result = _call()
 
@@ -118,9 +118,9 @@ def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
     """
     configure()
     monkeypatch.setattr(
-        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
+        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
-    monkeypatch.setattr(mcp_server, "create_invitation", _never_called_create_invitation)
+    monkeypatch.setattr(catalog_tools, "create_invitation", _never_called_create_invitation)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call()

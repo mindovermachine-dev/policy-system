@@ -1044,8 +1044,9 @@ def create_app(
     unset, so the MCP SDK never registers a competing one under `/mcp`.
 
     MCP Interface's Streamable HTTP ASGI sub-app is mounted unconditionally at
-    `MCP_HTTP_MOUNT_PATH` (`/mcp`) in the same process and port, wrapping the one `mcp_server`
-    singleton. It receives the same `verifier` and `auth_context` as `RestAuthMiddleware`, so
+    `MCP_HTTP_MOUNT_PATH` (`/mcp`) in the same process and port, wrapping the one
+    `mcp_server.server` singleton. It receives the
+    same `verifier` and `auth_context` as `RestAuthMiddleware`, so
     `/mcp` requests pass through the MCP SDK's own token-verifier gate and share the process-wide
     verifier and JWKS cache. Because Starlette does not propagate a mounted sub-app's lifespan,
     `lifespan` enters the sub-app's lifespan context explicitly, so the SDK session manager only

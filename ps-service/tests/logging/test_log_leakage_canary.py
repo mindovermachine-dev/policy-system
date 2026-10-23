@@ -49,7 +49,7 @@ from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import bind_run_context, facade
 from ps_service.main import create_app
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # the seeded-graph probe the fake must answer
 )
@@ -320,12 +320,12 @@ def test_cypher_with_canary_query_then_no_canary_in_any_sink(
     caplog.set_level(logging.DEBUG)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
 
     def _connect(_config: object) -> _FailingDatabase:
         return _FailingDatabase()
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
 
     result = asyncio.run(
         mcp_server.server.call_tool(
@@ -369,13 +369,13 @@ def test_mcp_tool_calls_by_a_canary_principal_then_no_canary_in_any_sink(
     """A verified canary caller's admitted `cypher` call and refused invite are never logged."""
     caplog.set_level(logging.DEBUG)
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
 
     def _connect(_config: object) -> _SeededDatabase:
         return _SeededDatabase()
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
 
     with _verified_actor(sub=CANARY_USER):
         admitted = asyncio.run(
@@ -404,17 +404,19 @@ def test_invite_user_with_canary_email_then_no_canary_in_any_sink(
     monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
     monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     roles = _seeded_store()
     roles.grant(
         actor=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER),
         target=(CANARY_USER, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(roles))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(roles))
     transport = _RecordingTransport(json.dumps({"pk": "tok-canary"}).encode())
     monkeypatch.setattr(
-        mcp_server, "create_invitation", functools.partial(create_invitation, transport=transport)
+        catalog_tools,
+        "create_invitation",
+        functools.partial(create_invitation, transport=transport),
     )
 
     with _verified_actor(sub=CANARY_USER):

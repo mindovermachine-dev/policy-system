@@ -33,7 +33,7 @@ from mcp.types import CallToolResult, TextContent
 from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -89,8 +89,8 @@ class _Env:
         self.graph = graph
         self.pending = FakeApprovalStore()
         self.audit = RecordingAuditStore(history=obligation_merge_history())
-        monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(_officers()))
-        monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _factory(self.pending))
+        monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_officers()))
+        monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(self.pending))
         monkeypatch.setattr(
             "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
             _factory(_opener_for(graph)),

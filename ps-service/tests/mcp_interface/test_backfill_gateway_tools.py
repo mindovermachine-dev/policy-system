@@ -31,7 +31,7 @@ from policy_lifecycle._gateway_fakes import (
 
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -111,9 +111,9 @@ def _setup(monkeypatch: pytest.MonkeyPatch, *, legacy: bool) -> tuple[GatewayRig
     def _access_role_store(_config: object, **_kwargs: object) -> FakeAccessRoleStore:
         return FakeAccessRoleStore()
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect)
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _audit_store)
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _access_role_store)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _audit_store)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _access_role_store)
     return rig, audit
 
 

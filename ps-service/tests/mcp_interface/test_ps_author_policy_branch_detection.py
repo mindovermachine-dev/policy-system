@@ -60,7 +60,7 @@ from mcp.types import CallToolResult, TextContent
 from policy_lifecycle._gateway_fakes import PolicyGraphSeeder
 
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  -- pins the exact seed-check query text, mirrors test_cypher_tool.py
 )
@@ -294,7 +294,7 @@ def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _HybridGraph) -> Non
     def _connect_from_config(_config: object) -> _FakeFalkorDB:
         return _FakeFalkorDB(handle)
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
+    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
 
 
 @dataclass
@@ -354,14 +354,14 @@ def _install_audit_store(monkeypatch: pytest.MonkeyPatch, store: _FakeAuditStore
     def _factory(_config: object) -> _FakeAuditStore:
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _factory)
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory)
 
 
 def _install_access_role_store(monkeypatch: pytest.MonkeyPatch, store: object) -> None:
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
 
 
 # --- tool-call helpers -------------------------------------------------

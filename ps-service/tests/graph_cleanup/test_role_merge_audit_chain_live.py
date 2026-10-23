@@ -31,7 +31,7 @@ from ps_service.audit import PsycopgAuditStore
 from ps_service.audit.models import AuditChainVerification
 from ps_service.graph_cleanup.audit_actions import RoleMergeDetails, RoleUnmergeDetails
 from ps_service.logging import configure, reset_for_tests
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -122,7 +122,7 @@ def test_verify_audit_log_passes_after_a_real_role_merge(
     assert details.before is not None
     assert details.after is not None
 
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(_owner_only()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_owner_only()))
     reported = _verify_audit_log_tool()
     reset_for_tests()
 
@@ -169,7 +169,7 @@ def test_verify_audit_log_passes_after_a_real_role_merge_and_unmerge(
     assert details.before is not None
     assert details.after is not None
 
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory(_owner_only()))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_owner_only()))
     reported = _verify_audit_log_tool()
     reset_for_tests()
 

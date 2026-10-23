@@ -42,7 +42,7 @@ from mcp.types import CallToolResult, TextContent
 
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -119,7 +119,7 @@ def _text(result: CallToolResult) -> str:
 def _install_fake_change_check_dependencies(monkeypatch: pytest.MonkeyPatch) -> object:
     fake = build_fake_change_check_dependencies()
     monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: fake.dependencies
+        ingestion_tools, "build_default_change_check_dependencies", lambda: fake.dependencies
     )
     return fake
 
@@ -131,7 +131,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -154,7 +154,7 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
         target=(_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_ADMIN_SUBJECT):
@@ -173,7 +173,7 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
@@ -195,7 +195,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
@@ -215,7 +215,7 @@ def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     configure()
     monkeypatch.setattr(
-        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
+        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
     _install_fake_change_check_dependencies(monkeypatch)
 

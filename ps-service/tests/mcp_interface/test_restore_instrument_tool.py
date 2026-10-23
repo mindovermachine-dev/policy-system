@@ -97,7 +97,7 @@ from ps_service.export.models import SerializedGraph, SerializedNode
 from ps_service.export.serialize import checksum_bytes, to_json_bytes
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -704,7 +704,7 @@ def _set_merge_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Every restore writes `instrument.restore` rows: keep them off Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
     return store
 
 
@@ -1129,7 +1129,7 @@ def _grant_compliance_officer(
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
 
 
 def test_real_verified_token_call_logs_no_principal_and_the_delegate_gets_the_mcp_caller_label(

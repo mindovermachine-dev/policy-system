@@ -63,7 +63,7 @@ from ps_service.logging.facade import (
     resolve_default_log_path,
 )
 from ps_service.main import create_app
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import cypher_tools, tool_core
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
@@ -2477,11 +2477,11 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     def _stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _stub_mcp_connect_from_config)
+    monkeypatch.setattr(tool_core, "connect_from_config", _stub_mcp_connect_from_config)
 
     md_file = tmp_path / "ps-domain-concepts.md"
     md_file.write_text("# PS domain concepts\n\nRegulation -> Obligation\n", encoding="utf-8")
-    monkeypatch.setattr(mcp_server, "_domain_concepts_path", lambda: md_file)
+    monkeypatch.setattr(cypher_tools, "_domain_concepts_path", lambda: md_file)
 
     app = create_app(_complete_config(is_local_test_bypass_active=True))
 
@@ -2544,7 +2544,7 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_logs_no_princ
     def _stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", _stub_mcp_connect_from_config)
+    monkeypatch.setattr(tool_core, "connect_from_config", _stub_mcp_connect_from_config)
 
     config = _complete_config(is_local_test_bypass_active=True, logging_dir=tmp_path)
     app = create_app(config)

@@ -51,7 +51,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.ingestion_runs import dispatch
 from ps_service.logging import configure, resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
@@ -430,14 +430,14 @@ def _record_launched_runs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     tool: the process-wide count also moves with unrelated helper threads.
     """
     launched: list[str] = []
-    real_start_background_run = mcp_server.start_background_run
+    real_start_background_run = ingestion_tools.start_background_run
 
     def _record(run_id: str, work: Callable[[], None]) -> None:
         launched.append(run_id)
         real_start_background_run(run_id, work)
 
     # detroit-exception: spy-through wrapping the real launcher; launched runs ARE the spec
-    monkeypatch.setattr(mcp_server, "start_background_run", _record)
+    monkeypatch.setattr(ingestion_tools, "start_background_run", _record)
     return launched
 
 
@@ -623,7 +623,7 @@ def _grant_compliance_officer(monkeypatch: pytest.MonkeyPatch) -> None:
     def _factory(_config: object, **_kwargs: object) -> FakeAccessRoleStore:
         return access
 
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
 
 
 def test_start_ingestion_audits_the_verified_actor_with_trigger_async_ingest(
@@ -733,7 +733,7 @@ def test_background_run_unexpected_exception_records_unexpected_error_reason(
 
     # detroit-exception: same fault-injection carve-out as `test_get_ingestion_status_tool.py`'s
     # `_to_accepted_response` test (the pure response shaper never fails on well-formed input).
-    monkeypatch.setattr(mcp_server, "_to_accepted_response", _boom)
+    monkeypatch.setattr(ingestion_tools, "_to_accepted_response", _boom)
 
     run_id = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
     wait_for_run(run_id)
@@ -750,7 +750,7 @@ def test_a_graph_unavailable_background_run_records_reason_graph_unavailable(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
     fixture = _use_real_pipeline_stages(monkeypatch)
-    deps = mcp_server.build_default_pipeline_dependencies()
+    deps = ingestion_tools.build_default_pipeline_dependencies()
 
     def _raising_native(config: object, short_name: str) -> object:
         _ = (config, short_name)
@@ -762,7 +762,7 @@ def test_a_graph_unavailable_background_run_records_reason_graph_unavailable(
     )
     _ = fixture
     # detroit-exception: re-patches only the DI-wiring factory, as `_ingestion_run_harness` does.
-    monkeypatch.setattr(mcp_server, "build_default_pipeline_dependencies", lambda: broken)
+    monkeypatch.setattr(ingestion_tools, "build_default_pipeline_dependencies", lambda: broken)
 
     run_id = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
     wait_for_run(run_id)

@@ -78,8 +78,8 @@ http:
   - ps_service.ingestion.adapters.cellar_eli.fetch.fetch_rdf
   # HTTP/FalkorDB-transport-only factories: already boundary-only, unlike the factories that
   # are deliberately absent from this list (see the note after the last section).
-  - ps_service.mcp_interface.mcp_server.build_default_curated_catalog_dependencies
-  - ps_service.mcp_interface.mcp_server.build_default_change_check_dependencies
+  - ps_service.mcp_interface.catalog_tools.build_default_curated_catalog_dependencies
+  - ps_service.mcp_interface.ingestion_tools.build_default_change_check_dependencies
   - msal_extensions.build_encrypted_persistence
   - ps_cli.credentials._build_production_persistence
   # `ps_service/main.py` import alias for
@@ -93,7 +93,7 @@ process_os:
   - tempfile.mkdtemp
   - secrets.token_urlsafe
   - ps_cli.cli.installed_version           # wraps importlib.metadata.version
-  - ps_service.mcp_interface.mcp_server._domain_concepts_path
+  - ps_service.mcp_interface.cypher_tools._domain_concepts_path
   # A private module-level `Path` constant redirected to `tmp_path` for deterministic real-file-I/O
   # testing, not a behavior fake (the loader function itself always runs for real against the
   # redirected directory); same shape as `_domain_concepts_path` above.

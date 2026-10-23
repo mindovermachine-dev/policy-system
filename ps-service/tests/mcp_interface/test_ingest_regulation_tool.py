@@ -117,7 +117,7 @@ from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.main import create_app
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -1004,7 +1004,9 @@ def _use_real_pipeline_stages(
     # so patching the factory's return value itself is
     # the only seam available to keep those two genuine
     # boundaries fake while every stage's own business logic runs for real.
-    monkeypatch.setattr(mcp_server, "build_default_pipeline_dependencies", lambda: dependencies)
+    monkeypatch.setattr(
+        ingestion_tools, "build_default_pipeline_dependencies", lambda: dependencies
+    )
     return RealPipelineFixture(
         stage_order=stage_order,
         native=native,
@@ -1593,7 +1595,7 @@ def test_rest_and_mcp_return_identical_outcomes_for_the_same_request(
     # same fake bundle the REST side injects via `dependency_overrides`, exactly as
     # `_use_real_pipeline_stages` substitutes it.
     monkeypatch.setattr(
-        mcp_server, "build_default_pipeline_dependencies", lambda: mcp_fake.dependencies
+        ingestion_tools, "build_default_pipeline_dependencies", lambda: mcp_fake.dependencies
     )
     install_compliance_officer_grant(monkeypatch, granted=True)
     app = create_app(_rest_app_config())
@@ -1873,7 +1875,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     # genuinely requires forcing this otherwise-
     # unreachable defensive branch.
     # detroit-exception: legitimate fault-injection carve-out, see comment above.
-    monkeypatch.setattr(mcp_server, "_to_accepted_response", _boom)
+    monkeypatch.setattr(ingestion_tools, "_to_accepted_response", _boom)
 
     result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
 
@@ -1919,7 +1921,7 @@ def _grant_compliance_officer(
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
+    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
 
 
 def test_real_verified_token_call_logs_no_principal_and_the_pipeline_gets_the_mcp_caller_label(

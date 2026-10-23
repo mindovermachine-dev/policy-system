@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from ps_service.audit import emit
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import (
+    access_audit_tools,
+    cypher_tools,
+    near_miss_tools,
+    policy_lifecycle_tools,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,7 +103,7 @@ def test_emit_conventions_list_the_new_actions() -> None:
 
 
 def test_list_audit_events_tool_docstring_lists_the_new_actions() -> None:
-    doc = mcp_server.list_audit_events.__doc__ or ""
+    doc = access_audit_tools.list_audit_events.__doc__ or ""
 
     for action in _NEW_ACTIONS:
         assert action in doc, action
@@ -106,7 +111,11 @@ def test_list_audit_events_tool_docstring_lists_the_new_actions() -> None:
 
 @pytest.mark.parametrize(
     "tool",
-    [mcp_server.near_misses_resolve, mcp_server.approve_policy, mcp_server.reject_policy],
+    [
+        near_miss_tools.near_misses_resolve,
+        policy_lifecycle_tools.approve_policy,
+        policy_lifecycle_tools.reject_policy,
+    ],
 )
 def test_body_gated_tool_docstrings_describe_the_access_gate_denial_row(
     tool: Callable[..., object],
@@ -117,7 +126,7 @@ def test_body_gated_tool_docstrings_describe_the_access_gate_denial_row(
 
 
 def test_cypher_tool_docstring_says_it_writes_one_audit_row_and_nothing_to_the_graph() -> None:
-    doc = " ".join((mcp_server.cypher.__doc__ or "").split())
+    doc = " ".join((cypher_tools.cypher.__doc__ or "").split())
 
     assert "query.cypher" in doc
     assert "nothing is written to the graph" in doc

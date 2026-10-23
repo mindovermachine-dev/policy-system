@@ -32,7 +32,8 @@ from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import catalog_tools
+from ps_service.mcp_interface import tool_core as mcp_server
 from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind, ToolGate
 
 if TYPE_CHECKING:
@@ -186,7 +187,7 @@ def _input_schema(server: MCPServer, name: str) -> dict[str, object]:
 
 
 def test_wrapped_tool_input_schema_is_identical_to_the_unwrapped_schema() -> None:
-    original = mcp_server.set_catalog_source.__wrapped__  # pyright: ignore[reportFunctionMemberAccess]  # `functools.wraps` sets `__wrapped__` on the gated tool
+    original = catalog_tools.set_catalog_source.__wrapped__  # pyright: ignore[reportFunctionMemberAccess]  # `functools.wraps` sets `__wrapped__` on the gated tool
     reference = MCPServer(name="reference")
     reference.tool(name=_TOOL)(original)
     assert _input_schema(mcp_server.server, _TOOL) == _input_schema(reference, _TOOL)

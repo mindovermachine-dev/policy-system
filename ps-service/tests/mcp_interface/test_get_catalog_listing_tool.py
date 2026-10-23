@@ -47,7 +47,7 @@ from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import catalog_tools, mcp_server
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -128,7 +128,7 @@ def test_happy_path_returns_full_listing_and_logs_no_principal(
     transport = FakeCuratedSourceTransport(json.dumps(_CANNED_ENTRIES).encode("utf-8"))
     fake_dependencies = build_fake_curated_catalog_dependencies(transport)
     monkeypatch.setattr(
-        mcp_server, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
+        catalog_tools, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
     )
 
     result = _call_get_catalog_listing()
@@ -181,7 +181,7 @@ def test_source_unreachable_returns_named_error_naming_the_source(
     transport = FakeFailingCuratedSourceTransport()
     fake_dependencies = build_fake_curated_catalog_dependencies(transport)
     monkeypatch.setattr(
-        mcp_server, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
+        catalog_tools, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
     )
 
     result = _call_get_catalog_listing()
@@ -211,7 +211,7 @@ def test_get_catalog_listing_returns_error_string_when_override_read_fails(
         transport, resolve_effective_source=_failing_resolve
     )
     monkeypatch.setattr(
-        mcp_server, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
+        catalog_tools, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
     )
 
     result = _call_get_catalog_listing()
@@ -244,7 +244,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
         fake_dependencies, fetch_catalog=_raising_fetch_catalog
     )
     monkeypatch.setattr(
-        mcp_server, "build_default_curated_catalog_dependencies", lambda: broken_dependencies
+        catalog_tools, "build_default_curated_catalog_dependencies", lambda: broken_dependencies
     )
 
     result = _call_get_catalog_listing()
@@ -392,7 +392,7 @@ def test_real_verified_token_call_logs_no_principal(
     transport = FakeCuratedSourceTransport(json.dumps(_CANNED_ENTRIES).encode("utf-8"))
     fake_dependencies = build_fake_curated_catalog_dependencies(transport)
     monkeypatch.setattr(
-        mcp_server, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
+        catalog_tools, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
     )
 
     with _authenticated_test_client(auth_context=auth_context) as client:
@@ -430,7 +430,7 @@ def test_local_test_bypass_call_logs_no_principal_when_no_token_is_presented(
     transport = FakeCuratedSourceTransport(json.dumps(_CANNED_ENTRIES).encode("utf-8"))
     fake_dependencies = build_fake_curated_catalog_dependencies(transport)
     monkeypatch.setattr(
-        mcp_server, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
+        catalog_tools, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
     )
 
     result = _call_get_catalog_listing()
@@ -463,7 +463,7 @@ def test_failed_call_under_a_real_verified_token_logs_no_principal(
     transport = FakeFailingCuratedSourceTransport()
     fake_dependencies = build_fake_curated_catalog_dependencies(transport)
     monkeypatch.setattr(
-        mcp_server, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
+        catalog_tools, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
     )
 
     with _authenticated_test_client(auth_context=auth_context) as client:

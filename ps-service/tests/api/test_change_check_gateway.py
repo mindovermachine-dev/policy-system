@@ -36,7 +36,7 @@ from ps_service.config import ServiceConfig
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.main import create_app
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools, mcp_server
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -139,7 +139,7 @@ def test_check_regulations_without_a_gateway_answers_with_an_error_string(
     emitter = configure()
     fake = _no_findings()
     monkeypatch.setattr(
-        mcp_server, "build_default_change_check_dependencies", lambda: fake.dependencies
+        ingestion_tools, "build_default_change_check_dependencies", lambda: fake.dependencies
     )
     install_graph_write_gateway(None)
 

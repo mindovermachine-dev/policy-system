@@ -39,7 +39,7 @@ from mcp_interface.test_ingest_regulation_tool import (
 )
 from ps_service.ingestion_runs import IngestionRunRow, dispatch
 from ps_service.logging import configure, resolve_default_log_path
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import ingestion_tools
 
 # The sync tool writes `ingestion_run.*` rows: keep them off Postgres.
 pytestmark = pytest.mark.usefixtures("ingest_audit_store")
@@ -232,7 +232,7 @@ def test_an_unexpected_background_exception_is_sanitized_but_logged_server_side(
     # for any well-formed outcome, so no real input reaches the sanitizing safety net; forcing
     # it is the same fault-injection carve-out as `test_ingest_regulation_tool.py`'s
     # `_to_accepted_response` test (D-AUDIT-WRAPPER point 4).
-    monkeypatch.setattr(mcp_server, "_to_accepted_response", _boom)
+    monkeypatch.setattr(ingestion_tools, "_to_accepted_response", _boom)
 
     run_id = _submit_and_finish()
     polled = _status(run_id)

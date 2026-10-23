@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import pytest
 from mcp.types import CallToolResult, TextContent
 
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import cypher_tools as mcp_server
 
 if TYPE_CHECKING:
     from pathlib import Path

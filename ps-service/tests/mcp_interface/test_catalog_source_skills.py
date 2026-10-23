@@ -29,7 +29,7 @@ from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_ef
 from ps_service.curated_source.source_url import validate_source_url
 from ps_service.logging import configure
 from ps_service.main import create_app
-from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface import catalog_tools, mcp_server
 from ps_service.runtime_config import RuntimeConfigUnavailableError
 
 _DEFAULT_URL = (
@@ -66,7 +66,7 @@ def _install_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryRuntimeConfigStor
         store.config = config
         return store
 
-    monkeypatch.setattr(mcp_server, "PsycopgRuntimeConfigStore", _factory)
+    monkeypatch.setattr(catalog_tools, "PsycopgRuntimeConfigStore", _factory)
     return store
 
 
@@ -196,7 +196,7 @@ def test_set_and_reset_return_the_store_unavailable_error_string(
             "The runtime configuration store is temporarily unavailable."
         )
 
-    monkeypatch.setattr(mcp_server, "PsycopgRuntimeConfigStore", _unreachable)
+    monkeypatch.setattr(catalog_tools, "PsycopgRuntimeConfigStore", _unreachable)
 
     assert _text(_call("set-catalog-source", {"url": _OVERRIDE_URL})) == _STORE_UNAVAILABLE_ERROR
     assert _text(_call("reset-catalog-source")) == _STORE_UNAVAILABLE_ERROR
