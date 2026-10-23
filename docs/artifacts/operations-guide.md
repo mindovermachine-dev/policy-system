@@ -71,18 +71,20 @@ installation](./installation-guide.md#evaluator-installation).
 
 ### Updating to the latest version
 
-Run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh). It upgrades the release with
-`--reset-then-reuse-values`: the new chart's defaults apply, everything you (or
-`scripts/deploy-ps-eval.sh`) supplied at install — the local certificate Secret, Authentik, the
-bootstrap owner and issuer — is kept, and only `llm.existingSecret` is set again. It also
-updates the client with [`ps-cli/install.sh`](../../ps-cli/install.sh). The reuse behaviour is
-covered by a test against a fake `helm`; it has not been run against a live upgrade.
-
-To do the same by hand (Helm 3.14 or newer):
+Download the deploy bundle of the new release first. The scripts in it install the chart of
+their own release, so an old bundle reinstalls the old version. Go to the folder where you want
+the bundle. Download and unpack it, then go to the bundle folder:
 
 ```bash
-helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --reset-then-reuse-values --set llm.existingSecret=policy-system-llm-credentials --wait --wait-for-jobs
+curl -fsSL https://github.com/mindovermachine-dev/policy-system/releases/latest/download/ps-deploy-bundle.tgz | tar xz
+cd policy-system-deploy
+```
+
+Then run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh). It upgrades the release with
+`--reset-then-reuse-values`.
+
+```bash
+scripts/ps-upgrade.sh
 ```
 
 `scripts/deploy-ps-eval.sh` re-applies its values only when they changed, so it does not pick
@@ -98,13 +100,7 @@ kubectl get pods -l app.kubernetes.io/component=ps-service \
   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
 ```
 
-The chart's `psService.image.tag` defaults to empty and falls back to `Chart.appVersion`
-(see the [Helm Chart Values Reference](./helm-chart-values-reference.md)), so the chart
-version and the image version can never disagree — there is no tag to hand-pin and no
-flag needed to reset one. Your graph data is kept: the FalkorDB
-`PersistentVolumeClaim` only spares PS Service a replay at startup. The graph content itself is
-rebuilt from the graph mutation log in PS Postgres (see [Backup](#backup)), so previously loaded
-regulations do not need to be re-seeded.
+Your graph data is kept: it is rebuilt from the graph mutation log (see [Backup](#backup)).
 
 ### Resetting the evaluator data
 
@@ -167,10 +163,48 @@ email as before:
 
 ### Reaching the Authentik admin UI (evaluator)
 
-In the evaluator profile the proxy does not serve the admin UI. Forward the Authentik server to
-your machine with `kubectl port-forward svc/policy-system-authentik-server 9000:80`, open
-`http://127.0.0.1:9000/auth/if/admin/` and sign in as the owner. See [Installation Guide: What is
-exposed (evaluator)](./installation-guide.md#what-is-exposed-evaluator).
+The proxy does not serve the admin UI. You reach it with a port-forward that runs on the
+**Server**, the machine with the kind cluster (the backend machine of the [Evaluator Installation
+Guide](./evaluator-installation-guide.md#supported-scenarios)). A **Client** is any other machine
+you use as the owner. In the single-laptop scenarios (1 and 2) the Server and the Client are the
+same machine.
+
+> [!WARNING]
+> **Unverified.** Login is passkey-only, and the owner's passkey is registered for the evaluator
+> hostname, not for `localhost`. Whether the passkey prompt works at `http://localhost:9000` has
+> not been confirmed. If the prompt does not appear or fails, stop and report it.
+
+1. **On the Server**, in a terminal you leave open:
+
+   ```bash
+   kubectl port-forward svc/policy-system-authentik-server 9000:80
+   ```
+
+2. Open the admin UI.
+
+   - **Browser on the Server:** open the login URL below on the Server.
+   - **Browser on a Client:** **on the Client**, in a second terminal you leave open, forward the
+     port from the Server:
+
+     ```bash
+     ssh -N -L 9000:127.0.0.1:9000 <user>@<server address>
+     ```
+
+     Then open the login URL below **on the Client**. Windows 10 and 11 include `ssh`.
+
+3. Sign in as the owner with your passkey. Open the login flow directly, so the admin UI opens
+   after you sign in:
+
+   ```text
+   http://localhost:9000/auth/if/flow/ps-login/?next=%2Fauth%2Fif%2Fadmin%2F
+   ```
+
+   Do not open `http://localhost:9000/auth/if/admin/` while signed out. The admin page then
+   redirects to `http://localhost:9000/flows/-/default/authentication/`, which is missing the
+   `/auth` prefix, and the browser shows a 404.
+
+When you are done, stop both terminals with Ctrl+C. See [Installation Guide: What is exposed
+(evaluator)](./installation-guide.md#what-is-exposed-evaluator).
 
 ### Measuring the proxy footprint (evaluator)
 
@@ -277,6 +311,15 @@ installation](./installation-guide.md#production-installation).
 
 ### Updating to the latest version
 
+Download the deploy bundle of the new release first. The scripts in it install the chart of
+their own release, so an old bundle reinstalls the old version. Go to the folder where you want
+the bundle. Download and unpack it, then go to the bundle folder:
+
+```bash
+curl -fsSL https://github.com/mindovermachine-dev/policy-system/releases/latest/download/ps-deploy-bundle.tgz | tar xz
+cd policy-system-deploy
+```
+
 `scripts/deploy-ps-prod.sh`'s Helm reconciliation (`ensure_release`) only calls `helm upgrade
 --install` when one of the 9 script-managed fields (`llm.existingSecret`,
 `psService.auth.{issuer,audience,cliClientId,scopes}`,
@@ -289,13 +332,7 @@ Use [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh): it upgrades with
 bootstrap owner, `psService.authentik.{baseUrl,publicUrl}`) are kept, and `values-prod.yaml` and
 the new chart's defaults still apply. It refuses to run if the release has no stored
 `psService.auth.issuer`. The reuse behaviour is covered by a test against a fake `helm`; it has
-not been run against a live AKS upgrade. By hand (Helm 3.14 or newer):
-
-```bash
-helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  -f charts/policy-system/values-prod.yaml --reset-then-reuse-values \
-  --set llm.existingSecret=policy-system-llm-credentials --wait --wait-for-jobs
-```
+not been run against a live AKS upgrade.
 
 `ps-cli/install.sh` updates the client (the script runs it for you).
 
@@ -357,8 +394,7 @@ Job, not by the script:
    was; the Job then retries.
 2. [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) and `scripts/deploy-ps-prod.sh` pass
    `--wait --wait-for-jobs`, so a Job that exhausts its retries fails the upgrade with a Helm
-   error naming the Job; it does not hang. An upgrade run by hand must pass the same two flags
-   (see the command in [Updating to the latest version](#updating-to-the-latest-version-1)).
+   error naming the Job; it does not hang. An upgrade run by hand must pass the same two flags.
 3. A failing migration exits non-zero naming the component and file (never SQL, host or
    password) and creates no `graph_log` object; migrations already applied stay and the next run
    resumes. The Job retries in place up to `psPostgres.provisioning.backoffLimit` (default `3`).
