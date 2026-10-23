@@ -10,14 +10,14 @@ names are looked up there at call time as `tool_core.<Name>`.
 Business Rules:
     - Draft authoring is gated by the policy-author and draft-access gates; `approve-policy` and
       `reject-policy` are body-gated, so an unknown policy id is reported before an access denial.
-    - A malformed `fields` or `standards` argument is returned as an `error: <message>` string by
-      the tool that received it, never raised across the MCP boundary.
+    - A typed `fields` or `standards` argument is validated against the tool's input schema before
+      the tool runs; a malformed one is rejected there and never reaches the tool body. Domain
+      failures are returned as `error: <message>` strings, never raised across the MCP boundary.
 """
 
 from __future__ import annotations
 
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -30,6 +30,13 @@ from ps_service.api.graph_write_access import graph_write_access
 from ps_service.authz.models import AccessRole
 from ps_service.config import load_config
 from ps_service.mcp_interface import tool_core
+from ps_service.mcp_interface.draft_input_models import (
+    ControlContentFields,
+    NewControlContentFields,
+    PolicyContentFields,
+    PolicyDraftStandardInput,
+    StandardContentFields,
+)
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import POLICY_AUTHOR_GATE as _POLICY_AUTHOR_GATE
 from ps_service.mcp_interface.tool_core import POLICY_DRAFT_ACCESS_GATE as _POLICY_DRAFT_ACCESS_GATE
@@ -62,15 +69,6 @@ from ps_service.policy_lifecycle.errors import (
     PolicyTitleAlreadyExistsError,
 )
 from ps_service.policy_lifecycle.graph_submission import lifecycle_submitter
-from ps_service.policy_lifecycle.service import (
-    _CONTROL_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
-    _CONTROL_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
-    _POLICY_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- declared once in service.py, imported here to avoid drift between the two layers
-    _STANDARD_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
-    _STANDARD_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
-    ControlDraftInput,
-    StandardDraftInput,
-)
 from ps_service.policy_lifecycle.service import add_control_to_draft as run_add_control_to_draft
 from ps_service.policy_lifecycle.service import add_standard_to_draft as run_add_standard_to_draft
 from ps_service.policy_lifecycle.service import approve_policy as run_approve_policy
@@ -82,10 +80,6 @@ from ps_service.policy_lifecycle.service import revert_policy_to_draft as run_re
 from ps_service.policy_lifecycle.service import update_control_draft as run_update_control_draft
 from ps_service.policy_lifecycle.service import update_policy_draft as run_update_policy_draft
 from ps_service.policy_lifecycle.service import update_standard_draft as run_update_standard_draft
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
 
 _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: this action requires a real authenticated caller (the local-test bypass counts as one)"
@@ -104,62 +98,6 @@ _POLICY_TRANSITION_GATE = ToolGate(
 )
 
 
-class _MalformedPatchFieldsError(Exception):
-    """A `fields` argument to one of the draft-content tools is shaped wrong.
-
-    Raised only by `_parse_patch_fields`; each draft-content tool catches it at its own call site
-    and
-    returns it as an `error: ` string.
-    """
-
-
-def _parse_patch_fields(
-    fields: dict[str, object] | None,
-    *,
-    allowed: frozenset[str],
-    enum_checks: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
-) -> dict[str, object]:
-    """Validate `fields` against a tool's allow-list of patchable field names.
-
-    `None` (the parameter omitted) is a no-op update and yields `{}`. Every key must be in `allowed`
-    and every value must be a string or `None`. `None` clears the field in an update tool and leaves
-    it
-    unset in a create tool; it is distinct from an absent key, which leaves any existing value
-    alone.
-
-    Args:
-        fields: The raw `fields` argument as the MCP caller supplied it, or `None`.
-        allowed: The fixed set of field names the calling tool accepts.
-        enum_checks: Field name to the tuple of values that field is restricted to; checked only
-            when
-            the field is present and not `None`.
-
-    Returns:
-        `fields` itself once every key and value is validated, or `{}` when `fields` is `None`.
-
-    Raises:
-        _MalformedPatchFieldsError: A key is not in `allowed`, a value is neither a string nor
-        `None`,
-            or a restricted field holds a value outside its tuple.
-
-    Side Effects:
-        None.
-    """
-    if fields is None:
-        return {}
-    for key, value in fields.items():
-        if key not in allowed:
-            raise _MalformedPatchFieldsError(f"fields.{key} is not a patchable field")
-        if value is not None and not isinstance(value, str):
-            raise _MalformedPatchFieldsError(f"fields.{key} must be a string or null")
-        allowed_values = enum_checks.get(key)
-        if allowed_values is not None and value is not None and value not in allowed_values:
-            raise _MalformedPatchFieldsError(
-                f"fields.{key} must be one of {allowed_values} or null"
-            )
-    return fields
-
-
 _CREATE_POLICY_DRAFT_ERRORS = (
     GraphWriteUnavailableError,
     PolicyCapabilityAlreadyGovernedError,
@@ -171,119 +109,10 @@ _CREATE_POLICY_DRAFT_ERRORS = (
 )
 
 
-_CREATE_POLICY_DRAFT_CONTROL_TYPES = ("automated", "manual")
-
-
-class _MalformedPolicyDraftStandardsError(Exception):
-    """The `standards` argument of `create-policy-draft` is shaped wrong.
-
-    Raised only by `_parse_policy_draft_standards` and the helpers it calls; `create_policy_draft`
-    catches it and returns it as an `error: ` string. The message names the offending
-    `standards[i]` or `standards[i].controls[j]` position so a caller can locate the bad entry.
-    """
-
-
-def _require_standards_str_field(body: dict[str, object], field: str, *, where: str) -> str:
-    """Return a required non-empty string field of one `standards` entry.
-
-    Args:
-        body: The `standards[i]` or `standards[i].controls[j]` object being parsed.
-        field: Name of the key to read from `body`.
-        where: Position label of `body` (for example `standards[0]`), used in the error message.
-
-    Returns:
-        The non-empty string stored under `field`.
-
-    Raises:
-        _MalformedPolicyDraftStandardsError: `field` is absent, not a string, or empty.
-    """
-    value = body.get(field)
-    if not isinstance(value, str) or not value:
-        raise _MalformedPolicyDraftStandardsError(f"{where}.{field} must be a non-empty string")
-    return value
-
-
-def _parse_control_draft_input(raw: object, *, where: str) -> ControlDraftInput:
-    """Parse one `standards[i].controls[j]` entry into a `ControlDraftInput`.
-
-    Args:
-        raw: The entry as supplied by the caller.
-        where: Position label of the entry, used in error messages.
-
-    Returns:
-        A `ControlDraftInput` with the entry's `title` and its `control_type` (default `"manual"`).
-
-    Raises:
-        _MalformedPolicyDraftStandardsError: `raw` is not an object, `title` is missing or empty, or
-            `control_type` is not `"automated"` or `"manual"`.
-    """
-    if not isinstance(raw, dict):
-        raise _MalformedPolicyDraftStandardsError(f"{where} must be an object")
-    body = cast("dict[str, object]", raw)
-    title = _require_standards_str_field(body, "title", where=where)
-    control_type = body.get("control_type", "manual")
-    if control_type not in _CREATE_POLICY_DRAFT_CONTROL_TYPES:
-        raise _MalformedPolicyDraftStandardsError(
-            f"{where}.control_type must be 'automated' or 'manual'"
-        )
-    return ControlDraftInput(title=title, control_type=control_type)
-
-
-def _parse_standard_draft_input(raw: object, *, where: str) -> StandardDraftInput:
-    """Parse one `standards[i]` entry, with its optional `controls`, into a `StandardDraftInput`.
-
-    Args:
-        raw: The entry as supplied by the caller.
-        where: Position label of the entry, used in error messages.
-
-    Returns:
-        A `StandardDraftInput` with the entry's `title` and a tuple of parsed controls (empty when
-        `controls` is omitted).
-
-    Raises:
-        _MalformedPolicyDraftStandardsError: `raw` is not an object, `title` is missing or empty,
-            `controls` is not a list, or a control entry is malformed.
-    """
-    if not isinstance(raw, dict):
-        raise _MalformedPolicyDraftStandardsError(f"{where} must be an object")
-    body = cast("dict[str, object]", raw)
-    title = _require_standards_str_field(body, "title", where=where)
-    raw_controls = body.get("controls", [])
-    if not isinstance(raw_controls, list):
-        raise _MalformedPolicyDraftStandardsError(f"{where}.controls must be a list")
-    controls = tuple(
-        _parse_control_draft_input(item, where=f"{where}.controls[{index}]")
-        for index, item in enumerate(cast("list[object]", raw_controls))
-    )
-    return StandardDraftInput(title=title, controls=controls)
-
-
-def _parse_policy_draft_standards(
-    standards: list[dict[str, object]] | None,
-) -> tuple[StandardDraftInput, ...]:
-    """Parse the optional `standards` argument of `create-policy-draft`, top to bottom.
-
-    Args:
-        standards: The list of Standard objects as supplied by the caller, or `None` when omitted.
-
-    Returns:
-        One `StandardDraftInput` per entry, in order; an empty tuple when `standards` is `None`.
-
-    Raises:
-        _MalformedPolicyDraftStandardsError: An entry, or a nested control, is malformed.
-    """
-    if standards is None:
-        return ()
-    return tuple(
-        _parse_standard_draft_input(item, where=f"standards[{index}]")
-        for index, item in enumerate(standards)
-    )
-
-
 @_gated_tool("create-policy-draft", _POLICY_AUTHOR_GATE)
 def create_policy_draft(
     title: Annotated[str, Field(min_length=1)],
-    standards: list[dict[str, object]] | None = None,
+    standards: list[PolicyDraftStandardInput] | None = None,
     supersedes_policy_id: Annotated[str, Field(min_length=1)] | None = None,
     capability_ids: list[Annotated[str, Field(min_length=1)]] | None = None,
 ) -> dict[str, object] | str:
@@ -295,13 +124,10 @@ def create_policy_draft(
 
     Args:
         title: Policy title; at least 1 character.
-        standards: Optional list of objects `{"title": <str>, "controls": [...]}` (`controls`
-            optional,
-            default `[]`); each control is `{"title": <str>, "control_type": "automated" |
-            "manual"}`
-            (`control_type` optional, default `"manual"`). Every `title` must be a non-empty string.
-            Omit it or pass `null` for a title-only draft. Ignored when `supersedes_policy_id` is
-            set.
+        standards: Optional list of Standards to create with the Policy, each with an optional
+            list of Controls (`control_type` `"automated"` or `"manual"`, default `"manual"`). The
+            input schema states the shape and rejects unknown keys. Omit it or pass `null` for a
+            title-only draft. Ignored when `supersedes_policy_id` is set.
         supersedes_policy_id: Optional id of an `approved` Policy to amend. When omitted this
             creates an
             ordinary version-1 Policy whose id is derived from `title` alone, so repeating a title
@@ -337,8 +163,6 @@ def create_policy_draft(
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller has no real authenticated session.
-        - `standards` or a nested `controls` entry is malformed (not objects, a missing or empty
-          `title`, or an invalid `control_type`).
         - `supersedes_policy_id` names no Policy, or a Policy that is not `approved`.
         - A `capability_ids` entry names no Capability or one that is already governed; nothing is
           written.
@@ -358,10 +182,6 @@ def create_policy_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            parsed_standards = _parse_policy_draft_standards(standards)
-        except _MalformedPolicyDraftStandardsError as exc:
-            return f"error: {exc}"
-        try:
             graph = _resolve_graph(config)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
@@ -372,7 +192,7 @@ def create_policy_draft(
             result = run_create_policy_draft(
                 actor=actor,
                 title=title,
-                standards=parsed_standards,
+                standards=tuple(standard.to_draft_input() for standard in standards or ()),
                 supersedes_policy_id=supersedes_policy_id,
                 capability_ids=tuple(capability_ids or ()),
                 graph=graph,
@@ -409,7 +229,7 @@ _UPDATE_POLICY_DRAFT_ERRORS = (
 @_gated_tool("update-policy-draft", _POLICY_DRAFT_ACCESS_GATE)
 def update_policy_draft(
     policy_id: Annotated[str, Field(min_length=1)],
-    fields: dict[str, object] | None = None,
+    fields: PolicyContentFields | None = None,
 ) -> dict[str, object] | str:
     """Change a subset of a draft Policy's content fields, leaving the rest as they are.
 
@@ -423,7 +243,9 @@ def update_policy_draft(
             `null`, which clears the field. Allowed keys: `description`, `scope_in`, `scope_out`,
             `normative_commitments`, `review_cadence`, `exception_pathway`, `measurable_outcomes`,
             `capability_grouping_rationale`. `title`, `status`, `owner_subject`, `owner_issuer` and
-            `version` can never be patched. Omit it or pass `null` for a no-op update.
+            `version` can never be patched. An unknown key or a value that is neither a string nor
+            `null` is rejected by the input schema before the tool runs. Omit it or pass `null` for
+            a no-op update.
 
     Returns:
         `{"policy_id", "updated_fields"}`, where `updated_fields` is every key supplied in `fields`,
@@ -431,7 +253,6 @@ def update_policy_draft(
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller has no real authenticated session.
-        - `fields` names an unknown key or a value that is neither a string nor `null`.
         - No Policy has `policy_id`.
         - The caller is neither the owner nor a `SystemOwner` or `SystemAdmin`.
         - The Policy is not in `draft` status.
@@ -449,10 +270,6 @@ def update_policy_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            parsed_fields = _parse_patch_fields(fields, allowed=_POLICY_PATCHABLE_FIELDS)
-        except _MalformedPatchFieldsError as exc:
-            return f"error: {exc}"
-        try:
             graph = _resolve_graph(config)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
@@ -465,7 +282,7 @@ def update_policy_draft(
             result = run_update_policy_draft(
                 actor=actor,
                 policy_id=policy_id,
-                fields=parsed_fields,
+                fields=fields.supplied() if fields is not None else {},
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
@@ -494,7 +311,7 @@ _ADD_STANDARD_TO_DRAFT_ERRORS = (
 def add_standard_to_draft(
     policy_id: Annotated[str, Field(min_length=1)],
     title: Annotated[str, Field(min_length=1)],
-    fields: dict[str, object] | None = None,
+    fields: StandardContentFields | None = None,
 ) -> dict[str, object] | str:
     """Add a new Standard under a draft Policy.
 
@@ -513,7 +330,9 @@ def add_standard_to_draft(
             `implementer_role`, `reviewer_role`, `applicability_boundary`, `verification_notes`,
             `change_rationale`. `implementation_status` must be one of `draft`, `implemented`,
             `reviewed`, `deprecated`, and defaults to `draft`. `title` and `status` cannot be set
-            here.
+            here. An unknown key, a value that is neither a string nor `null`, or an
+            `implementation_status` outside that set is rejected by the input schema before the
+            tool runs.
 
     Returns:
         `{"standard_id", "policy_id", "title", "status"}`; `standard_id` can be used in later calls
@@ -521,9 +340,6 @@ def add_standard_to_draft(
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller has no real authenticated session.
-        - `fields` names an unknown key, holds a value that is neither a string nor `null`, or holds
-          an
-          invalid `implementation_status`.
         - No Policy has `policy_id`.
         - The caller is neither the owner nor a `SystemOwner` or `SystemAdmin`.
         - The Policy is not in `draft` status.
@@ -540,14 +356,6 @@ def add_standard_to_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            parsed_fields = _parse_patch_fields(
-                fields,
-                allowed=_STANDARD_PATCHABLE_FIELDS,
-                enum_checks={"implementation_status": _STANDARD_IMPLEMENTATION_STATUS_VALUES},
-            )
-        except _MalformedPatchFieldsError as exc:
-            return f"error: {exc}"
-        try:
             graph = _resolve_graph(config)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
@@ -561,7 +369,7 @@ def add_standard_to_draft(
                 actor=actor,
                 policy_id=policy_id,
                 title=title,
-                fields=parsed_fields,
+                fields=fields.supplied() if fields is not None else {},
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
@@ -591,7 +399,7 @@ _UPDATE_STANDARD_DRAFT_ERRORS = (
 @_gated_tool("update-standard-draft", _POLICY_DRAFT_ACCESS_GATE)
 def update_standard_draft(
     standard_id: Annotated[str, Field(min_length=1)],
-    fields: dict[str, object] | None = None,
+    fields: StandardContentFields | None = None,
 ) -> dict[str, object] | str:
     """Change a subset of a draft Standard's content fields, leaving the rest as they are.
 
@@ -608,18 +416,16 @@ def update_standard_draft(
             `procedure`, `implementer_role`, `reviewer_role`, `applicability_boundary`,
             `verification_notes`, `change_rationale`. `implementation_status` must be one of
             `draft`,
-            `implemented`, `reviewed`, `deprecated`. `title` and `status` can never be patched. Omit
-            it
-            or pass `null` for a no-op update.
+            `implemented`, `reviewed`, `deprecated`. `title` and `status` can never be patched. An
+            unknown key, a value that is neither a string nor `null`, or an `implementation_status`
+            outside that set is rejected by the input schema before the tool runs. Omit it or pass
+            `null` for a no-op update.
 
     Returns:
         `{"standard_id", "policy_id", "title", "status"}`.
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller has no real authenticated session.
-        - `fields` names an unknown key, holds a value that is neither a string nor `null`, or holds
-          an
-          invalid `implementation_status`.
         - No Standard has `standard_id`.
         - The caller is neither the parent Policy's owner nor a `SystemOwner` or `SystemAdmin`.
         - The Standard is not in `draft` status.
@@ -636,14 +442,6 @@ def update_standard_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            parsed_fields = _parse_patch_fields(
-                fields,
-                allowed=_STANDARD_PATCHABLE_FIELDS,
-                enum_checks={"implementation_status": _STANDARD_IMPLEMENTATION_STATUS_VALUES},
-            )
-        except _MalformedPatchFieldsError as exc:
-            return f"error: {exc}"
-        try:
             graph = _resolve_graph(config)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
@@ -656,7 +454,7 @@ def update_standard_draft(
             result = run_update_standard_draft(
                 actor=actor,
                 standard_id=standard_id,
-                fields=parsed_fields,
+                fields=fields.supplied() if fields is not None else {},
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
@@ -683,19 +481,12 @@ _ADD_CONTROL_TO_DRAFT_ERRORS = (
 )
 
 
-# `add-control-to-draft` excludes `"type"` from its `fields` allow-list: the top-level
-# `control_type` parameter is the only way to set a Control's type at creation, and
-# `update-control-draft` (which keeps the full `_CONTROL_PATCHABLE_FIELDS`) is the only
-# post-creation path to change it.
-_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS = _CONTROL_PATCHABLE_FIELDS - {"type"}
-
-
 @_gated_tool("add-control-to-draft", _POLICY_DRAFT_ACCESS_GATE)
 def add_control_to_draft(
     standard_id: Annotated[str, Field(min_length=1)],
     title: Annotated[str, Field(min_length=1)],
-    control_type: Annotated[str, Field(min_length=1)] = "manual",
-    fields: dict[str, object] | None = None,
+    control_type: Literal["automated", "manual"] = "manual",
+    fields: NewControlContentFields | None = None,
 ) -> dict[str, object] | str:
     """Add a new Control under a draft Standard.
 
@@ -710,8 +501,8 @@ def add_control_to_draft(
         standard_id: Id of the draft Standard; at least 1 character.
         title: Control title; at least 1 character.
         control_type: `"automated"` or `"manual"`; default `"manual"`. This is the only way to set
-            the
-            type at creation.
+            the type at creation; any other value is rejected by the input schema before the tool
+            runs.
         fields: Optional content to set at creation. Each value is a string, or JSON `null`, which
             leaves the field unset. Allowed keys: `description`, `implementation_status`,
             `execution_frequency`, `last_test_date`, `next_review_date`, `evidence_ref`,
@@ -720,7 +511,9 @@ def add_control_to_draft(
             `risk_alignment_rationale`. `implementation_status` must be one of `planned`,
             `implemented`, `reviewed`, `deprecated`, and defaults to `planned`. `title`, `status`
             and
-            `type` cannot be set here; `type` is rejected, use `control_type`.
+            `type` cannot be set here; use `control_type`. An unknown key (including `type`), a
+            value that is neither a string nor `null`, or an `implementation_status` outside that
+            set is rejected by the input schema before the tool runs.
 
     Returns:
         `{"control_id", "standard_id", "policy_id", "title", "status"}`; `control_id` can be used in
@@ -728,10 +521,6 @@ def add_control_to_draft(
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller has no real authenticated session.
-        - `control_type` is not `"automated"` or `"manual"`.
-        - `fields` names an unknown key (including `type`), holds a value that is neither a string
-          nor
-          `null`, or holds an invalid `implementation_status`.
         - No Standard has `standard_id`.
         - The caller is neither the parent Policy's owner nor a `SystemOwner` or `SystemAdmin`.
         - The Standard is not in `draft` status.
@@ -747,16 +536,6 @@ def add_control_to_draft(
     def _body() -> dict[str, object] | str:
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-        if control_type not in _CREATE_POLICY_DRAFT_CONTROL_TYPES:
-            return "error: control_type must be 'automated' or 'manual'"
-        try:
-            parsed_fields = _parse_patch_fields(
-                fields,
-                allowed=_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS,
-                enum_checks={"implementation_status": _CONTROL_IMPLEMENTATION_STATUS_VALUES},
-            )
-        except _MalformedPatchFieldsError as exc:
-            return f"error: {exc}"
         try:
             graph = _resolve_graph(config)
         except McpGraphUnavailableError as exc:
@@ -772,7 +551,7 @@ def add_control_to_draft(
                 standard_id=standard_id,
                 title=title,
                 control_type=control_type,
-                fields=parsed_fields,
+                fields=fields.supplied() if fields is not None else {},
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,
@@ -803,7 +582,7 @@ _UPDATE_CONTROL_DRAFT_ERRORS = (
 @_gated_tool("update-control-draft", _POLICY_DRAFT_ACCESS_GATE)
 def update_control_draft(
     control_id: Annotated[str, Field(min_length=1)],
-    fields: dict[str, object] | None = None,
+    fields: ControlContentFields | None = None,
 ) -> dict[str, object] | str:
     """Change a subset of a draft Control's content fields, leaving the rest as they are.
 
@@ -823,17 +602,16 @@ def update_control_draft(
             `risk_alignment_rationale`. Unlike `add-control-to-draft`, `type` can be changed here,
             and
             this is the only way to change it after creation. `implementation_status` must be one of
-            `planned`, `implemented`, `reviewed`, `deprecated`. `title` and `status` can never be
-            patched. Omit it or pass `null` for a no-op update.
+            `planned`, `implemented`, `reviewed`, `deprecated`; `type` must be `automated` or
+            `manual`. `title` and `status` can never be patched. An unknown key, a value that is
+            neither a string nor `null`, or a value outside an enum is rejected by the input schema
+            before the tool runs. Omit it or pass `null` for a no-op update.
 
     Returns:
         `{"control_id", "standard_id", "policy_id", "title", "status"}`.
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller has no real authenticated session.
-        - `fields` names an unknown key, holds a value that is neither a string nor `null`, or holds
-          an
-          invalid `implementation_status`.
         - No Control has `control_id`.
         - The caller is neither the root Policy's owner nor a `SystemOwner` or `SystemAdmin`.
         - The Control is not in `draft` status.
@@ -850,14 +628,6 @@ def update_control_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            parsed_fields = _parse_patch_fields(
-                fields,
-                allowed=_CONTROL_PATCHABLE_FIELDS,
-                enum_checks={"implementation_status": _CONTROL_IMPLEMENTATION_STATUS_VALUES},
-            )
-        except _MalformedPatchFieldsError as exc:
-            return f"error: {exc}"
-        try:
             graph = _resolve_graph(config)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
@@ -870,7 +640,7 @@ def update_control_draft(
             result = run_update_control_draft(
                 actor=actor,
                 control_id=control_id,
-                fields=parsed_fields,
+                fields=fields.supplied() if fields is not None else {},
                 graph=graph,
                 access_role_store=access_role_store,
                 submitter=submitter,

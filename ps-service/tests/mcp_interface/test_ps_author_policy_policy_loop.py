@@ -25,8 +25,7 @@ Two independent proofs:
 P-007 Lifecycle Honesty is scored against the Policy's own `status`
 property (`policy-template.md`'s "Ownership and Status" section), which
 `update-policy-draft` can NEVER patch (`status` is not in
-`service._POLICY_PATCHABLE_FIELDS` -- confirmed by reading
-`service.py:112-122` directly) and which this skill never changes (it only
+the patchable Policy properties of the domain schema) and which this skill never changes (it only
 ever authors content, never calls a status-transition tool). A freshly
 scaffolded Policy stays honestly `"draft"` for the whole of this loop, and
 `scoring-model.md` is explicit that "being honestly in

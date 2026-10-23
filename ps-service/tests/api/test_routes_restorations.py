@@ -244,6 +244,25 @@ def test_malformed_body_returns_422_and_never_calls_the_delegate() -> None:
     assert stage.call_count == 0
 
 
+@pytest.mark.parametrize("field", ["baseline_blob_base64", "native_blob_base64"])
+def test_malformed_base64_blob_returns_the_generic_422_and_never_calls_the_delegate(
+    field: str,
+) -> None:
+    marker = "marker-blob-value"
+    stage = _FakeRestoreStage()
+    audit_store = InMemoryAuditStore()
+    client = _client_with_fake(stage, audit_store=audit_store)
+    expected_body = client.post("/restorations", json={}).json()
+
+    response = client.post("/restorations", json={**_valid_body(), field: f"{marker}!!!"})
+
+    assert response.status_code == 422
+    assert response.json() == expected_body
+    assert marker not in response.text
+    assert stage.call_count == 0
+    assert audit_store.rows == []
+
+
 @pytest.mark.parametrize("path", ["/restorations"])
 def test_restorations_route_with_compliance_officer_grant_is_never_401_or_403(path: str) -> None:
     """A caller holding `ComplianceOfficer` is never turned away by the gate.

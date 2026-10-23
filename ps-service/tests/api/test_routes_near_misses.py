@@ -31,16 +31,21 @@ reliably resolve under pytest's `--import-mode=importlib`.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
+from urllib.parse import unquote
 
+import pytest
 from company_merge._kinds import UNREGISTERED_KIND
 from fastapi.testclient import TestClient
 
 from api._audit_fakes import InMemoryAuditStore
+from ps_service import passkey_signing
 from ps_service.api.dependencies import (
     get_principal,
     provide_audit_store,
@@ -48,11 +53,15 @@ from ps_service.api.dependencies import (
     provide_pending_approval_store,
 )
 from ps_service.api.graph_write_access import install_graph_write_gateway
+from ps_service.api.models import IDENTIFIER_PATTERN
 from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth import Principal
 from ps_service.company_merge.errors import CompanyMergePersistenceError, UnknownReviewKindError
-from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
+from ps_service.company_merge.generated_values import SYSTEM_VALUES
+from ps_service.company_merge.models import NearMissPair, PendingReviewRecord, ResolveOutcome
+from ps_service.company_merge.pending_review import build_pending_review_primitives
+from ps_service.company_merge.reviewable_kinds import CAPABILITY
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
 from ps_service.passkey_signing.models import PendingApprovalRow
@@ -598,3 +607,140 @@ def test_post_resolve_returns_503_when_audit_is_unavailable_and_graph_is_untouch
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "audit_trail_unavailable"
     assert resolve_calls == []
+
+
+_MALFORMED_IDS = [
+    pytest.param("r" * 65, id="65-characters"),
+    pytest.param("review.aaa", id="dot"),
+    pytest.param("review%20aaa", id="space"),
+    pytest.param("review;aaa", id="semicolon"),
+    pytest.param("review_aaa%0A", id="trailing-newline"),
+    pytest.param("review%C3%A9", id="non-ascii-letter"),
+]
+
+
+@dataclass
+class _RecordingPendingApprovalStore(_FakePendingApprovalStore):
+    """The fake store, noting every id it is asked to look up."""
+
+    looked_up: list[str] = field(default_factory=list)
+
+    def get_by_id(self, pending_approval_id: str) -> PendingApprovalRow | None:
+        self.looked_up.append(pending_approval_id)
+        return super().get_by_id(pending_approval_id)
+
+
+def _generic_validation_body(client: TestClient) -> dict[str, object]:
+    """The body this app returns for any request that fails validation."""
+    response = client.post("/near-misses/review_aaa/resolve", json={})
+    assert response.status_code == 422
+    return response.json()
+
+
+@pytest.mark.parametrize("review_id", _MALFORMED_IDS)
+def test_resolve_rejects_a_malformed_review_id_with_the_generic_422_and_calls_nothing(
+    review_id: str,
+) -> None:
+    dependencies, open_calls = _fake_dependencies((_record("review_aaa"),))
+    store = _RecordingPendingApprovalStore()
+    audit = InMemoryAuditStore()
+    app = create_app(_app_config())
+    app.dependency_overrides[provide_near_miss_review_dependencies] = lambda: dependencies
+    app.dependency_overrides[provide_pending_approval_store] = lambda: store
+    app.dependency_overrides[provide_audit_store] = lambda: audit
+    app.dependency_overrides[get_principal] = _principal
+    client = TestClient(app)
+    expected_body = _generic_validation_body(client)
+    open_calls.clear()
+
+    response = client.post(f"/near-misses/{review_id}/resolve", json={"decision": "keep-separate"})
+
+    assert response.status_code == 422
+    assert response.json() == expected_body
+    assert unquote(review_id) not in response.text
+    assert open_calls == []
+    assert store.looked_up == []
+    assert audit.rows == []
+
+
+@pytest.mark.parametrize("pending_approval_id", _MALFORMED_IDS)
+def test_approval_status_rejects_a_malformed_id_with_the_generic_422_and_reads_no_store(
+    pending_approval_id: str,
+) -> None:
+    store = _RecordingPendingApprovalStore()
+    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
+    expected_body = _generic_validation_body(client)
+
+    response = client.get(f"/near-misses/approvals/{pending_approval_id}")
+
+    assert response.status_code == 422
+    assert response.json() == expected_body
+    assert unquote(pending_approval_id) not in response.text
+    assert store.looked_up == []
+
+
+def test_review_id_from_the_real_generator_satisfies_the_path_pattern() -> None:
+    pairs = tuple(
+        NearMissPair(
+            incoming_id=f"capability_incoming_{index}",
+            incoming_text="Report the incident to the authority.",
+            nearest_existing_id=f"capability_existing_{index}",
+            nearest_existing_text="Conduct a risk assessment.",
+            similarity=0.62,
+        )
+        for index in range(3)
+    )
+
+    primitives = build_pending_review_primitives(pairs, kind=CAPABILITY, values=SYSTEM_VALUES)
+
+    assert len(primitives) == 3
+    for primitive in primitives:
+        assert re.fullmatch(IDENTIFIER_PATTERN, primitive.id)
+
+
+def test_resolving_a_review_with_a_generated_id_returns_the_resolved_review() -> None:
+    pair = NearMissPair(
+        incoming_id="capability_incoming_a",
+        incoming_text="Report the incident to the authority.",
+        nearest_existing_id="capability_existing_a",
+        nearest_existing_text="Conduct a risk assessment.",
+        similarity=0.62,
+    )
+    (primitive,) = build_pending_review_primitives((pair,), kind=CAPABILITY, values=SYSTEM_VALUES)
+
+    def _resolve(
+        graph: GraphHandle,
+        review_id: str,
+        decision: Literal["keep-separate", "merge"],
+        target: GraphWriteTarget,
+    ) -> ResolveOutcome | None:
+        _ = (graph, target)
+        return ResolveOutcome(review_id=review_id, decision=decision)
+
+    client = _client_for_resolve(_resolve, records=(_record(primitive.id),))
+
+    response = client.post(
+        f"/near-misses/{primitive.id}/resolve", json={"decision": "keep-separate"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["review_id"] == primitive.id
+    assert response.json()["decision"] == "keep-separate"
+
+
+def test_an_approval_id_in_the_stored_uuid_text_form_reaches_the_status_lookup() -> None:
+    approval_id = str(uuid.uuid4())
+    store = _RecordingPendingApprovalStore()
+    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
+
+    response = client.get(f"/near-misses/approvals/{approval_id}")
+
+    assert response.status_code == 404
+    assert store.looked_up == [approval_id]
+
+
+def test_the_pending_approval_column_generates_ids_that_satisfy_the_path_pattern() -> None:
+    migration = Path(passkey_signing.__file__).parent / "migrations" / "0001_pending_approvals.sql"
+
+    assert "id uuid PRIMARY KEY DEFAULT gen_random_uuid()" in migration.read_text()
+    assert re.fullmatch(IDENTIFIER_PATTERN, str(uuid.uuid4()))

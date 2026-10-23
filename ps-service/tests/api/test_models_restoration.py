@@ -60,6 +60,48 @@ def test_restoration_request_rejects_empty_instrument_id() -> None:
         RestorationRequest.model_validate({**_VALID_BODY, "instrument_id": ""})
 
 
+_NOT_STRICT_BASE64 = [
+    pytest.param("not-valid-base64!!!", id="bad-alphabet"),
+    pytest.param("YQ", id="missing-padding"),
+    pytest.param("YQ=", id="short-padding"),
+    pytest.param("YQ==\n", id="trailing-newline"),
+    pytest.param("eyJu b2Rlcy", id="embedded-space"),
+    pytest.param("@@@@", id="symbols-only"),
+]
+
+
+@pytest.mark.parametrize("field", ["baseline_blob_base64", "native_blob_base64"])
+@pytest.mark.parametrize("blob", _NOT_STRICT_BASE64)
+def test_restoration_request_rejects_a_blob_that_is_not_strict_base64(
+    field: str, blob: str
+) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        RestorationRequest.model_validate({**_VALID_BODY, field: blob})
+
+    assert [error["loc"] for error in excinfo.value.errors()] == [(field,)]
+    assert blob not in str(excinfo.value)
+
+
+def test_restoration_request_error_text_never_contains_a_submitted_blob() -> None:
+    marker = "marker-blob-value!!!"
+
+    with pytest.raises(ValidationError) as excinfo:
+        RestorationRequest.model_validate({**_VALID_BODY, "baseline_blob_base64": marker})
+
+    assert marker not in str(excinfo.value)
+
+
+def test_restoration_request_accepts_blobs_that_are_strict_base64() -> None:
+    blob = base64.b64encode(b'{"nodes": [], "edges": []}').decode("ascii")
+
+    request = RestorationRequest.model_validate(
+        {**_VALID_BODY, "baseline_blob_base64": blob, "native_blob_base64": blob}
+    )
+
+    assert request.baseline_blob_base64 == blob
+    assert request.native_blob_base64 == blob
+
+
 def test_restoration_stage_outcome_and_accepted_response_are_frozen() -> None:
     """Response models are frozen, mirroring ``StageOutcome``/``IngestionAcceptedResponse``."""
     stage = RestorationStageOutcome(stage="verified", status="succeeded")

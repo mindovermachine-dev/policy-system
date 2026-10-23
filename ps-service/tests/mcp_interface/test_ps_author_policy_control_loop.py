@@ -31,9 +31,8 @@ Five proofs:
    `add-control-to-draft`'s own `fields` rejects a `"type"` key outright
    (the top-level `control_type` param is the only creation-time path), but
    `update-control-draft`'s `fields` accepts `"type"` and persists it --
-   the one property `_CONTROL_PATCHABLE_FIELDS` includes that
-   `_STANDARD_PATCHABLE_FIELDS`'s Standard-loop analogue has no equivalent
-   of (verified directly against `service.py:148-177`).
+   the one patchable Control property the Standard-loop analogue has no
+   equivalent of.
 3. `test_add_another_control_under_same_standard_succeeds` -- after one
    Control's field loop completes, a second `add-control-to-draft` call
    under the SAME `standard_id` is a valid, accepted sequence against the
@@ -65,11 +64,9 @@ assumed:
   status workflow' convention for Control"). `title`/`type`/`status` are
   always forced after `extra_properties`, never caller-controlled through
   `fields`.
-- **`_CONTROL_PATCHABLE_FIELDS` (service.py:161-177) includes `"type"`**,
-  unlike `_STANDARD_PATCHABLE_FIELDS`; but `add-control-to-draft`'s own MCP
-  tool narrows this by one key at its own call site
-  (`_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS = _CONTROL_PATCHABLE_FIELDS -
-  {"type"}`, `mcp_server.py:2394`) -- so `"type"` is rejected in
+- **The patchable Control properties include `"type"`**, unlike the
+  Standard's; but the `fields` model of `add-control-to-draft` leaves it
+  out -- so `"type"` is rejected in
   `add-control-to-draft`'s own `fields` (only `control_type` sets it at
   creation) but accepted in `update-control-draft`'s `fields` (the only
   post-creation path to change it).
@@ -116,6 +113,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
 from ps_service.logging import configure
@@ -632,18 +630,16 @@ def test_control_type_patchable_via_update_but_rejected_as_creation_field(
         policy_id = _new_policy(monkeypatch, handle)
         standard_id = _new_standard(handle, policy_id=policy_id, title=_STANDARD_TITLE)
 
-        # `add-control-to-draft`'s own `fields` allow-list is
-        # `_CONTROL_PATCHABLE_FIELDS - {"type"}` (mcp_server.py:2394) --
-        # `"type"` in `fields` at creation time is rejected outright, before
-        # any graph read; `control_type` is the only creation-time path.
-        rejected = _call_add_control_to_draft(
-            standard_id=standard_id,
-            title=_CONTROL_TITLE,
-            control_type="manual",
-            fields={"type": "automated"},
-        )
-        assert rejected.is_error is False
-        assert _text(rejected) == "error: fields.type is not a patchable field"
+        # `add-control-to-draft`'s `fields` schema has no `type` property, so `"type"` in `fields`
+        # at creation time is rejected by the input schema before the tool runs;
+        # `control_type` is the only creation-time path.
+        with pytest.raises(ToolError):
+            _call_add_control_to_draft(
+                standard_id=standard_id,
+                title=_CONTROL_TITLE,
+                control_type="manual",
+                fields={"type": "automated"},
+            )
         # Rejected before any graph write -- only the create-policy-draft write and the
         # add-standard-to-draft group from the setup above exist so far.
         assert handle.write_queries == []
@@ -660,9 +656,8 @@ def test_control_type_patchable_via_update_but_rejected_as_creation_field(
             standard_id=standard_id, policy_id=policy_id, control_title=_CONTROL_TITLE
         )
 
-        # `update-control-draft`'s own `fields` allow-list is the FULL
-        # `_CONTROL_PATCHABLE_FIELDS`, including `"type"` -- the only
-        # post-creation path to change it (the `type` field's handling).
+        # `update-control-draft`'s `fields` schema includes `type` -- the only post-creation path
+        # to change it.
         update_result = _call_update_control_draft(control_id, {"type": "automated"})
         assert update_result.is_error is False
         body = json.loads(_text(update_result))

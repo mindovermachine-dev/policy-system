@@ -2,17 +2,140 @@
   "mcp_tools": [
     {
       "inputSchema": {
+        "$defs": {
+          "NewControlContentFields": {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_plan": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "evidence_ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "execution_frequency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "execution_method": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "executor_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "implementation_status": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "planned",
+                      "implemented",
+                      "reviewed",
+                      "deprecated"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "last_test_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "next_review_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pass_fail_criteria": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reviewer_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "risk_alignment_rationale": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
         "properties": {
           "control_type": {
             "default": "manual",
-            "minLength": 1,
+            "enum": ["automated", "manual"],
             "type": "string"
           },
           "fields": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/$defs/NewControlContentFields"
               },
               {
                 "type": "null"
@@ -32,12 +155,90 @@
     },
     {
       "inputSchema": {
+        "$defs": {
+          "StandardContentFields": {
+            "additionalProperties": false,
+            "properties": {
+              "applicability_boundary": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "change_rationale": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "implementation_status": {
+                "anyOf": [
+                  {
+                    "enum": ["draft", "implemented", "reviewed", "deprecated"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "implementer_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "procedure": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reviewer_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "verification_notes": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
         "properties": {
           "fields": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/$defs/StandardContentFields"
               },
               {
                 "type": "null"
@@ -110,6 +311,33 @@
     },
     {
       "inputSchema": {
+        "$defs": {
+          "PolicyDraftControlInput": {
+            "additionalProperties": false,
+            "properties": {
+              "control_type": {
+                "default": "manual",
+                "enum": ["automated", "manual"],
+                "type": "string"
+              }
+            },
+            "required": ["title"],
+            "type": "object"
+          },
+          "PolicyDraftStandardInput": {
+            "additionalProperties": false,
+            "properties": {
+              "controls": {
+                "items": {
+                  "$ref": "#/$defs/PolicyDraftControlInput"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["title"],
+            "type": "object"
+          }
+        },
         "properties": {
           "capability_ids": {
             "anyOf": [
@@ -130,8 +358,7 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/$defs/PolicyDraftStandardInput"
                 },
                 "type": "array"
               },
@@ -694,6 +921,141 @@
     },
     {
       "inputSchema": {
+        "$defs": {
+          "ControlContentFields": {
+            "additionalProperties": false,
+            "properties": {
+              "evidence_plan": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "evidence_ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "execution_frequency": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "execution_method": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "executor_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "implementation_status": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "planned",
+                      "implemented",
+                      "reviewed",
+                      "deprecated"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "last_test_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "next_review_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pass_fail_criteria": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reviewer_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "risk_alignment_rationale": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "anyOf": [
+                  {
+                    "enum": ["automated", "manual"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
         "properties": {
           "control_id": {
             "minLength": 1,
@@ -702,8 +1064,7 @@
           "fields": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/$defs/ControlContentFields"
               },
               {
                 "type": "null"
@@ -719,12 +1080,89 @@
     },
     {
       "inputSchema": {
+        "$defs": {
+          "PolicyContentFields": {
+            "additionalProperties": false,
+            "properties": {
+              "capability_grouping_rationale": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "exception_pathway": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "measurable_outcomes": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "normative_commitments": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "review_cadence": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scope_in": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scope_out": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
         "properties": {
           "fields": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/$defs/PolicyContentFields"
               },
               {
                 "type": "null"
@@ -744,12 +1182,90 @@
     },
     {
       "inputSchema": {
+        "$defs": {
+          "StandardContentFields": {
+            "additionalProperties": false,
+            "properties": {
+              "applicability_boundary": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "change_rationale": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "implementation_status": {
+                "anyOf": [
+                  {
+                    "enum": ["draft", "implemented", "reviewed", "deprecated"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "implementer_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "procedure": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reviewer_role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "verification_notes": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
         "properties": {
           "fields": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/$defs/StandardContentFields"
               },
               {
                 "type": "null"
@@ -2236,6 +2752,9 @@
               "name": "run_id",
               "required": true,
               "schema": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
                 "type": "string"
               }
             }
@@ -2287,6 +2806,9 @@
               "name": "pending_approval_id",
               "required": true,
               "schema": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
                 "type": "string"
               }
             }
@@ -2322,6 +2844,9 @@
               "name": "review_id",
               "required": true,
               "schema": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
                 "type": "string"
               }
             }

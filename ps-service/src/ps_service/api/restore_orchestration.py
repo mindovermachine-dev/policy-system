@@ -21,7 +21,6 @@ loads them; they load on first use at request time.
 from __future__ import annotations
 
 import base64
-import binascii
 import contextlib
 import traceback
 from dataclasses import dataclass
@@ -328,20 +327,13 @@ def _to_instrument_manifest(payload: RestorationManifestPayload) -> InstrumentMa
 def _to_restore_artifact(request_body: RestorationRequest) -> RestoreArtifact:
     """Decode the request body's base64 blobs into a ``RestoreArtifact``.
 
-    Raises:
-        RestoreArtifactRejectedError: Either blob is not valid base64. The artifact is rejected like
-            a checksum or schema-version failure (422), before any graph call.
+    The request model has already verified that both blobs are strict base64, so decoding cannot
+    fail here.
     """
-    try:
-        baseline_blob = base64.b64decode(request_body.baseline_blob_base64, validate=True)
-        native_blob = base64.b64decode(request_body.native_blob_base64, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        message = f"malformed base64 artifact blob for instrument {request_body.instrument_id!r}"
-        raise RestoreArtifactRejectedError(message) from exc
     return RestoreArtifact(
         manifest=_to_instrument_manifest(request_body.manifest),
-        baseline_blob=baseline_blob,
-        native_blob=native_blob,
+        baseline_blob=base64.b64decode(request_body.baseline_blob_base64, validate=True),
+        native_blob=base64.b64decode(request_body.native_blob_base64, validate=True),
     )
 
 
@@ -647,8 +639,8 @@ def run_restoration(
 
     Decodes the request body into an artifact, then runs the injected restore routine between an
     ``instrument.restore`` opening audit row (``source="upload"``) and a terminal row. The opening
-    row is fail-closed and the terminal row best effort. A body that cannot be decoded is rejected
-    before any audit row is written. Failures from the routine are translated into API errors.
+    row is fail-closed and the terminal row best effort. Failures from the routine are translated
+    into API errors.
 
     Args:
         request_body: The upload request: instrument id, manifest, and base64-encoded baseline and
@@ -669,8 +661,8 @@ def run_restoration(
     Raises:
         AuditTrailUnavailableError: The opening audit row could not be written; nothing was
             restored.
-        RestoreArtifactRejectedError: A blob is not valid base64, or the artifact fails checksum or
-            schema-version verification (422).
+        RestoreArtifactRejectedError: The artifact fails checksum or schema-version verification
+            (422).
         GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
             (503); nothing was written. The terminal audit row records a failure.
         RestoreStageFailedError: Any other failure, including an unset Capability merge

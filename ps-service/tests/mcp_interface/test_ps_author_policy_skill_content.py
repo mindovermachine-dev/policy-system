@@ -23,10 +23,8 @@ pure content assertion, a structural/content lint) and asserts:
   text -- catching silent drift if a future `errors.py`/`mcp_server.py`
   message changes without this skill's table being updated. Each substring
   asserted here was itself re-verified against the real source
-  (`ps_service.policy_lifecycle.errors`, `mcp_server.py`'s
-  `_parse_patch_fields`/`add-control-to-draft`'s own `control_type` check,
-  the `cypher` tool's own docstring) while writing this file, not copied
-  from a paraphrase uncritically.
+  (`ps_service.policy_lifecycle.errors`, the `cypher` tool's own docstring)
+  while writing this file, not copied from a paraphrase uncritically.
 """
 
 from __future__ import annotations
@@ -91,10 +89,6 @@ _ERROR_MESSAGE_SUBSTRINGS: tuple[str, ...] = (
     "no Control exists with id",
     "you do not have access to this Policy",
     "already exists (id",
-    "is not a patchable field",
-    "must be a string or null",
-    "must be one of",
-    "control_type must be 'automated' or 'manual'",
     "cannot <action> a Policy in status",
     "cannot be superseded: current status is",
     "an unexpected error occurred",
@@ -206,6 +200,18 @@ def test_every_named_error_message_substring_appears_in_guardrails_or_process() 
             "-- either the Guardrails table drifted from the real source, or this test's "
             "own expectation needs updating against real source first"
         )
+
+
+def test_skill_describes_schema_level_rejection_and_names_no_malformed_input_rows() -> None:
+    text = _SKILL_PATH.read_text(encoding="utf-8")
+    _frontmatter, body = _split_frontmatter(text)
+    guardrails = _section_text(body, "## Guardrails")
+
+    assert "malformed_" not in text
+    assert "invalid_control_type" not in text
+    assert "is not a patchable field" not in text
+    assert "never a tool-result `error:`" in guardrails
+    assert "input schema rejects it before the tool runs" in guardrails
 
 
 def test_never_describes_a_freshly_scaffolded_control_as_draft_implementation_status() -> None:

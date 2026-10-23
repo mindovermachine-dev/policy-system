@@ -35,6 +35,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from policy_lifecycle._gateway_fakes import (
     FlippingRead,
@@ -44,8 +45,14 @@ from policy_lifecycle._gateway_fakes import (
     SeedStandard,
 )
 
+from mcp_interface._input_schema import (
+    parameter_array_item_schema,
+    parameter_object_schema,
+    tool_input_schema,
+)
 from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfig
+from ps_service.domain_schema import patchable_fields
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server, policy_lifecycle_tools, tool_core
@@ -533,7 +540,109 @@ def test_create_policy_draft_without_standards_argument_still_works_unchanged(
     }
 
 
-def test_create_policy_draft_with_malformed_standards_returns_named_error(
+def _standards_schema() -> dict[str, object]:
+    return parameter_array_item_schema("create-policy-draft", "standards")
+
+
+def test_create_policy_draft_publishes_the_standards_schema() -> None:
+    standard = _standards_schema()
+    properties = cast("dict[str, dict[str, object]]", standard["properties"])
+
+    assert standard["additionalProperties"] is False
+    assert standard["required"] == ["title"]
+    assert properties["title"]["minLength"] == 1
+    control = cast("dict[str, object]", properties["controls"]["items"])
+    control_properties = cast("dict[str, dict[str, object]]", control["properties"])
+    assert control["additionalProperties"] is False
+    assert control["required"] == ["title"]
+    assert control_properties["title"]["minLength"] == 1
+    assert control_properties["control_type"]["enum"] == ["automated", "manual"]
+    assert control_properties["control_type"]["default"] == "manual"
+    assert "standards" not in cast(
+        "list[str]", tool_input_schema("create-policy-draft")["required"]
+    )
+
+
+_MALFORMED_STANDARDS: list[list[object]] = [
+    ["x"],
+    [{"controls": []}],
+    [{"title": ""}],
+    [{"title": "S", "controls": "x"}],
+    [{"title": "S", "controls": None}],
+    [{"title": "S", "controls": ["x"]}],
+    [{"title": "S", "controls": [{}]}],
+    [{"title": "S", "controls": [{"title": ""}]}],
+    [{"title": "S", "controls": [{"title": "C", "control_type": "bogus"}]}],
+    [{"title": "S", "unknown": 1}],
+    [{"title": "S", "controls": [{"title": "C", "unknown": 1}]}],
+]
+
+
+@pytest.mark.parametrize(
+    "standards",
+    _MALFORMED_STANDARDS,
+    ids=[
+        "entry_not_object",
+        "missing_title",
+        "empty_title",
+        "controls_not_list",
+        "controls_null",
+        "control_not_object",
+        "control_missing_title",
+        "control_empty_title",
+        "bad_control_type",
+        "unknown_standard_key",
+        "unknown_control_key",
+    ],
+)
+def test_create_policy_draft_rejects_malformed_standards_before_the_body_runs(
+    monkeypatch: pytest.MonkeyPatch, standards: list[object]
+) -> None:
+    configure()
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
+    audit_store = _FakeAuditStore()
+    _install_audit_store(monkeypatch, audit_store)
+
+    with (
+        _verified_actor(sub=_ACTOR_SUBJECT),
+        pytest.raises(ToolError),
+    ):
+        asyncio.run(
+            mcp_server.server.call_tool(
+                "create-policy-draft", {"title": _TITLE, "standards": standards}
+            )
+        )
+
+    assert rig.store.groups == []
+    assert audit_store.calls == []
+
+
+def test_create_policy_draft_with_null_or_empty_standards_makes_a_title_only_draft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    _install_graph(monkeypatch, _FakeGraph())
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        results = [
+            asyncio.run(
+                mcp_server.server.call_tool(
+                    "create-policy-draft", {"title": f"{_TITLE} {index}", "standards": standards}
+                )
+            )
+            for index, standards in enumerate((None, []))
+        ]
+
+    for result in results:
+        assert isinstance(result, CallToolResult)
+        assert result.is_error is False
+        body = json.loads(_text(result))
+        assert body["standard_ids"] == []
+        assert body["control_ids"] == []
+
+
+def test_create_policy_draft_standard_without_controls_gets_no_controls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
@@ -544,15 +653,14 @@ def test_create_policy_draft_with_malformed_standards_returns_named_error(
         result = asyncio.run(
             mcp_server.server.call_tool(
                 "create-policy-draft",
-                {"title": _TITLE, "standards": [{"controls": []}]},
+                {"title": _TITLE, "standards": [{"title": "Encryption Standard"}]},
             )
         )
-    assert isinstance(result, CallToolResult)
 
-    assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "standards[0].title" in text
+    assert isinstance(result, CallToolResult)
+    body = json.loads(_text(result))
+    assert len(body["standard_ids"]) == 1
+    assert body["control_ids"] == []
 
 
 def _install_stateful_rig(monkeypatch: pytest.MonkeyPatch) -> GatewayRig:
@@ -1218,20 +1326,72 @@ def test_update_policy_draft_applies_only_supplied_fields_end_to_end(
     )
 
 
-def test_update_policy_draft_unknown_field_returns_named_error(
+def test_update_policy_draft_publishes_fields_schema_derived_from_the_domain_schema() -> None:
+    fields = parameter_object_schema("update-policy-draft", "fields")
+
+    properties = cast("dict[str, dict[str, object]]", fields["properties"])
+    assert set(properties) == patchable_fields("Policy")
+    assert fields["additionalProperties"] is False
+    assert "required" not in fields
+    for prop in properties.values():
+        assert prop["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    required = cast("list[str]", tool_input_schema("update-policy-draft").get("required", []))
+    assert "fields" not in required
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"title": "sneaky rename"}, {"description": 3}, {"description": ["a"]}],
+    ids=["unknown_key", "non_string_value", "list_value"],
+)
+def test_update_policy_draft_rejects_malformed_fields_before_the_body_runs(
+    monkeypatch: pytest.MonkeyPatch, fields: dict[str, object]
+) -> None:
+    configure()
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+    audit_store = _FakeAuditStore()
+    _install_audit_store(monkeypatch, audit_store)
+
+    with _verified_actor(sub=_ACTOR_SUBJECT), pytest.raises(ToolError):
+        _call_update_policy_draft(fields=fields)
+
+    assert rig.store.groups == []
+    assert audit_store.calls == []
+
+
+def test_update_policy_draft_null_clears_and_absent_leaves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_rig_graph(monkeypatch, _draft_fixture())
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+    policy_node = rig.graphs.open("policy_system").nodes[("Policy", _EXISTING_POLICY_ID)]
+    policy_node["description"] = "to be cleared"
+    policy_node["scope_in"] = "left alone"
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_update_policy_draft(fields={"title": "sneaky rename"})
+        result = _call_update_policy_draft(fields={"description": None})
 
     assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "not a patchable field" in text
+    assert json.loads(_text(result)) == {
+        "policy_id": _EXISTING_POLICY_ID,
+        "updated_fields": ["description"],
+    }
+    assert policy_node.get("description") is None
+    assert policy_node["scope_in"] == "left alone"
+
+
+def test_update_policy_draft_without_a_session_returns_the_unauthenticated_error() -> None:
+    configure()
+
+    result = _call_update_policy_draft(fields={"description": "revised text"})
+
+    assert result.is_error is False
+    assert _text(result) == (
+        "error: this action requires a real authenticated caller "
+        "(the local-test bypass counts as one)"
+    )
 
 
 def test_update_policy_draft_non_owner_returns_named_error(
@@ -1417,36 +1577,113 @@ def test_add_standard_to_draft_response_id_usable_in_get_policy_end_to_end(
     assert standards_by_id[new_standard_id]["status"] == "draft"
 
 
-def test_add_standard_to_draft_unknown_field_returns_named_error(
+_STANDARD_TOOLS = ("add-standard-to-draft", "update-standard-draft")
+
+
+def _call_standard_tool(tool: str, fields: dict[str, object] | None = None) -> CallToolResult:
+    if tool == "add-standard-to-draft":
+        return _call_add_standard_to_draft(fields=fields)
+    return _call_update_standard_draft(fields=fields)
+
+
+@pytest.mark.parametrize("tool", _STANDARD_TOOLS)
+def test_standard_tools_publish_fields_with_implementation_status_enum_in_schema_order(
+    tool: str,
+) -> None:
+    fields = parameter_object_schema(tool, "fields")
+
+    properties = cast("dict[str, dict[str, object]]", fields["properties"])
+    assert set(properties) == patchable_fields("Standard")
+    assert fields["additionalProperties"] is False
+    for name, prop in properties.items():
+        if name == "implementation_status":
+            assert prop["anyOf"] == [
+                {"enum": ["draft", "implemented", "reviewed", "deprecated"], "type": "string"},
+                {"type": "null"},
+            ]
+        else:
+            assert prop["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+
+@pytest.mark.parametrize("tool", _STANDARD_TOOLS)
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"title": "sneaky rename"},
+        {"description": 3},
+        {"implementation_status": "bogus"},
+        {"implementation_status": 1},
+    ],
+    ids=["unknown_key", "non_string_value", "out_of_enum", "non_string_enum"],
+)
+def test_standard_tools_reject_malformed_fields_before_the_body_runs(
+    monkeypatch: pytest.MonkeyPatch, tool: str, fields: dict[str, object]
+) -> None:
+    configure()
+    rig = _install_tree_rig(monkeypatch)
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+    audit_store = _FakeAuditStore()
+    _install_audit_store(monkeypatch, audit_store)
+
+    with _verified_actor(sub=_ACTOR_SUBJECT), pytest.raises(ToolError):
+        _call_standard_tool(tool, fields)
+
+    assert rig.store.groups == []
+    assert audit_store.calls == []
+
+
+def test_add_standard_to_draft_null_leaves_the_property_unset_and_status_defaults_to_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_rig_graph(monkeypatch, _draft_fixture())
+    rig = _install_rig_graph(monkeypatch, _draft_fixture())
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_add_standard_to_draft(fields={"title": "sneaky rename"})
+        result = _call_add_standard_to_draft(
+            fields={"description": None, "procedure": "rotate keys yearly"}
+        )
 
     assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "not a patchable field" in text
+    standard_id = json.loads(_text(result))["standard_id"]
+    node = rig.graphs.open("policy_system").nodes[("Standard", standard_id)]
+    assert node.get("description") is None
+    assert node["procedure"] == "rotate keys yearly"
+    assert node["implementation_status"] == "draft"
 
 
-def test_add_standard_to_draft_invalid_implementation_status_returns_named_error(
+def test_update_standard_draft_null_clears_and_absent_leaves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_rig_graph(monkeypatch, _draft_fixture())
+    rig = _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+    node = rig.graphs.open("policy_system").nodes[("Standard", _EXISTING_STANDARD_ID)]
+    node["description"] = "to be cleared"
+    node["procedure"] = "left alone"
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_add_standard_to_draft(fields={"implementation_status": "bogus"})
+        result = _call_update_standard_draft(
+            fields={"description": None, "implementation_status": "reviewed"}
+        )
 
     assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "must be one of" in text
+    assert node.get("description") is None
+    assert node["procedure"] == "left alone"
+    assert node["implementation_status"] == "reviewed"
+
+
+@pytest.mark.parametrize("tool", _STANDARD_TOOLS)
+def test_standard_tools_without_a_session_return_the_unauthenticated_error(tool: str) -> None:
+    configure()
+
+    result = _call_standard_tool(tool, {"description": "revised text"})
+
+    assert result.is_error is False
+    assert _text(result) == (
+        "error: this action requires a real authenticated caller "
+        "(the local-test bypass counts as one)"
+    )
 
 
 def test_add_standard_to_draft_non_owner_returns_named_error(
@@ -1624,22 +1861,6 @@ def test_update_standard_draft_response_id_usable_in_update_standard_draft(
         "title": "Encryption Standard",
         "status": "draft",
     }
-
-
-def test_update_standard_draft_unknown_field_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    configure()
-    _install_tree_rig(monkeypatch)
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_update_standard_draft(fields={"title": "sneaky rename"})
-
-    assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "not a patchable field" in text
 
 
 def test_update_standard_draft_non_owner_returns_named_error(
@@ -1883,71 +2104,28 @@ def test_add_control_to_draft_response_id_usable_in_get_policy_end_to_end(
     assert controls_by_id[new_control_id]["status"] == "draft"
 
 
-def test_add_control_to_draft_unknown_field_returns_named_error(
+def test_add_control_to_draft_rejects_an_invalid_control_type_before_any_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_tree_rig(monkeypatch)
+    rig = _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
-    with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_add_control_to_draft(fields={"title": "sneaky rename"})
+    with _verified_actor(sub=_ACTOR_SUBJECT), pytest.raises(ToolError):
+        _call_add_control_to_draft(control_type="bogus")
 
-    assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "not a patchable field" in text
+    assert rig.store.groups == []
 
 
-def test_add_control_to_draft_fields_type_key_rejected_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`fields.type` is rejected -- `control_type` is
-    the single path to set a Control's type at creation.
-    """
-    configure()
-    _install_tree_rig(monkeypatch)
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+def test_add_control_to_draft_publishes_the_control_type_enum_with_a_manual_default() -> None:
+    schema = tool_input_schema("add-control-to-draft")
+    control_type = cast(
+        "dict[str, object]", cast("dict[str, object]", schema["properties"])["control_type"]
+    )
 
-    with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_add_control_to_draft(fields={"type": "automated"})
-
-    assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "not a patchable field" in text
-
-
-def test_add_control_to_draft_invalid_implementation_status_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    configure()
-    _install_tree_rig(monkeypatch)
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_add_control_to_draft(fields={"implementation_status": "bogus"})
-
-    assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "must be one of" in text
-
-
-def test_add_control_to_draft_invalid_control_type_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    configure()
-    _install_tree_rig(monkeypatch)
-    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_add_control_to_draft(control_type="bogus")
-
-    assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "control_type" in text
+    assert control_type["enum"] == ["automated", "manual"]
+    assert control_type["default"] == "manual"
+    assert "control_type" not in cast("list[str]", schema["required"])
 
 
 def test_add_control_to_draft_non_owner_returns_named_error(
@@ -2177,20 +2355,151 @@ def test_update_control_draft_ownership_traverses_two_hops_end_to_end_rejects_no
     assert len(rig.store.groups) == logged
 
 
-def test_update_control_draft_unknown_field_returns_named_error(
+_CONTROL_TOOLS = ("add-control-to-draft", "update-control-draft")
+_CONTROL_IMPLEMENTATION_STATUSES = ["planned", "implemented", "reviewed", "deprecated"]
+
+
+def _call_control_tool(tool: str, fields: dict[str, object] | None = None) -> CallToolResult:
+    if tool == "add-control-to-draft":
+        return _call_add_control_to_draft(fields=fields)
+    return _call_update_control_draft(fields=fields)
+
+
+def _control_field_schemas(tool: str) -> dict[str, dict[str, object]]:
+    fields = parameter_object_schema(tool, "fields")
+    assert fields["additionalProperties"] is False
+    return cast("dict[str, dict[str, object]]", fields["properties"])
+
+
+def test_update_control_draft_publishes_fields_including_the_type_enum() -> None:
+    properties = _control_field_schemas("update-control-draft")
+
+    assert set(properties) == patchable_fields("Control")
+    assert properties["implementation_status"]["anyOf"] == [
+        {"enum": _CONTROL_IMPLEMENTATION_STATUSES, "type": "string"},
+        {"type": "null"},
+    ]
+    assert properties["type"]["anyOf"] == [
+        {"enum": ["automated", "manual"], "type": "string"},
+        {"type": "null"},
+    ]
+    assert properties["description"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+
+def test_add_control_to_draft_publishes_fields_without_type() -> None:
+    properties = _control_field_schemas("add-control-to-draft")
+
+    assert set(properties) == patchable_fields("Control") - {"type"}
+    assert properties["implementation_status"]["anyOf"] == [
+        {"enum": _CONTROL_IMPLEMENTATION_STATUSES, "type": "string"},
+        {"type": "null"},
+    ]
+
+
+@pytest.mark.parametrize("tool", _CONTROL_TOOLS)
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"title": "sneaky rename"},
+        {"description": 3},
+        {"implementation_status": "bogus"},
+        {"implementation_status": 1},
+    ],
+    ids=["unknown_key", "non_string_value", "out_of_enum", "non_string_enum"],
+)
+def test_control_tools_reject_malformed_fields_before_the_body_runs(
+    monkeypatch: pytest.MonkeyPatch, tool: str, fields: dict[str, object]
+) -> None:
+    configure()
+    rig = _install_tree_rig(monkeypatch, with_control=True)
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+    audit_store = _FakeAuditStore()
+    _install_audit_store(monkeypatch, audit_store)
+
+    with _verified_actor(sub=_ACTOR_SUBJECT), pytest.raises(ToolError):
+        _call_control_tool(tool, fields)
+
+    assert rig.store.groups == []
+    assert audit_store.calls == []
+
+
+@pytest.mark.parametrize("control_type", ["automated", "manual"])
+def test_add_control_to_draft_rejects_type_in_fields_before_any_write(
+    monkeypatch: pytest.MonkeyPatch, control_type: str
+) -> None:
+    configure()
+    rig = _install_tree_rig(monkeypatch)
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT), pytest.raises(ToolError):
+        _call_add_control_to_draft(fields={"type": control_type})
+
+    assert rig.store.groups == []
+
+
+def test_update_control_draft_rejects_an_out_of_enum_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configure()
-    _install_tree_rig(monkeypatch, with_control=True)
+    rig = _install_tree_rig(monkeypatch, with_control=True)
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT), pytest.raises(ToolError):
+        _call_update_control_draft(fields={"type": "bogus"})
+
+    assert rig.store.groups == []
+
+
+def test_add_control_to_draft_null_leaves_the_property_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    rig = _install_tree_rig(monkeypatch)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = _call_update_control_draft(fields={"title": "sneaky rename"})
+        result = _call_add_control_to_draft(
+            fields={"description": None, "evidence_ref": "ticket-1"}
+        )
 
     assert result.is_error is False
-    text = _text(result)
-    assert text.startswith("error: ")
-    assert "not a patchable field" in text
+    control_id = json.loads(_text(result))["control_id"]
+    node = rig.graphs.open("policy_system").nodes[("Control", control_id)]
+    assert node.get("description") is None
+    assert node["evidence_ref"] == "ticket-1"
+    assert node["implementation_status"] == "planned"
+
+
+def test_update_control_draft_null_clears_and_absent_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    rig = _install_tree_rig(monkeypatch, with_control=True)
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+    node = rig.graphs.open("policy_system").nodes[("Control", _EXISTING_CONTROL_ID)]
+    node["description"] = "to be cleared"
+    node["evidence_ref"] = "left alone"
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_update_control_draft(fields={"description": None, "type": "manual"})
+
+    assert result.is_error is False
+    assert node.get("description") is None
+    assert node["evidence_ref"] == "left alone"
+    assert node["type"] == "manual"
+
+
+@pytest.mark.parametrize("tool", _CONTROL_TOOLS)
+def test_control_tools_without_a_session_return_the_unauthenticated_error(tool: str) -> None:
+    configure()
+
+    result = _call_control_tool(tool, {"description": "revised text"})
+
+    assert result.is_error is False
+    assert _text(result) == (
+        "error: this action requires a real authenticated caller "
+        "(the local-test bypass counts as one)"
+    )
 
 
 def test_update_control_draft_type_field_is_patchable(monkeypatch: pytest.MonkeyPatch) -> None:

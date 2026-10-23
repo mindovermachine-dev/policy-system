@@ -361,23 +361,6 @@ def test_run_restoration_keeps_non_whitelisted_delegate_errors_generic(
     assert excinfo.value.reason == f"{expected_stage} failed"
 
 
-def test_run_restoration_rejects_malformed_base64_before_calling_the_delegate() -> None:
-    stage = _FakeRestoreStage()
-    dependencies = _build_dependencies(stage)
-    bad_request = RestorationRequest.model_validate(
-        {
-            "instrument_id": "CRA-1.0",
-            "manifest": _MANIFEST_PAYLOAD,
-            "baseline_blob_base64": "not-valid-base64!!!",
-            "native_blob_base64": base64.b64encode(b"{}").decode("ascii"),
-        }
-    )
-
-    with pytest.raises(RestoreArtifactRejectedError):
-        run_restoration(bad_request, config=_config(), actor="x", dependencies=dependencies)
-    assert stage.calls == []
-
-
 def test_run_restoration_raises_stage_failed_when_merge_threshold_unset() -> None:
     from ps_service.config import ServiceConfig
 

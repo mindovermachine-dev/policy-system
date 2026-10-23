@@ -229,6 +229,35 @@ def test_merge_without_a_verified_principal_writes_no_access_gate_row(
     assert environment.audit.rows == []
 
 
+def test_a_denied_caller_with_a_malformed_review_id_gets_the_generic_422_not_the_gate_403(
+    monkeypatch: pytest.MonkeyPatch, cleanup_rig: CleanupRig
+) -> None:
+    environment = _Env(monkeypatch, cleanup_rig, principal=_PLAIN)
+    expected = environment.client.post("/near-misses/review_aaa/resolve", json={})
+    before = environment.snapshot()
+
+    status, body = environment.merge(review_id="review.aaa")
+
+    assert expected.status_code == 422
+    assert status == 422
+    assert body == expected.json()
+    assert environment.audit.rows == []
+    assert approval_row_count(environment.store) == 0
+    assert environment.snapshot() == before
+
+
+def test_a_denied_caller_with_a_valid_review_id_still_gets_the_gate_403(
+    monkeypatch: pytest.MonkeyPatch, cleanup_rig: CleanupRig
+) -> None:
+    environment = _Env(monkeypatch, cleanup_rig, principal=_PLAIN)
+
+    status, body = environment.merge(review_id=_REVIEW)
+
+    assert status == 403
+    assert body["error"]["code"] == "access_denied"  # pyright: ignore[reportIndexIssue]
+    assert [row.action for row in environment.audit.rows] == ["access.gate"]
+
+
 def test_permitted_merge_over_rest_writes_no_access_gate_row(env: _Env) -> None:
     status, _body = env.merge()
 

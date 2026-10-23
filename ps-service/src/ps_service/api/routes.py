@@ -63,6 +63,7 @@ from ps_service.api.models import (
     IngestionRequest,
     IngestionStatusResponse,
     InstrumentCheckOutcomeBody,
+    PathIdentifier,
     PendingApprovalStatusResponse,
     PendingReviewListResponse,
     ResolveReviewRequest,
@@ -344,7 +345,8 @@ async def create_restoration(
     The caller must hold the ``ComplianceOfficer`` access role; the route rejects any other caller,
     including a ``SystemAdmin`` or ``SystemOwner`` without an explicit grant, before this handler
     runs. The request carries the instrument manifest and the baseline and native graph blobs,
-    base64-encoded. The handler decodes them, verifies the checksums and schema version, and
+    base64-encoded; a blob that is not strict base64 is rejected with 422 before the handler runs.
+    The handler decodes them, verifies the checksums and schema version, and
     restores the instrument into the graph. An artifact that carries Policy content is imported as a
     draft owned by the caller and is refused when there is no verified caller.
 
@@ -365,8 +367,8 @@ async def create_restoration(
     Raises:
         AuditTrailUnavailableError: The opening audit row could not be written (503); nothing was
             restored.
-        RestoreArtifactRejectedError: A blob is not valid base64, or the artifact fails checksum or
-            schema-version verification (422).
+        RestoreArtifactRejectedError: The artifact fails checksum or schema-version verification
+            (422).
         GraphWriteUnavailableError: The artifact verified but the service has no Graph Write Gateway
             (503); nothing was written.
         RestoreStageFailedError: Any other restore failure, including a missing Capability merge
@@ -677,7 +679,7 @@ def _request_merge(
 
 
 async def resolve_near_miss(
-    review_id: str,
+    review_id: PathIdentifier,
     request_body: ResolveReviewRequest,
     http_request: Request,
     config: Annotated[ServiceConfig, Depends(get_service_config)],
@@ -715,7 +717,9 @@ async def resolve_near_miss(
     ``GET /near-misses/approvals/{id}`` reports them.
 
     Args:
-        review_id: The review to resolve (path parameter).
+        review_id: The review to resolve (path parameter): 1 to 64 letters, digits, underscores or
+            hyphens. Any other value is rejected with 422 before the handler runs, so no role check,
+            graph read or audit row happens for it.
         request_body: The decision, ``"keep-separate"`` or ``"merge"``, and for a merge the optional
             ``acknowledge_governance_change``.
         http_request: The raw request; supplies the scheme and host for the approval link (merge
@@ -772,7 +776,7 @@ async def resolve_near_miss(
 
 
 async def check_merge_pending_approval(
-    pending_approval_id: str,
+    pending_approval_id: PathIdentifier,
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     cleanup_dependencies: Annotated[
@@ -789,7 +793,9 @@ async def check_merge_pending_approval(
     approvals the caller does not own.
 
     Args:
-        pending_approval_id: The pending approval id returned by the merge request (path parameter).
+        pending_approval_id: The pending approval id returned by the merge request (path parameter):
+            1 to 64 letters, digits, underscores or hyphens. Any other value is rejected with 422
+            before the handler runs.
         config: The resolved service configuration (injected); used when a signed approval whose
             outcome was never recorded is settled against the graph.
         store: The pending-approval store to read from (injected).
@@ -833,14 +839,15 @@ async def check_merge_pending_approval(
     )
 
 
-async def get_ingestion_status(run_id: str) -> IngestionStatusResponse:
+async def get_ingestion_status(run_id: PathIdentifier) -> IngestionStatusResponse:
     """Report the pipeline stage currently executing for a run (``GET /ingestions/{run_id}``).
 
     A best-effort live-progress read, not a record lookup. It always answers 200, including for a
     run id that is unknown, already finished or not yet started; in those cases ``stage`` is empty.
 
     Args:
-        run_id: The run id to look up (path parameter).
+        run_id: The run id to look up (path parameter): 1 to 64 letters, digits, underscores or
+            hyphens. Any other value is rejected with 422 before the handler runs.
 
     Returns:
         An :class:`IngestionStatusResponse` with ``run_id`` and the stage currently recorded for it,

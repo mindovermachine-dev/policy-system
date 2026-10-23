@@ -37,7 +37,6 @@ from ps_service.authz.models import AccessRole
 from ps_service.authz.service import resolve_active_roles
 from ps_service.domain_mapper.identity import control_id, standard_id
 from ps_service.domain_mapper.identity import policy_id as compute_policy_id
-from ps_service.domain_schema import enum_values, patchable_fields
 from ps_service.policy_lifecycle import graph_writer
 from ps_service.policy_lifecycle.errors import (
     PolicyCapabilityAlreadyGovernedError,
@@ -107,31 +106,6 @@ __all__ = [
 
 # `AccessRole`s that see and edit a draft Policy regardless of ownership.
 _DRAFT_VISIBILITY_OVERRIDE_ROLES = frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN})
-
-# `update-policy-draft`'s patchable-field allow-list, derived from the domain schema's property
-# flags: every Policy property not flagged identity-bearing (`title`, `owner_id`,
-# `owner_subject`, `owner_issuer`) or lifecycle-managed (`status`, `version`). Declared once here
-# and imported into `mcp_interface.policy_lifecycle_tools` (its `_parse_patch_fields` call site) so
-# the two layers cannot drift.
-_POLICY_PATCHABLE_FIELDS = patchable_fields("Policy")
-
-# `add-standard-to-draft`'s and `update-standard-draft`'s patchable-field allow-list, derived
-# from the domain schema's property flags. Excludes `title` (identity-bearing: `standard_id` is
-# content-derived from it), `status` and `version` (lifecycle-managed, never set through the
-# content tools). `implementation_status` is included: it is the Standard's own workflow field,
-# distinct from governance `status`, and must be independently settable.
-_STANDARD_PATCHABLE_FIELDS = patchable_fields("Standard")
-_STANDARD_IMPLEMENTATION_STATUS_VALUES = enum_values("Standard", "implementation_status")
-
-# `add-control-to-draft`'s and `update-control-draft`'s patchable-field allow-list, derived from
-# the domain schema's property flags. Excludes `title` (identity-bearing: `control_id` is
-# content-derived from it) and `status` (governance status, lifecycle-managed only). Unlike
-# `_STANDARD_PATCHABLE_FIELDS` it includes `"type"`, because `update-control-draft` is the only
-# post-creation path to change it. This is the full set; `add-control-to-draft` narrows it by
-# `"type"` at the MCP boundary (`mcp_interface.policy_lifecycle_tools`'s
-# `_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS`), since creation sets the type through `control_type`.
-_CONTROL_PATCHABLE_FIELDS = patchable_fields("Control")
-_CONTROL_IMPLEMENTATION_STATUS_VALUES = enum_values("Control", "implementation_status")
 
 _CREATE_DRAFT_ACTION = "policy.create_draft"
 _PROPOSE_ACTION = "policy.propose"

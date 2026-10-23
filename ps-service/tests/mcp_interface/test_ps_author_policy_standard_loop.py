@@ -39,10 +39,10 @@ Two real-code findings, verified directly against `service.py`/
 what holds for Policy:
 
 - **S-006 Lifecycle Honesty's own property, `implementation_status`, IS
-  patchable** (`service._STANDARD_PATCHABLE_FIELDS`, service.py:134-145,
-  includes it -- unlike Policy's `status`, which `_POLICY_PATCHABLE_FIELDS`
-  excludes). So, unlike Policy's P-007 (skipped entirely, no field to
-  persist), Standard's S-006 IS asked about and persisted via
+  patchable** (the patchable Standard properties of the domain schema
+  include it -- unlike Policy's `status`, which they exclude). So, unlike
+  Policy's P-007 (skipped entirely, no field to persist), Standard's S-006
+  IS asked about and persisted via
   `update-standard-draft`, same as every other S-00x criterion -- this
   file's field loop covers all 6 criteria / 7 properties, not 5 of 6.
 - **`update-standard-draft`'s own MCP response never echoes back

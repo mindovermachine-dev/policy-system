@@ -11,15 +11,23 @@ body.
 
 from __future__ import annotations
 
+import base64
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import Path
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from ps_service.api.ingestion_orchestration import SHORT_NAME_PATTERN
 from ps_service.graph_cleanup.models import (
     CapabilityMergePreview,
     RoleMergePreview,
 )
+
+IDENTIFIER_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+"""Letters, digits, underscore and hyphen, 1 to 64 characters: safe as a URL path segment."""
+
+PathIdentifier = Annotated[str, Path(pattern=IDENTIFIER_PATTERN, min_length=1, max_length=64)]
+"""A path parameter holding a system-generated identifier; anything else is rejected with 422."""
 
 
 class CatalogInstrumentEntry(BaseModel):
@@ -79,7 +87,7 @@ class CatalogIngestionRequest(BaseModel):
     source: Literal["catalog"]
     celex: str = Field(min_length=10, max_length=10, pattern=r"^3\d{4}[A-Z]\d{4}$")
     short_name: str = Field(pattern=SHORT_NAME_PATTERN)
-    run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    run_id: str | None = Field(default=None, pattern=IDENTIFIER_PATTERN)
 
 
 class InternalIngestionRequest(BaseModel):
@@ -239,26 +247,54 @@ class RestorationManifestPayload(BaseModel):
     native_sha256: str = Field(min_length=64, max_length=64)
 
 
+def _require_strict_base64(value: str) -> str:
+    """Return ``value`` unchanged when it is strict base64, otherwise reject it.
+
+    Strict means only alphabet characters with correct padding: whitespace, newlines and other
+    non-alphabet characters are not skipped.
+
+    Args:
+        value: The submitted text.
+
+    Returns:
+        ``value``, unchanged.
+
+    Raises:
+        ValueError: ``value`` is not strict base64. The message is fixed and never carries the
+            submitted text.
+    """
+    try:
+        base64.b64decode(value, validate=True)
+    except ValueError:  # binascii.Error is a ValueError
+        raise ValueError("not valid base64") from None
+    return value
+
+
+_StrictBase64 = Annotated[str, Field(min_length=1), AfterValidator(_require_strict_base64)]
+
+
 class RestorationRequest(BaseModel):
     """``POST /restorations`` body: one curated instrument's artifact.
 
     The two blobs are the artifact's UTF-8 JSON files, base64-encoded for JSON transport. The
     client reads them from disk and uploads the bytes unchanged; the server decodes them without
-    re-encoding. Unknown fields are rejected.
+    re-encoding. A blob that is not strict base64 (alphabet characters only, correct padding, no
+    whitespace) is a validation error, answered as the generic 422, and the submitted text is
+    never echoed. Unknown fields are rejected.
 
     Attributes:
         instrument_id: Curated instrument identifier; non-empty.
         manifest: The artifact's manifest fields.
-        baseline_blob_base64: Base64 of the baseline graph JSON; non-empty.
-        native_blob_base64: Base64 of the native graph JSON; non-empty.
+        baseline_blob_base64: Strict base64 of the baseline graph JSON; non-empty.
+        native_blob_base64: Strict base64 of the native graph JSON; non-empty.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     instrument_id: str = Field(min_length=1)
     manifest: RestorationManifestPayload
-    baseline_blob_base64: str = Field(min_length=1)
-    native_blob_base64: str = Field(min_length=1)
+    baseline_blob_base64: _StrictBase64
+    native_blob_base64: _StrictBase64
 
 
 class CatalogRestorationRequest(BaseModel):

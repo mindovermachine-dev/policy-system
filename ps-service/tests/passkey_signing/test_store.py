@@ -13,12 +13,14 @@ instance -- something the fake cannot prove (it never executes SQL).
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import pytest
 
 from passkey_signing._fakes import FakePendingApprovalStore
+from ps_service.api.models import IDENTIFIER_PATTERN
 from ps_service.config import load_config
 from ps_service.passkey_signing.migration_runner import apply_pending_migrations
 from ps_service.passkey_signing.store import (
@@ -173,6 +175,7 @@ def test_create_and_read_back_a_pending_approval_against_a_real_postgres_instanc
 
         assert row.code_hash == hashlib.sha256(code.encode()).digest()
         assert row.expires_at - row.created_at == timedelta(minutes=15)
+        assert re.fullmatch(IDENTIFIER_PATTERN, row.id)
 
         found_by_id = store.get_by_id(row.id)
         assert found_by_id == row

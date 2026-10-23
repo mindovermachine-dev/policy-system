@@ -395,7 +395,7 @@ def test_restore_rows_never_contain_the_source_url(make_emitter: MakeEmitter) ->
 # --- the upload path (`POST /restorations`) --------------------------------
 
 
-def _upload_request(*, blob_b64: str | None = None) -> RestorationRequest:
+def _upload_request() -> RestorationRequest:
     encoded = base64.b64encode(b'{"nodes": []}').decode("ascii")
     return RestorationRequest(
         instrument_id=_CANONICAL_ID,
@@ -414,7 +414,7 @@ def _upload_request(*, blob_b64: str | None = None) -> RestorationRequest:
                 "native_sha256": "b" * 64,
             }
         ),
-        baseline_blob_base64=blob_b64 or encoded,
+        baseline_blob_base64=encoded,
         native_blob_base64=encoded,
     )
 
@@ -487,18 +487,6 @@ def test_upload_restore_does_not_run_when_opening_row_fails() -> None:
 
     assert delegate.calls == 0
     assert store.rows == []
-
-
-def test_upload_restore_malformed_artifact_writes_no_row() -> None:
-    """A body that cannot be decoded is rejected before any restore starts: nothing to audit."""
-    store = InMemoryAuditStore()
-    delegate = _Delegate(store)
-
-    with pytest.raises(RestoreArtifactRejectedError):
-        _run_upload(store, delegate, request=_upload_request(blob_b64="not base64!!"))
-
-    assert store.rows == []
-    assert delegate.calls == 0
 
 
 def test_upload_restore_stage_failure_writes_failed_row_with_a_reason_code_only(

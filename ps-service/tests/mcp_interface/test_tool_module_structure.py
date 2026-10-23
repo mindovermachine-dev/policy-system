@@ -130,7 +130,9 @@ def test_the_construction_counter_sees_a_planted_second_server() -> None:
     assert _count_server_constructions(ast.parse("x = 1\n")) == 0
 
 
-_NON_GROUP_PACKAGE_MODULES = frozenset({"tool_core", "tool_gates", "errors", "audit_actions"})
+_NON_GROUP_PACKAGE_MODULES = frozenset(
+    {"tool_core", "tool_gates", "errors", "audit_actions", "draft_input_models"}
+)
 _PACKAGE = "ps_service.mcp_interface"
 _NONE: set[str] = set()
 
