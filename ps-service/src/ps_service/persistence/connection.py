@@ -7,6 +7,7 @@ config, `ps_service.persistence` does.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import psycopg
@@ -20,7 +21,12 @@ if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
 
 
-def connect_from_config(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
+def connect_from_config(
+    config: ServiceConfig,
+    *,
+    connect_timeout_s: float | None = None,
+    statement_timeout_ms: int | None = None,
+) -> psycopg.Connection[TupleRow]:
     """Open a fresh `psycopg` connection from `config.state_postgres_*`.
 
     Each call opens its own connection; the caller owns it and must close it. When
@@ -31,6 +37,11 @@ def connect_from_config(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
     Args:
         config: Process configuration; supplies host, port, database, user and password of
             the PS state Postgres. `state_postgres_host` must not be `None`.
+        connect_timeout_s: Longest the connection attempt may take, rounded up to whole seconds
+            (libpq's resolution); `None` leaves the driver default (no limit).
+        statement_timeout_ms: Server-side limit applied to every statement on the connection,
+            passed as a connection option so it costs no round trip; `None` leaves the server
+            default.
 
     Returns:
         An open connection with the default tuple row factory.
@@ -48,12 +59,18 @@ def connect_from_config(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
             "PS state Postgres is not configured (PS_STATE_POSTGRES_HOST is unset); "
             "every role-gated action fails closed until it is configured."
         )
+    timeout = None if connect_timeout_s is None else max(1, math.ceil(connect_timeout_s))
+    options = (
+        None if statement_timeout_ms is None else f"-c statement_timeout={statement_timeout_ms}"
+    )
     return psycopg.connect(
         host=config.state_postgres_host,
         port=config.state_postgres_port,
         dbname=config.state_postgres_database,
         user=config.state_postgres_user,
         password=config.state_postgres_password,
+        connect_timeout=timeout,
+        options=options,
     )
 
 

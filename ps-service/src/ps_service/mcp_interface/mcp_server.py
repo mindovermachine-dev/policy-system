@@ -22,8 +22,10 @@ import contextlib
 import dataclasses
 import functools
 import os
+import time
 from datetime import (
-    datetime,  # noqa: TC003 -- `list-audit-events`'s own tool params carry this type at runtime; the MCP SDK's `func_metadata` resolves `from __future__ import annotations`-deferred string annotations via `get_type_hints`, which needs `datetime` in this module's real globals, not TYPE_CHECKING-only
+    UTC,
+    datetime,
 )
 from importlib import resources
 from types import MappingProxyType
@@ -190,6 +192,7 @@ from ps_service.mcp_interface.tool_gates import (
     lifecycle_role_enforcer,
     run_body_gate,
 )
+from ps_service.metrics import record_ingestion_run
 from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
 from ps_service.passkey_signing.webauthn_rp import signable_link_host
 from ps_service.policy_lifecycle.errors import (
@@ -1249,27 +1252,33 @@ def _record_ingestion_run_outcome(
     run_id: str,
     result: dict[str, object] | str,
     reason_code: IngestionReasonCode | None,
+    duration_seconds: float,
 ) -> None:
     """Write the run's one terminal row: `failed` for an `error:` string, else `succeeded`.
 
     `reason_code` is the enumerated cause of a failure (`unexpected_error` when no known branch
     recorded one); the `error:` text goes to the run row only, never to the audit row.
 
-    The write is a single-winner compare-and-swap, so a row is never terminal twice.
+    The write is a single-winner compare-and-swap, so a row is never terminal twice. Only the
+    call that won it records the run's outcome and `duration_seconds` as metrics.
     A failed write is logged (exception class only, never host detail) and swallowed: nothing
     may escape the worker unlogged, and the row simply stays `running`.
     """
     try:
         if isinstance(result, str):
-            store.complete_run(
+            won = store.complete_run(
                 run_id,
                 status="failed",
                 result=None,
                 error=result,
                 reason_code=reason_code or "unexpected_error",
             )
+            outcome: Literal["succeeded", "failed"] = "failed"
         else:
-            store.complete_run(run_id, status="succeeded", result=result, error=None)
+            won = store.complete_run(run_id, status="succeeded", result=result, error=None)
+            outcome = "succeeded"
+        if won:
+            record_ingestion_run(outcome, duration_seconds)
     except Exception as exc:  # noqa: BLE001 -- nothing may escape the worker unlogged; the row stays `running`
         _emit_best_effort_failure(_BACKGROUND_INGESTION_ACTION, run_id, reason=type(exc).__name__)
 
@@ -1289,6 +1298,7 @@ def _execute_background_ingestion(
     last-resort net: the run's row must never be left `running` by an exception.
     """
     capture = _FailureCapture()
+    started = time.monotonic()
     try:
         result = _run_mcp_action(
             _BACKGROUND_INGESTION_ACTION,
@@ -1310,7 +1320,11 @@ def _execute_background_ingestion(
         )
         result = _UNEXPECTED_ERROR_MESSAGE
     _record_ingestion_run_outcome(
-        store, run_id=run_id, result=result, reason_code=capture.reason_code
+        store,
+        run_id=run_id,
+        result=result,
+        reason_code=capture.reason_code,
+        duration_seconds=time.monotonic() - started,
     )
 
 
@@ -1321,12 +1335,13 @@ def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> I
     `running` yet its worker is gone (its terminal write failed, or the process restarted), so
     it would otherwise be reported `running` forever. The write is a single-winner
     compare-and-swap, a no-op if the worker finished first. It never fails the poll: any store
-    error is logged (exception class only) and the row is returned unchanged.
+    error is logged (exception class only) and the row is returned unchanged. The call that wins
+    the write records one `failed` run, aged from the row's submission time.
     """
     if row.status != "running" or is_run_in_flight(row.run_id):
         return row
     try:
-        store.complete_run(
+        won = store.complete_run(
             row.run_id,
             status="failed",
             result=None,
@@ -1334,6 +1349,9 @@ def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> I
             reason_code="interrupted",
             audit_actor=_RECONCILER_AUDIT_ACTOR,
         )
+        if won:
+            age = (datetime.now(UTC) - row.submitted_at).total_seconds()
+            record_ingestion_run("failed", age)
         reread = store.get_run(row.run_id)
     except Exception as exc:  # noqa: BLE001 -- a failed reconciliation must never become the poll's failure
         _emit_best_effort_failure(_RECONCILE_ACTION, row.run_id, reason=type(exc).__name__)

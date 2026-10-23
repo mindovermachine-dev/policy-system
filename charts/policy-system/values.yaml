@@ -29,6 +29,8 @@ psService:
     # the production Ingress. Port is named "http" and serves both the REST API and, once built,
     # the Streamable HTTP MCP endpoint under the same host:port. A nodePort is rendered only when
     # type is NodePort and nodePort is set.
+    # /metrics is anonymous and served on this port: the chart proxy denies it, but a NodePort or an
+    # Ingress that forwards to this Service publishes it. Keep ClusterIP and deny /metrics on any Ingress.
     type: ClusterIP
     nodePort: null
   companyMerge:

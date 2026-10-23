@@ -130,7 +130,12 @@ forbidden_modules = ["ps_cli", "ps_test_support"]
 id = "leaf-foundations"
 name = "foundation packages import no feature package"
 type = "forbidden"
-source_modules = ["ps_service.logging", "ps_service.dependency_health", "ps_service.domain_schema"]
+source_modules = [
+    "ps_service.logging",
+    "ps_service.dependency_health",
+    "ps_service.domain_schema",
+    "ps_service.metrics",
+]
 forbidden_modules = ["ps_service.api", "ps_service.graph_gateway", "ps_service.ingestion"]
 
 [[tool.importlinter.contracts]]

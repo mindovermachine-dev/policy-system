@@ -145,7 +145,7 @@ The guide is owned by #254, which is rewriting it, so no guide line was edited h
 | OBS-24 | `charts/policy-system/templates/ps-postgres-deployment.yaml:74-76` | Low | Readiness only, with a comment that explains why there is no liveness probe | no action: justified in the chart |
 | OBS-25 | FalkorDB, PS Postgres, authentik Postgres, provision Job | Medium | No resource requests or limits | issue #320 |
 | OBS-26 | `charts/policy-system/values.yaml` `psService.resources`, `psService.probes` | Low | The numbers have no rationale comment | issue #320 |
-| OBS-27 | `ps-service/src` | Low | No metrics of any kind (grep for metrics libraries and a metrics route is empty); state is visible only through `/ready` and logs | issue #321 |
+| OBS-27 | `ps-service/src` | Low | Was: no metrics library or route, so state was visible only through `/ready` and logs. Delivered by #321: `GET /metrics` on the service port (Prometheus text, content-free labels), denied at the chart proxy, documented in the operations guide | delivered by #321 |
 | OBS-28 | `operations-guide.md:845` | Low | The not-ready row omits state Postgres and graph replay | issue #254 |
 | OBS-29 | `operations-guide.md` troubleshooting table | Low | No row for the mid-run recovery gap, interrupted ingestion, passkey Postgres, IdP, Cellar or memory-limit kills | issue #254 |
 | OBS-30 | `operations-guide.md:568-569` | Low | "Does not start while unreachable" matches the code | no action: accurate |
@@ -198,7 +198,7 @@ Status: met, partial (the audit part is met and the remediation is tracked in an
 | #318 | fix(ps-service): let /ready recover after a mid-run dependency outage without a restart | OBS-17, OBS-18 |
 | #319 | fix(chart): add startup and missing readiness probes to chart-owned workloads | OBS-21 to OBS-23 |
 | #320 | feat(chart): set resource requests and limits on data stores and the provision job | OBS-25, OBS-26 |
-| #321 | feat(ps-service): expose operational metrics | OBS-27 |
+| #321 | feat(ps-service): expose operational metrics (delivered) | OBS-27 |
 
 Existing issues reused instead of filing: #309 (graceful-shutdown seconds and query timeout as chart values; comment posted), #254 (operations guide; comment posted). All eight are native sub-issues of #246 and carry "Part of #246" and "Related: #259".
 
@@ -268,7 +268,7 @@ Reviewed against the outcomes above: 61 issues, being every open sub-issue of #2
 | #318 | open | fix(ps-service): let /ready recover after a mid-run dependency outage without a restart | Filed by this audit: readiness recovery after a mid-run outage. |
 | #319 | open | fix(chart): add startup and missing readiness probes to chart-owned workloads | Filed by this audit: startup and missing readiness probes. |
 | #320 | open | feat(chart): set resource requests and limits on data stores and the provision job | Filed by this audit: resource requests and limits. |
-| #321 | open | feat(ps-service): expose operational metrics | Filed by this audit: operational metrics. |
+| #321 | delivered | feat(ps-service): expose operational metrics | Filed by this audit: operational metrics. |
 
 ## Verification evidence
 
@@ -292,5 +292,5 @@ Enforced rules fail automatically, in the pre-commit hook on the files they watc
 | Outbound calls have bounded timeouts | review-only | tracked in #314 and #315 |
 | Shutdown sequence fits the termination grace window | review-only | tracked in #317 |
 | Readiness recovers after a dependency outage; interrupted runs are reconciled | review-only | tracked in #318 and #316 |
-| Operational metrics | review-only | tracked in #321 |
+| Operational metrics | review-only | delivered by #321 |
 | The operations guide matches the failure modes | review-only | judgement; links are covered by `doc-links` |

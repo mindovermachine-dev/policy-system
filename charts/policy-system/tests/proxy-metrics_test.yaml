@@ -1,0 +1,55 @@
+suite: proxy metrics denial
+release:
+  name: policy-system
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  proxy.enabled: true
+  proxy.tls.secretName: policy-system-local-tls
+  psService.authentikHostname: ps.test
+templates:
+  - proxy-configmap.yaml
+tests:
+  - it: the named server block denies /metrics and everything under it without proxying
+    set:
+      authentik.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /metrics \\{([^{}])*return 403"
+      - notMatchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /metrics \\{([^{}])*proxy_pass"
+
+  - it: the deny does not depend on Authentik being enabled
+    set:
+      authentik.enabled: false
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /metrics \\{([^{}])*return 403"
+      - notMatchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /metrics \\{([^{}])*proxy_pass"
+
+  - it: exactly one /metrics location exists and it sits in the named server block
+    set:
+      authentik.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "server_name ps\\.test;([^\\x00]*)location \\^~ /metrics \\{"
+      - notMatchRegex:
+          path: data["nginx.conf"]
+          pattern: "location \\^~ /metrics \\{([^\\x00]*)location \\^~ /metrics \\{"
+      - notMatchRegex:
+          path: data["nginx.conf"]
+          pattern: "location (=|~|~\\*) \\S*metrics"
+
+  - it: the default server block still rejects and has no location or proxy_pass
+    set:
+      authentik.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "listen 8443 ssl default_server;\\s*ssl_reject_handshake on;\\s*return 421;\\s*\\}"

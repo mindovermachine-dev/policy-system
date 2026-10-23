@@ -39,6 +39,7 @@ from ps_service.dependency_health import (
 )
 from ps_service.logging import EmitterConfig, LogEmitter
 from ps_service.logging.facade import reset_for_tests
+from ps_service.metrics.recorder import reset_for_tests as reset_metrics_for_tests
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -75,9 +76,11 @@ def _isolate_logging(  # pyright: ignore[reportUnusedFunction]  # pytest autouse
     monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
     reset_for_tests()
     reset_dependency_health_for_tests()
+    reset_metrics_for_tests()
     yield
     reset_for_tests()
     reset_dependency_health_for_tests()
+    reset_metrics_for_tests()
 
 
 @pytest.fixture

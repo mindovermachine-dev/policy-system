@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from ps_service.auth.models import AuthContext
     from ps_service.auth.verifier import PsTokenVerifier
 
-_EXEMPT_PATHS = frozenset({"/health", "/ready"})
+_EXEMPT_PATHS = frozenset({"/health", "/ready", "/metrics"})
 _EXEMPT_PREFIX = "/.well-known/"
 _MCP_MOUNT_PREFIX = "/mcp"
 _APPROVALS_PREFIX = "/approvals/"
@@ -83,8 +83,9 @@ def _resource_metadata_url(scope: Scope) -> str:
 class RestAuthMiddleware:
     """Default-deny ASGI middleware: every non-exempt path requires a verified bearer token.
 
-    Exempt: `/health`, `/ready`, anything under `/.well-known/`, `/approvals/` (the signing
-    ceremony's own capability-URL check) and `/mcp` (gated by the MCP SDK with the same verifier).
+    Exempt: `/health`, `/ready`, `/metrics` (anonymous by design, in-cluster only), anything under
+    `/.well-known/`, `/approvals/` (the signing ceremony's own capability-URL check) and `/mcp`
+    (gated by the MCP SDK with the same verifier).
     For every other HTTP request the bearer token is verified; success binds a `Principal` to
     `scope["ps_principal"]`, failure answers 401 and the wrapped application never runs.
     Non-HTTP scopes (e.g. lifespan) pass through untouched.

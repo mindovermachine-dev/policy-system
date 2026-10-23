@@ -14,6 +14,7 @@ under uvicorn.
 from __future__ import annotations
 
 import asyncio
+import functools
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
@@ -56,6 +57,7 @@ from ps_service.dependency_health import (
 )
 from ps_service.graph_gateway import GRAPH_LOG_TABLES
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.pending_entries import count_pending_entries
 from ps_service.ingestion.adapters.cellar_eli.fetch import (
     check_connectivity as check_cellar_eli_connectivity,
 )
@@ -68,6 +70,16 @@ from ps_service.llm_interface import (
 )
 from ps_service.logging.facade import configure, emit_log_entry
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH, build_streamable_http_app
+from ps_service.metrics import build_metrics, build_metrics_router
+from ps_service.metrics.catalog import REQUEST_DURATION
+from ps_service.metrics.http_middleware import MetricsMiddleware
+from ps_service.metrics.sources import (
+    PENDING_CONNECT_TIMEOUT_S,
+    PENDING_SOURCE_DEADLINE_S,
+    PENDING_STATEMENT_TIMEOUT_MS,
+    PENDING_TTL_S,
+    TtlCachedSource,
+)
 from ps_service.passkey_signing.migration_runner import apply_pending_migrations
 from ps_service.passkey_signing.router import build_passkey_signing_router
 from ps_service.passkey_signing.store import (
@@ -105,6 +117,7 @@ if TYPE_CHECKING:
     from ps_service.auth.models import AuthContext
     from ps_service.graph_gateway.models import StartupReplayReport
     from ps_service.ingestion.graph_submission import GroupSubmitter
+    from ps_service.metrics import MetricsHandle
 
 # Matches `_DEFAULT_LOG_FILENAME` in `ps_service/logging/facade.py` and the sink filename documented
 # in `docs/architecture/ps-service-container-architecture.md`. Kept as a local literal (not
@@ -172,7 +185,7 @@ class _MaxBodySizeMiddleware:
 
 
 _BEARER_PREFIX = "Bearer "
-_REPLAY_GATE_EXEMPT_PATHS = frozenset({"/health", "/ready"})
+_REPLAY_GATE_EXEMPT_PATHS = frozenset({"/health", "/ready", "/metrics"})
 _REPLAY_GATE_EXEMPT_PREFIX = "/.well-known/"
 _REPLAY_GATE_RETRY_AFTER_SECONDS = "5"
 
@@ -181,11 +194,11 @@ class _ReplayReadGateMiddleware:
     """Pure ASGI middleware that serves nothing graph-related while the startup replay runs.
 
     While `graph_replay` is unhealthy a graph may be empty or half rebuilt, so any request that
-    could read it gets `503` with the status-only `/ready` body. Exempt: `/health`, `/ready` and the
-    `/.well-known/` metadata, the only paths that are unauthenticated and graph-free. It is the
-    outermost layer, so it runs before authentication: a caller who is not authenticated learns
-    nothing beyond "not ready". A dependency that was never recorded
-    counts healthy, so a service without a replay is never gated. Only HTTP scopes are looked at.
+    could read it gets `503` with the status-only `/ready` body. Exempt: `/health`, `/ready`,
+    `/metrics` and the `/.well-known/` metadata, the only paths that are unauthenticated and
+    graph-free. It is the outermost layer, so it runs before authentication: a caller who is not
+    authenticated learns nothing beyond "not ready". A dependency that was never recorded counts
+    healthy, so a service without a replay is never gated. Only HTTP scopes are looked at.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -251,6 +264,20 @@ _READY_DEPENDENCIES = (
 # empty or half rebuilt, so the pod must not take traffic. Its state is owned by the replay task
 # (see `_start_graph_replay_at_startup`), not by a probe.
 _GATING_DEPENDENCIES = (FALKORDB, STATE_POSTGRES, GRAPH_REPLAY)
+
+
+def _unhealthy_dependency_counts() -> tuple[int, int]:
+    """Count unhealthy `_READY_DEPENDENCIES` as `(gating, non_gating)`, for the metrics gauge.
+
+    A pure read of the dependency-health registry: it probes nothing and marks nothing, so a
+    scrape cannot change what `/ready` reports. Only counts leave this function, never names.
+
+    Returns:
+        The number of unhealthy gating dependencies and of unhealthy non-gating ones.
+    """
+    unhealthy = [dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)]
+    gating = sum(1 for dependency in unhealthy if dependency in _GATING_DEPENDENCIES)
+    return gating, len(unhealthy) - gating
 
 
 class LocalTestBypassBindRefusedError(Exception):
@@ -827,13 +854,50 @@ def _retry_gating_dependencies(config: ServiceConfig) -> bool:
     return all_healthy(_GATING_DEPENDENCIES)
 
 
+def _build_app_metrics(
+    config: ServiceConfig, pending_entries: Callable[[], int] | None
+) -> MetricsHandle:
+    """Build the app's metrics handle with its data sources wired.
+
+    The unhealthy-dependency gauge reads the dependency-health registry. The pending graph-log
+    gauge reads `pending_entries` through a `TtlCachedSource` (cached, single-flight, with one
+    deadline), so a scrape never waits on Postgres for long and a down Postgres is not probed by a
+    scrape loop.
+
+    Args:
+        config: Supplies the PS state Postgres coordinates for the default pending-entries source.
+        pending_entries: Returns the pending graph-log total; `None` reads it from PS state
+            Postgres with `count_pending_entries`.
+
+    Returns:
+        The new handle.
+
+    Side Effects:
+        As `build_metrics`.
+    """
+    fetch = pending_entries or functools.partial(
+        count_pending_entries,
+        config,
+        connect_timeout_s=PENDING_CONNECT_TIMEOUT_S,
+        statement_timeout_ms=PENDING_STATEMENT_TIMEOUT_MS,
+    )
+    pending = TtlCachedSource(
+        "graph_log_pending_entries",
+        fetch,
+        ttl_seconds=PENDING_TTL_S,
+        timeout_seconds=PENDING_SOURCE_DEADLINE_S,
+    )
+    return build_metrics(unhealthy_counts=_unhealthy_dependency_counts, pending_entries=pending.get)
+
+
 def _add_http_middleware(
     app: FastAPI,
     verifier: PsTokenVerifier | None,
     auth_context: AuthContext | None,
     max_request_body_bytes: int,
+    metrics: MetricsHandle,
 ) -> None:
-    """Wire the three HTTP middleware layers; the last one added is the outermost.
+    """Wire the four HTTP middleware layers; the last one added is the outermost.
 
     Args:
         app: The application to add the middleware to.
@@ -842,6 +906,8 @@ def _add_http_middleware(
         auth_context: Resolved authentication settings for `RestAuthMiddleware`; `None` when the
             bypass is active.
         max_request_body_bytes: The largest accepted `Content-Length`, in bytes.
+        metrics: The app's metrics handle; its request-duration instrument feeds
+            `MetricsMiddleware`.
     """
     # `RestAuthMiddleware` is added *before* `_MaxBodySizeMiddleware` so the latter runs first of
     # the two: `add_middleware` makes the most-recently-added call the outermost, so an oversized
@@ -853,6 +919,29 @@ def _add_http_middleware(
     # Added last, so outermost: a gated request is answered before any size check or JWT work,
     # and tells an unauthenticated caller nothing beyond "not ready".
     app.add_middleware(_ReplayReadGateMiddleware)
+    # Added after the gate, so outermost of all: the gate's 503, the size check's 413 and the
+    # authentication 401 are counted too, each under its route template (or the fixed unmatched
+    # value), never the raw path.
+    app.add_middleware(
+        MetricsMiddleware,
+        histogram=metrics.histogram(REQUEST_DURATION),
+        router=app.router,
+    )
+
+
+def _wire_http_surface(app: FastAPI) -> None:
+    """Install the exception handlers and include the REST, signing-ceremony and `/metrics` routers.
+
+    Args:
+        app: The application to wire; `app.state.metrics` must already be set for `/metrics`.
+
+    Side Effects:
+        Registers the structured error handlers and the three routers on `app`.
+    """
+    register_exception_handlers(app)
+    app.include_router(build_api_router())
+    app.include_router(build_passkey_signing_router())
+    app.include_router(build_metrics_router())
 
 
 def _emit_startup_warnings(config: ServiceConfig) -> None:
@@ -910,7 +999,9 @@ async def _is_verified_caller(request: Request, verifier: PsTokenVerifier | None
     return bool(token) and await verifier.verify_token(token) is not None
 
 
-def create_app(config: ServiceConfig) -> FastAPI:
+def create_app(
+    config: ServiceConfig, *, pending_entries: Callable[[], int] | None = None
+) -> FastAPI:
     """Build the FastAPI app wired to the given `ServiceConfig`.
 
     A factory rather than a module-level singleton so that two independently configured apps can
@@ -925,7 +1016,9 @@ def create_app(config: ServiceConfig) -> FastAPI:
     4xx/5xx error handlers, which do not leak stack traces, paths or infrastructure detail. The
     `ps_service.api` REST router and the companion-browser signing-ceremony router
     (`/approvals/*`, exempt from bearer authentication because it is gated by its own per-request
-    `code` check) are mounted with `app.include_router`. `/health`, `/ready` and the
+    `code` check) are mounted with `app.include_router`, as is the anonymous `GET /metrics`
+    scrape route (`ps_service.metrics`), whose `MetricsHandle` is stashed on `app.state.metrics`
+    and shut down with the app. `/health`, `/ready` and the
     `/.well-known/oauth-protected-resource` metadata (RFC 9728, the URL named in
     `RestAuthMiddleware`'s `WWW-Authenticate` header) are registered directly. The metadata route
     is the only one publishing that document: the MCP sub-app leaves its resource server URL
@@ -959,6 +1052,9 @@ def create_app(config: ServiceConfig) -> FastAPI:
         config: The resolved service configuration. It is captured by reference for the life of
             the app; its host, logging directory, request body limit and authentication settings
             are all read from it.
+        pending_entries: Test seam for the pending graph-log gauge's data source: a callable
+            returning the total, replacing the read from PS state Postgres (it is still cached
+            and bounded like the real one). `None` reads PS state Postgres.
 
     Returns:
         A new, not yet started `FastAPI` app. Its readiness (`app.state.ready`) is `False` until
@@ -1054,6 +1150,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield
             await _shutdown_graph_gateway(app.state.graph_write_gateway, replay_task)
+            app.state.metrics.shutdown()
             app.state.ready = False
 
     app = FastAPI(lifespan=lifespan)
@@ -1080,10 +1177,9 @@ def create_app(config: ServiceConfig) -> FastAPI:
     # `token_verifier=` wiring share, so there is one discovery fetch, one `PyJWKClient`, one JWKS
     # cache per process, never two parallel verifiers.
     verifier = PsTokenVerifier(auth_context) if auth_context is not None else None
-    _add_http_middleware(app, verifier, auth_context, config.max_request_body_bytes)
-    register_exception_handlers(app)
-    app.include_router(build_api_router())
-    app.include_router(build_passkey_signing_router())
+    metrics = app.state.metrics = _build_app_metrics(config, pending_entries)
+    _add_http_middleware(app, verifier, auth_context, config.max_request_body_bytes, metrics)
+    _wire_http_surface(app)
 
     mcp_asgi_app = build_streamable_http_app(
         host=config.host, verifier=verifier, auth_context=auth_context

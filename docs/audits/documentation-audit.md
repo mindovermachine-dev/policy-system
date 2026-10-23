@@ -253,7 +253,7 @@ Enumerated with `gh api --paginate repos/:owner/:repo/issues/246/sub_issues` (14
 | 318 | `/ready` recovery | the operations guide and Dependency Health text describe today's behaviour with a restart remedy | comment posted |
 | 319 | startup and readiness probes | the values reference documents the existing probe keys | comment posted |
 | 320 | resource requests and limits | the values reference documents the existing resource keys | comment posted |
-| 321 | operational metrics | documents state there are none | no change needed |
+| 321 | operational metrics | the operations guide documents them (a Metrics section) | documented by #321 |
 | 322 | self-grant wording in tool descriptions | filed by this audit | no change needed |
 | 323 | domain concepts provenance and remaining prose checks | filed by this audit | no change needed |
 

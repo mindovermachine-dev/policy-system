@@ -24,6 +24,7 @@
   - [Audit log integrity](#audit-log-integrity)
   - [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph)
   - [What `/ready` reveals](#what-ready-reveals)
+  - [Metrics](#metrics)
   - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
   - [Rotate the API key later](#rotate-the-api-key-later)
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
@@ -845,6 +846,67 @@ curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://ps.test:30443/ready
 The local-test bypass has no verifier, so it never returns the detail; read the startup log
 entries instead.
 
+The anonymous [Metrics](#metrics) endpoint withholds the same names: it reports only an
+aggregate count of unhealthy dependencies, never which ones.
+
+### Metrics
+
+PS Service serves operational metrics on its service port at `GET /metrics`, in the Prometheus
+text exposition format, built with the OpenTelemetry Metrics API. A Prometheus server, a Grafana
+Agent or an OpenTelemetry Collector's `prometheus` receiver can scrape it, so an alert on a
+degraded dependency or a stuck ingestion needs no log scraping.
+
+**Exposure rules**
+
+- `/metrics` is anonymous: it is exempt from authentication and from the startup replay gate,
+  like `/health` and `/ready`, so it answers `200` while a graph replay runs.
+- It is in-cluster only. Any pod that can reach the service port can read it. The chart proxy
+  returns 403 for `/metrics` and everything under it, so the public entry point never serves it.
+- Keep it that way: deny `/metrics` on any Ingress you add in front of PS Service, and do not
+  expose the service with NodePort or LoadBalancer, because either one publishes an anonymous
+  endpoint. The chart's default service type is `ClusterIP`.
+- It exposes nothing that anonymous `/ready` withholds: no dependency names, no graph names, no
+  error text and no user, document or run identifiers. Labels are fixed values, and route labels
+  are route templates, never raw paths. Per-dependency and per-graph detail stays behind
+  authenticated `/ready`.
+- A scrape adds no probes. It reads state the service already keeps, and a metric whose data
+  source fails or times out is left out of that scrape while the others are still served.
+
+**Registered metrics**
+
+| OpenTelemetry name | Prometheus name | Type | Labels | Meaning |
+| ------------------ | --------------- | ---- | ------ | ------- |
+| `http.server.request.duration` | `http_server_request_duration_seconds` (`_bucket`, `_count`, `_sum`) | Histogram, seconds | `http.request.method` (as `http_request_method`), `http.route` (as `http_route`), `http.response.status_code` (as `http_response_status_code`) | Request count and latency per route. The route is the route template, such as `/ingestions/{run_id}`, or `__unmatched__` when no route matches; a method outside the standard set is `_OTHER`. Requests answered by the replay gate (503) or by authentication (401) are counted too. |
+| `ps_service.dependencies.unhealthy` | `ps_service_dependencies_unhealthy` | Gauge, dependencies | `gating` (`true` or `false`) | Aggregate count of unhealthy dependencies, always two series: `gating="true"` for the dependencies that gate `/ready` (FalkorDB, PS state Postgres, graph replay) and `gating="false"` for the others (LLM Interface, Cellar/ELI, Passkey Signing Postgres). Each is `0` when healthy. It reads the dependency-health registry that `/ready` reads, with no probe, and carries no dependency name; the names stay behind authenticated `/ready`. |
+| `ps_service.ingestion.runs` | `ps_service_ingestion_runs_total` | Counter, runs | `outcome` (`succeeded` or `failed`) | Ingestion runs that reached a terminal state, counted once per run by the call that wrote the terminal row. A run completed by a status poll because its worker was gone (interrupted) counts as `failed`; a run whose terminal write failed or lost the race to another writer counts nothing. The label never carries a run id or instrument id. Counts restart at zero when the service restarts. |
+| `ps_service.ingestion.run.duration` | `ps_service_ingestion_run_duration_seconds` (`_bucket`, `_count`, `_sum`) | Histogram, seconds | `outcome` (`succeeded` or `failed`) | Run duration for the same runs as the counter above: from the start of the background worker to its terminal write, or, for an interrupted run, from submission to the status poll that completed it. Buckets run from 1 second to 1 hour. |
+| `ps_service.graph_log.pending_entries` | `ps_service_graph_log_pending_entries` | Gauge, entries | none | One total of graph mutation log entries that are written but not yet applied, summed over all graphs; no graph name is exposed (per-graph detail stays behind authenticated `/ready`). It is read from PS state Postgres with a read-only query on its own short-lived connection, never through the graph log store, so a scrape does not change the Postgres health `/ready` reports. The value is cached for 15 seconds, and a failure is cached too, so a scrape loop does not load a degraded Postgres. The series is omitted while Postgres is unreachable, unconfigured, or slower than the 5 second deadline; the other metrics are still served. |
+
+**Example scrape configuration**
+
+Prometheus, scraping the in-cluster service (replace `<release>` with the Helm release name):
+
+```yaml
+scrape_configs:
+  - job_name: ps-service
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["<release>-ps-service:8000"]
+```
+
+An OpenTelemetry Collector, using its Prometheus receiver:
+
+```yaml
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: ps-service
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["<release>-ps-service:8000"]
+```
+
 ### Graph drift alert
 
 **Applies to:** every PS Service that has a graph mutation log, from the release that adds the
@@ -854,8 +916,8 @@ PS Service writes its graphs only through the Graph Write Gateway. After the las
 (a restore, an ingestion, a merge, a re-ingest, a cleanup) the gateway records a digest of the
 graph, a short hash of everything in it. Once an hour (`PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`,
 Helm `psService.graphGateway.driftCheckIntervalSeconds`; `0` turns the check off) it compares each
-graph with the digest at the head of its log. Nothing is exposed: there is no endpoint, no tool
-and no `/ready` field, and a failing check never changes readiness.
+graph with the digest at the head of its log. The check exposes nothing of its own: it has no
+endpoint, no tool, no `/ready` field and no metric, and a failing check never changes readiness.
 
 A graph that changed behind the gateway's back (someone wrote to FalkorDB directly) shows up as
 one log entry per graph per hour, and it is also written to the container's stderr so

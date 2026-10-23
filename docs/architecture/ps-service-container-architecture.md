@@ -38,6 +38,7 @@
    - [LLM Interface](#llm-interface)
    - [Logging](#logging)
    - [Dependency Health](#dependency-health)
+   - [Metrics](#metrics)
    - [Passkey Signing](#passkey-signing)
    - [Audit](#audit)
    - [Graph Write Gateway](#graph-write-gateway)
@@ -132,6 +133,7 @@ graph TB
         Logging[Logging]
         LogFiles[(logs/)]
         DependencyHealth[Dependency Health]
+        Metrics[Metrics]
         ProcessHarness[Process Harness]
     end
 
@@ -318,6 +320,7 @@ graph TB
 | LLM Interface | `ps.service.llminterface` | Route chat/embedding requests to the configured LLM Provider via LiteLLM |
 | Logging | `ps.service.logging` | Provide structured, semantic logging for every component; write JSON entries to file; bind a correlation (run) ID at primary-use-case entry points |
 | Dependency Health | `ps.service.dependencyhealth` | Process-wide registry of whether FalkorDB, the PS state Postgres, the startup graph replay, the passkey-signing Postgres, LLM Interface and Cellar/ELI succeeded on their most recent call; fed by those components' own exception handling, read by Process Harness for `/ready` |
+| Metrics | `ps.service.metrics` | Operational metrics through the OpenTelemetry Metrics API, served on the service port at `GET /metrics` in the Prometheus text format: request count and latency per route template, an aggregate count of unhealthy dependencies, ingestion runs by outcome with their duration, and one total of pending graph-log entries; anonymous, in-cluster only, content-free labels; reads Dependency Health and the graph log without probing |
 | Passkey Signing | `ps.service.passkeysigning` | Own WebAuthn relying party for transaction-signing (independent of the OIDC login IdP); PS-Service-owned store in the separate `ps_signing` database of the PS Postgres server for enrolled signing credentials and pending-approval records; dynamically-bound challenge construction/verification; companion-browser enrollment/signing ceremony pages; optional configured allowed origins (`PS_PASSKEYSIGNING_ALLOWED_ORIGINS`): the first names the relying party (`rp_id` and origin), and a POST on an approval route whose `Host` matches none is refused with HTTP 421 before the approval is read, while with none configured the relying party is derived from the request's `Host` |
 | Audit | `ps.service.audit` | Shared, insert-only, tamper-evident audit trail (`audit_log.audit_events` in the PS state Postgres, hash-chained by the database and verifiable on demand) for every component that records who did what to what; validates each action's typed `details` against its registered model; writes in the caller's transaction so the audit row and the state change commit or roll back together; operations whose effect is outside Postgres (ingestion, restore, near-miss resolve, invite, `check_regulations` re-ingests) write an opening row first (fail-closed: if it cannot be written the operation does not run) and a best-effort terminal row; `list-audit-events` supports an allow-listed `details` filter (`celex`, `regulatory_instrument_id`, `instrument_id`) backed by expression indexes (migration 0002) |
 | Graph Write Gateway | `ps.service.graphgateway` | Mutation log store, gateway (submit, apply, catch-up, startup recovery), canonical digest, requested digest checkpoints, replay with verification, resume of an interrupted replay, and the startup replay that gates `/ready` and every graph-reading request; Ingestion (the external pipeline and the internal-seed ingestion), the Domain Mapper, Company Merge (the merge stage and the near-miss resolution), Policy Lifecycle (Policy, Standard and Control creation and edits, the status transitions and the governance backfills), Graph Cleanup (capability merge, obligation merge, role merge, release and the three unmerges), the Regulatory Change Monitor (the re-ingest succession), Export (the embedding backfill) and Restore (the native, baseline and single-tenant legs of a restore, as one group applied by swap) write their graphs only through it: the single path for graph writes by Ingestion, Domain Mapper, Company Merge, Restore, Policy Lifecycle, Graph Cleanup and Regulatory Change Monitor; record each transaction group in the mutation log (`ps_state`) before it is applied; apply to FalkorDB as a rebuildable projection of the log; replay the log and verify a rebuilt graph against a digest checkpoint; reject labels and relationship types outside the allow-list; fail closed, reporting "committed, apply pending" when only the apply is delayed |
@@ -1473,6 +1476,51 @@ None — shared infrastructure utility.
 
 ---
 
+### Metrics
+
+#### Domain Concepts
+
+None — shared infrastructure utility.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | OpenTelemetry Metrics SDK, FastAPI | Python 3.14 | `ps-service/src/ps_service/metrics/` | `ps_service.metrics` |
+
+**Implementation Guidance:**
+- Instruments are created only through the OpenTelemetry Metrics API from one catalog (`METRIC_CATALOG`), so a second metric reader (for example an OTLP push exporter) can be added without touching a call site. `exposition.py` is the single module that imports `prometheus_client`; it only renders the scrape body from a private registry (the OpenTelemetry Prometheus exporter has no text renderer).
+- `/metrics` is anonymous and exempt from the startup replay gate and from REST authentication, like `/health` and `/ready`. The chart proxy returns 403 for it; it is reachable in-cluster only.
+- Labels are content-free: the route label is a route template or the fixed `__unmatched__`, a method outside the standard set is `_OTHER`, the dependency gauge carries only `gating`, the pending-entries gauge is one total. Nothing that anonymous `/ready` withholds is exposed.
+- Metric data sources are read-only and bounded. The dependency gauge reads the Dependency Health registry (no probe). The pending-entries total is read from PS state Postgres on its own short-lived connection with a 2 s connect timeout and a 2 s statement timeout, behind a 15 s cache and a 5 s deadline; a source that fails or exceeds its deadline is omitted from that scrape and the others are still served. A scrape never changes a dependency's recorded health.
+- The metrics middleware is the outermost HTTP middleware, so replay-gate 503s and authentication 401s are counted. The ingestion outcome is recorded by MCP Interface through a process slot once, by the call that wrote the terminal run row.
+- The component imports no feature package (it sits in the `leaf-foundations` import-linter layer).
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/metrics/catalog.py` | `MetricSpec` and `METRIC_CATALOG`, the single list of registered metrics | CollectMetrics |
+| `ps-service/src/ps_service/metrics/instruments.py` | Creates the catalog's instruments through the OpenTelemetry API | CollectMetrics |
+| `ps-service/src/ps_service/metrics/provider.py` | `build_metrics`, `MetricsHandle`: the meter provider, resource (service name and version only) and observable gauges | CollectMetrics |
+| `ps-service/src/ps_service/metrics/observers.py` | Gauge callbacks wrapped so a failing source is logged once (class name only) and omitted | CollectMetrics |
+| `ps-service/src/ps_service/metrics/sources.py` | `TtlCachedSource` (single-flight, deadline, cached success and failure) and the pending-entries bounds | CollectMetrics |
+| `ps-service/src/ps_service/metrics/recorder.py` | Process slot through which ingestion records a run outcome and duration | CollectMetrics |
+| `ps-service/src/ps_service/metrics/http_middleware.py` | Pure ASGI middleware recording `http.server.request.duration` per route template | CollectMetrics |
+| `ps-service/src/ps_service/metrics/exposition.py` | The only `prometheus_client` importer: renders the Prometheus text body | ExposeMetrics |
+| `ps-service/src/ps_service/metrics/router.py` | `build_metrics_router`: `GET /metrics`, hidden from the OpenAPI schema | ExposeMetrics |
+| `ps-service/src/ps_service/metrics/errors.py` | `MetricsConfigurationError` for a catalog or observer mismatch | — |
+| `ps-service/src/ps_service/metrics/__init__.py` | Package front door — re-exports only | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CollectMetrics | Gather the current value of every registered metric for one scrape | No (internal call) | n/a | The app built its metrics handle | Every metric whose source answered is included | Reads the Dependency Health registry; may read PS state Postgres once per cache window | PS state Postgres (read-only, bounded) | At most 5 s (the source deadline); typically < 50ms | Yes | A failing or slow source is logged once with its error class and omitted; never raised to the scraper |
+| ExposeMetrics | Serve the Prometheus text exposition at `GET /metrics` | No — anonymous by decision; exempt from authentication and the replay gate; in-cluster only (denied at the chart proxy) | n/a | None | `200` with the exposition body, also while the graph replay is running | None | None | At most 5 s (see CollectMetrics) | Yes | Never raises: a failed metric source is omitted and the response stays `200` |
+
+---
+
 ### Passkey Signing
 
 #### Domain Concepts
@@ -1866,6 +1914,7 @@ Registered for the mutation log store and its provisioning, the gateway (submit,
 | `ps-service/src/ps_service/graph_gateway/connectivity.py` | The driver-free FalkorDB connectivity probe: `GraphConnectivityError`, `ConnectivityProbe`, `check_connectivity`, `check_connectivity_via`; records the outcome in `dependency_health`; a reader package probes its read-only connection through it without importing the write-capable factory | — |
 | `ps-service/src/ps_service/graph_gateway/key_port.py` | The raw FalkorDB key surface the staged-write swap uses (`RENAME`, `DELETE`, a watched pipeline, `GRAPH.COPY`), moved from the Export package so the gateway no longer depends on it | SubmitMultiGraphGroup |
 | `ps-service/src/ps_service/graph_gateway/read_only.py` | `ReadOnlyGraph` / `ReadOnlyDatabase` and `open_read_only_database[_from_config]`: a graph handle whose `query` is always the server-side `GRAPH.RO_QUERY`; maps the missing-key reply to an empty result | — |
+| `ps-service/src/ps_service/graph_gateway/pending_entries.py` | `count_pending_entries`: one read-only total of graph-log entries written but not yet applied, over its own short-lived bounded connection; records nothing in dependency health (feeds the metrics gauge) | — |
 | `ps-service/src/ps_service/graph_gateway/default_gateway.py` | `build_default_graph_write_gateway(config)`, the lazily connecting FalkorDB opener and `FalkorDBKeyPort`, the production `GraphKeyPort` over the same connection (the gateway the service starts can apply a swap) | — |
 | `ps-service/src/ps_service/graph_gateway/edge_identity_backfill.py` | `backfill_edge_identity`: stamps every edge that carries no `identity` (a graph written before the gateway) through one `StampEdgeIdentity` group, so a later re-ingest merges into it instead of adding a parallel edge | — |
 | `ps-service/src/ps_service/graph_gateway/swap.py` | `SwapApplier`: for a group applied by swap, copies each leg's graph to a staged key named after the swap set, applies the leg's logged entries beyond its applied marker to the staged copy with the shared applier, then renames all staged keys over the live ones in one watched step (restarting from a fresh copy when the watch refuses, up to `GatewaySettings.max_attempts` tries) and reports the hold time; it never moves an applied marker | SubmitMultiGraphGroup, CaughtUp |
@@ -2115,6 +2164,7 @@ None — shared infrastructure utility; the process composition root.
 - `CheckReadiness` (`/ready`) answers ready only when two conditions hold. (1) The startup check succeeded: every tracked dependency is probed once (FalkorDB, the PS state Postgres, the passkey-signing Postgres when configured, LLM Interface and Cellar/ELI, each via its own connectivity check) and every `INGESTION_REQUIRED_CONFIG_FIELDS` value on the resolved `ServiceConfig` is non-`None`; only the gating dependencies decide the outcome. (2) Every gating dependency currently reads healthy in Dependency Health. The gating dependencies are FalkorDB, the PS state Postgres and the graph replay (below). LLM Interface, Cellar/ELI and the passkey-signing Postgres are reported by name in `unhealthy_dependencies` but never change the status code. `/ready` stays unauthenticated and its status code is the probe answer; the body is `{"status": "ready" | "not_ready"}` for every unauthenticated caller, and `unhealthy_dependencies` and `gated_graphs` are returned only to a caller whose `Authorization: Bearer` token the token verifier accepts (any verified user, no role). A missing, malformed or rejected token is treated as unauthenticated and never answered `401`; with the local-test bypass there is no verifier, so the body is always status only. While the startup check has not succeeded and the configuration is complete, each `/ready` call re-probes the gating dependencies. Once ready has been established `/ready` does not reset it; a gating dependency recorded unhealthy afterwards makes `/ready` answer `503` until a later call to that dependency succeeds. An incomplete configuration cannot change mid-run, so a deployment with a missing ingestion-required field stays `not_ready` until it is restarted with a complete configuration.
 - `CheckReadiness` and the startup replay of the graph mutation log: `graph_replay` is a gating dependency. The lifespan marks it unhealthy before the first request and a background task marks it healthy when `startup_replay` has ended, so `/ready` answers `503` `not_ready` with `graph_replay` in `unhealthy_dependencies` until then; liveness is unaffected. While it is unhealthy every other path, apart from `/health`, `/ready` and `/.well-known/`, is answered `503` with the status-only body and a `Retry-After` header, before authentication. `/ready` carries `gated_graphs` for an authenticated caller, the graphs that refuse writes until an operator acts (empty when none); it never changes the status code, since the other graphs are served.
 - `/ready` re-probes only the gating dependencies, and only while the startup check has not succeeded; it never re-probes LLM Interface (a probe consumes provider quota) and never re-reads Configuration.
+- `/metrics` (Metrics component, `ExposeMetrics`) is exempt from the replay gate and from REST authentication, like `/health` and `/ready`, and the metrics middleware is added last so it is the outermost layer: replay-gate 503s, request-size 413s and authentication 401s are counted, always under the route template. It is anonymous and in-cluster only; the chart proxy returns 403 for it.
 - **Request size limit:** `PS_SERVICE_MAX_REQUEST_BODY_BYTES` (positive integer, default 104857600 bytes, 100 MiB; fails closed otherwise) bounds the `Content-Length` of every HTTP request. A larger request is answered 413 before any body is read. A request that streams a body without a `Content-Length` header is not bounded by this limit. The Helm chart does not expose the variable.
 - **Local-test auth bypass**: adds `PS_SERVICE_LOCAL_TEST_BYPASS` as a new Configuration field (`ServiceConfig.is_local_test_bypass_active`). While active, `lifespan()`/`main()` refuse to bind to any non-loopback host, raising before ever binding; every start (not only the first) also emits a structured warning stating both that the bypass is active and that the bind guarantee is loopback-only. This behavior lives in `main.py` — this section's own file, per the Implementation Registration table above — so it is documented here rather than in a component-specific section.
 
@@ -2122,7 +2172,7 @@ None — shared infrastructure utility; the process composition root.
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-service/src/ps_service/main.py` | `create_app`, `lifespan`, `/health`, `/ready`, `main()` | CheckLiveness, CheckReadiness |
+| `ps-service/src/ps_service/main.py` | `create_app`, `lifespan`, `/health`, `/ready`, `main()`; includes the Metrics router and installs the metrics middleware | CheckLiveness, CheckReadiness, ExposeMetrics |
 | `ps-service/src/ps_service/__main__.py` | Thin `uv run python -m ps_service` entrypoint — dispatches to `main.main()`, no logic of its own | — |
 
 #### Actions
@@ -2131,6 +2181,7 @@ None — shared infrastructure utility; the process composition root.
 |---|---|---|---|---|---|---|---|---|---|---|
 | CheckLiveness | Report whether the process itself is alive and accepting connections | No | n/a | None | None | None | None | < 10ms | Yes | n/a — cannot itself fail short of the process being unresponsive |
 | CheckReadiness | Report whether this instance should receive traffic: the startup check succeeded, every ingestion-required Configuration field resolved, and every gating dependency (FalkorDB, PS state Postgres, graph replay) currently reads healthy | No | n/a | None | None | None | None | < 10ms | Yes | Never raises; an unreachable dependency or an incomplete config is reported via `not_ready`, not an error response; dependency and graph names go only to a caller with a verified bearer token |
+| ExposeMetrics | Serve the Prometheus text exposition at `GET /metrics` (implemented by the Metrics component, mounted here) | No | n/a | None | `200` with the exposition body, also while the graph replay runs | None | None | At most 5 s | Yes | Never raises; a failed metric source is omitted |
 
 ---
 

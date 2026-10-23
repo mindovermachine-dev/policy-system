@@ -82,6 +82,9 @@ data:
           proxy_set_header Connection $connection_upgrade;
           proxy_pass http://ps_service;
         }
+        location ^~ /metrics {
+          return 403 "Forbidden\n";
+        }
         {{- if .Values.authentik.enabled }}
         {{- include "policy-system.proxyAuthentikLocations" . | nindent 8 }}
         location = /auth {

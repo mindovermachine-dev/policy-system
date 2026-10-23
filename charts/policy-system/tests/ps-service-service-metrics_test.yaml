@@ -1,0 +1,11 @@
+suite: ps-service service exposure of /metrics
+templates:
+  - ps-service-service.yaml
+tests:
+  - it: the default Service is ClusterIP so the anonymous /metrics stays in-cluster
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
