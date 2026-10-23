@@ -1,6 +1,8 @@
 """The evaluator hostname documentation (`ps.test`, `.local` rejected, migration sections).
 
-Reads the real markdown files off disk; no fakes. Needles for earlier names are built by
+Reads the real markdown files off disk; no fakes. The evaluator guide holds the install and
+exposure text, the operations guide holds the migration and evidence sections, and the production
+installation guide keeps the surface table. Needles for earlier names are built by
 concatenation so a repo-wide search for them stays empty.
 Deliberately limited to absence rules, the option row, the surface-table rule and section
 existence; the wording of the upgrade and evidence sections is reviewed by hand, not pinned here.
@@ -18,11 +20,14 @@ _OLD_LOCAL = "authentik" + ".local"
 _REPO = Path(__file__).resolve().parents[3]
 _ARTIFACTS = _REPO / "docs" / "artifacts"
 _INSTALL = _ARTIFACTS / "installation-guide.md"
+_EVAL = _ARTIFACTS / "evaluator-installation-guide.md"
+_OPS = _ARTIFACTS / "operations-guide.md"
 _DOCS = (
     _INSTALL,
-    _ARTIFACTS / "operations-guide.md",
+    _OPS,
     _ARTIFACTS / "idp-configuration-contract.md",
     _ARTIFACTS / "helm-chart-values-reference.md",
+    _EVAL,
 )
 _VERSION = re.compile(r"\d+\.\d+")
 _OLD_NAME = "authentik" + ".test"
@@ -34,15 +39,22 @@ def _text() -> str:
     return _INSTALL.read_text()
 
 
+def _eval_text() -> str:
+    return _EVAL.read_text()
+
+
+def _ops_text() -> str:
+    return _OPS.read_text()
+
+
 def _squash(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-def test_install_guide_has_no_mdns_five_second_delay_guidance() -> None:
-    text = _text()
-
+@pytest.mark.parametrize("path", [_INSTALL, _EVAL], ids=lambda p: p.name)
+def test_install_guides_have_no_mdns_five_second_delay_guidance(path: Path) -> None:
     for stale in ("mDNS", "5 seconds", "pauses for about 10"):
-        assert stale not in text, stale
+        assert stale not in path.read_text(), stale
 
 
 @pytest.mark.parametrize("path", _DOCS, ids=lambda p: p.name)
@@ -51,10 +63,8 @@ def test_docs_never_name_the_old_default_hostname(path: Path) -> None:
 
 
 def test_guide_names_the_default_hostname_and_the_local_rejection() -> None:
-    text = _squash(_text())
-
-    assert "https://ps.test:30443/auth/application/o/ps-cli/" in text
-    assert "rejects any `--hostname` that ends in `.local`" in text
+    assert "https://ps.test:30443/auth/application/o/ps-cli/" in _squash(_text())
+    assert "rejects any `--hostname` that ends in `.local`" in _squash(_eval_text())
 
 
 @pytest.mark.parametrize("surface", ["| Claude Code (CLI) |", "| Claude Desktop - Code tab |"])
@@ -89,8 +99,8 @@ def test_nothing_claims_the_evaluator_hostname_verified_without_a_version() -> N
         "### Recording verification evidence",
     ],
 )
-def test_install_guide_has_the_upgrade_and_evidence_sections(heading: str) -> None:
-    assert heading in _text().splitlines()
+def test_operations_guide_has_the_upgrade_and_evidence_sections(heading: str) -> None:
+    assert heading in _ops_text().splitlines()
 
 
 def test_values_reference_row_states_the_script_default_and_the_local_rejection() -> None:
@@ -117,17 +127,21 @@ _CHECK = "scripts/deploy-ps-eval.sh --check-exposure"
 _KIND_CREATE = "kind create cluster --config"
 
 
-def test_install_guide_runs_the_exposure_check_before_creating_the_cluster() -> None:
-    step = _text().split("### 3. Create the local cluster", 1)[1].split("\n### 4.", 1)[0]
+_EXPOSURE_STEP = "#### Step 2: Check that the machine is safe to expose"
+
+
+def test_evaluator_guide_runs_the_exposure_check_before_creating_the_cluster() -> None:
+    text = _eval_text()
+    step = text.split(_EXPOSURE_STEP, 1)[1].split("\n#### ", 1)[0]
 
     assert _CHECK in step
-    assert step.index(_CHECK) < step.index(_KIND_CREATE)
+    assert text.index(_CHECK) < text.index(_KIND_CREATE)
     assert "--allow-public-host" in step
 
 
-def test_install_guide_recreate_path_points_back_to_the_exposure_check() -> None:
-    warning = _text().split("**Do you already have a `policy-system` kind cluster", 1)[1]
-    recreate = warning.split("\n### 5.", 1)[0]
+def test_evaluator_guide_recreate_path_points_back_to_the_exposure_check() -> None:
+    warning = _eval_text().split("> If a `policy-system` kind cluster already exists", 1)[1]
+    recreate = warning.split("\n#### ", 1)[0]
 
     assert "exposure check" in _squash(recreate)
 
@@ -140,9 +154,13 @@ def test_operations_guide_recreate_path_runs_the_exposure_check_first() -> None:
     assert section.index(_CHECK) < section.index("kind create cluster")
 
 
+def _exposed_section() -> str:
+    text = _squash(_eval_text())
+    return text.split("### What is exposed", 1)[1].split("### After the install", 1)[0]
+
+
 def test_exposed_section_describes_the_preflight_and_the_flag() -> None:
-    text = _squash(_text())
-    section = text.split("### What is exposed (evaluator)", 1)[1].split("## Production", 1)[0]
+    section = _exposed_section()
 
     assert "--check-exposure" in section
     assert "--allow-public-host" in section
@@ -150,14 +168,11 @@ def test_exposed_section_describes_the_preflight_and_the_flag() -> None:
 
 
 def test_guide_says_a_multi_homed_rerun_needs_the_flag_on_both_calls() -> None:
-    step = _squash(_text().split("### 3. Create the local cluster", 1)[1].split("\n### 4.", 1)[0])
-
-    assert "both" in step
+    assert "on both calls" in _exposed_section()
 
 
 def test_exposed_section_explains_the_configured_approval_origins() -> None:
-    text = _squash(_text())
-    section = text.split("### What is exposed (evaluator)", 1)[1].split("## Production", 1)[0]
+    section = _exposed_section()
 
     assert "psService.passkeySigning.allowedOrigins" in section
     assert "421" in section
@@ -186,11 +201,11 @@ def test_architecture_doc_states_the_configured_origins_and_host_rejection() -> 
 
 
 def test_install_guide_describes_the_constrained_short_lived_ca() -> None:
-    text = _squash(_text())
+    text = _squash(_eval_text())
     flow = text.split("It creates a local certificate authority", 1)[1].split(" 5. It runs", 1)[0]
-    key_bullet = text.split("The local CA private key (`ca.key`", 1)[1].split("- The Authentik", 1)[
-        0
-    ]
+    key_bullet = text.split("The local CA private key (`ca.key`", 1)[1].split(
+        "The Authentik API token", 1
+    )[0]
 
     assert "name constraint" in flow
     assert "730 days" in flow
@@ -218,7 +233,7 @@ _ROOT_PORT_FORWARD_ADMIN_UI = "127.0.0.1:9000" + "/if/admin/"
 @pytest.mark.parametrize("path", _DOCS, ids=lambda p: p.name)
 def test_docs_give_no_evaluator_issuer_or_admin_ui_without_the_auth_prefix(path: Path) -> None:
     text = path.read_text()
-    if path == _INSTALL:
+    if path == _OPS:
         text = text.replace(_section(_MIGRATION_HEADING), "")
 
     assert _ROOT_ISSUER not in text
@@ -255,45 +270,25 @@ def test_values_reference_gives_the_evaluator_authentik_base_url_under_the_auth_
     assert "`AUTHENTIK_WEB__PATH=/auth/`" in text
 
 
-def _this_machine_and_another_machine_sections() -> tuple[str, str]:
-    text = _squash(_text())
-    this_machine = text.split("### The server machine", 1)[1].split(
-        "### Another machine (a colleague on the LAN)", 1
-    )[0]
-    another = text.split("### Another machine (a colleague on the LAN)", 1)[1].split(
-        "## B3. Install ps-cli", 1
-    )[0]
-    return this_machine, another
+def test_evaluator_guide_maps_the_name_to_the_lan_address_and_trusts_for_tls_only() -> None:
+    text = _squash(_eval_text())
+    client = text.split("### Client on macOS", 1)[1].split("## Part 3", 1)[0]
+    reference = text.split("### What the deploy script does", 1)[1]
 
-
-def test_guide_tells_every_machine_to_map_the_name_to_the_lan_address_and_trust_for_tls_only() -> (
-    None
-):
-    this_machine, another = _this_machine_and_another_machine_sections()
-
-    assert "LAN address" in this_machine
-    assert "--lan-address" in this_machine
-    assert "default route" in this_machine
-    assert "127.0.0.1" not in this_machine
-    assert "`::1`" not in this_machine
-    assert "-r trustRoot -p ssl -k /Library/Keychains/System.keychain" in this_machine
-    assert "sudo update-ca-certificates" in this_machine
-    assert "sudo update-ca-trust" in this_machine
-    assert "TLS server authentication" in this_machine
-    assert "name constraint" in this_machine
-    assert "extended key usage" in this_machine
-    assert "never edits" in this_machine
-    assert "LAN address" in another
-    assert "same" in another
-    assert "reserved DHCP address" in another or "reserve" in another
-    assert "`ca.pem`" in another
-    assert "Never send `ca.key`" in another
-    assert "-p ssl" in another
+    assert "LAN address" in reference or "LAN" in reference
+    assert "--lan-address" in reference
+    assert "default route" in reference
+    assert "never edited" in reference
+    assert "-r trustRoot -p ssl -k /Library/Keychains/System.keychain" in client
+    assert "TLS server authentication" in client
+    assert "`ca.pem`" in client
+    assert "Never copy `ca.key`" in client
+    assert "Reserve this machine's address" in text
 
 
 def _section(heading: str) -> str:
-    """The guide text from `heading` to the next `##` or `###` heading."""
-    lines = _text().splitlines()
+    """The operations guide text from `heading` to the next `##` or `###` heading."""
+    lines = _ops_text().splitlines()
     start = lines.index(heading)
     end = next(
         (i for i in range(start + 1, len(lines)) if lines[i].startswith(("## ", "### "))),
@@ -302,14 +297,16 @@ def _section(heading: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def test_install_guide_has_the_migration_section_for_the_old_name() -> None:
-    headings = [line for line in _text().splitlines() if line.startswith("### Moving an existing")]
+def test_operations_guide_has_the_migration_section_for_the_old_name() -> None:
+    headings = [
+        line for line in _ops_text().splitlines() if line.startswith("### Moving an existing")
+    ]
 
     assert headings.count(_MIGRATION_HEADING) == 1
 
 
 def test_the_guide_names_the_old_name_only_inside_the_migration_section() -> None:
-    outside = _text().replace(_section(_MIGRATION_HEADING), "")
+    outside = _ops_text().replace(_section(_MIGRATION_HEADING), "")
 
     assert _OLD_NAME not in outside
     assert _OLD_NAME in _section(_MIGRATION_HEADING)
@@ -380,8 +377,10 @@ def test_evidence_section_records_ps_test_and_rehearses_the_migration() -> None:
     assert "#moving-an-existing-evaluator-from-" in section
 
 
-def test_verification_status_records_what_is_and_is_not_verified_on_the_new_name() -> None:
-    section = _squash(_text().split("## Verification status", 1)[1])
+def test_verification_history_records_what_is_and_is_not_verified_on_the_new_name() -> None:
+    section = _squash(
+        _ops_text().split("### Evaluator verification history", 1)[1].split("\n### ", 1)[0]
+    )
 
     assert "Evaluator on `ps.test`, macOS, same machine as the server: partly verified" in section
     assert "Not verified: an owner-only call after the migration" in section

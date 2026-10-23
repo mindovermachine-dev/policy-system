@@ -80,7 +80,7 @@ _ROOT_ISSUER = re.compile(r":30443" + r"/application/o/")
 _DEFAULT_HOSTNAME_POINTING_AT_OLD_NAME = re.compile(
     r"DEFAULT_HOSTNAME\s*=\s*[\"']?" + re.escape(_OLD_TEST)
 )
-_GUIDE = REPO_ROOT / "docs" / "artifacts" / "installation-guide.md"
+_GUIDE = REPO_ROOT / "docs" / "artifacts" / "operations-guide.md"
 _MIGRATION_HEADING_PREFIX = "### Moving an existing evaluator from "
 _GUARDED_ROOTS = (*_SCANNED_ROOTS, "deploy")
 _BINARY_SUFFIXES = frozenset({".pyc", ".png", ".gz", ".tgz"})

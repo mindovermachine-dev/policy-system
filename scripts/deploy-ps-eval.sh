@@ -103,7 +103,8 @@ readonly AUTHENTIK_WEB_PATH="/auth"
 readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
 readonly PS_CLI_CONTEXT="eval"
-readonly INSTALL_GUIDE="docs/artifacts/installation-guide.md"
+readonly INSTALL_GUIDE="docs/artifacts/evaluator-installation-guide.md"
+readonly OPERATIONS_GUIDE="docs/artifacts/operations-guide.md"
 
 # Process-wide state, plain assignment only (never inside $(...), so writes reach the caller).
 # OWNER_EMAIL, SKIP_OWNER_PROMPT, AUTHENTIK_API_BASE, AUTHENTIK_LINK_BASE and AUTHENTIK_CURL_ARGS
@@ -369,7 +370,7 @@ check_required_tools() {
       joined="${joined:+$joined, }$item"
     done
     print_error 'Missing required tool(s): %s\n' "$joined"
-    print_error 'Fix: install them (see %s, prerequisites) and re-run.\n' "$INSTALL_GUIDE"
+    print_error 'Fix: install them (see %s, Step 1) and re-run.\n' "$INSTALL_GUIDE"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -538,7 +539,7 @@ print_role_reset() {
   printf '  kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \\\n'
   printf '    -c "DELETE FROM access_role_assignments;"\n'
   printf 'Do not open the enrolment link before running this command.\n'
-  printf 'Details: %s#upgrading-an-existing-install\n\n' "$INSTALL_GUIDE"
+  printf 'Details: %s#moving-an-existing-evaluator-off-a-local-hostname\n\n' "$OPERATIONS_GUIDE"
 }
 
 # print_migration_intro <kind> <host> <issuer>: what changes, naming the recorded and the new

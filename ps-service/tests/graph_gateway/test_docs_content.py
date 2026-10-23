@@ -19,6 +19,7 @@ import pytest
 _REPO = Path(__file__).resolve().parents[3]
 _OPS = _REPO / "docs" / "artifacts" / "operations-guide.md"
 _INSTALL = _REPO / "docs" / "artifacts" / "installation-guide.md"
+_EVAL_INSTALL = _REPO / "docs" / "artifacts" / "evaluator-installation-guide.md"
 _VALREF = _REPO / "docs" / "artifacts" / "helm-chart-values-reference.md"
 _CA = _REPO / "docs" / "architecture" / "ps-service-container-architecture.md"
 _SA = _REPO / "docs" / "architecture" / "ps-solution-architecture.md"
@@ -1676,9 +1677,9 @@ def test_no_old_backup_statements() -> None:
         assert absent not in valref, absent
     assert "avoids a replay" in valref
 
-    install = _collapse(_read(_INSTALL))
+    install = _collapse(_read(_INSTALL)) + _collapse(_read(_EVAL_INSTALL))
     assert "Reload the FalkorDB data" not in install
-    assert "operations-guide.md#restore" in install
+    assert "operations-guide.md#restore" in _collapse(_read(_EVAL_INSTALL))
 
     sa = _collapse(_read(_SA))
     for absent in ("(target)", "mutation log, target)"):

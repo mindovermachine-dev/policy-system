@@ -2,10 +2,9 @@
 
 Every operator-facing key in `charts/policy-system/values.yaml` (local-test default) and
 `charts/policy-system/values-prod.yaml` (production override file, passed via
-`-f values-prod.yaml`). See the [Installation Guide](./installation-guide.md)'s
-[Evaluator installation](./installation-guide.md#evaluator-installation) walkthrough for
+`-f values-prod.yaml`). See the [Evaluator Installation Guide](./evaluator-installation-guide.md) for
 how to deploy the chart in the first place — this page is the values reference for
-that walkthrough, step 5 onward. The evaluator and production scripts
+that walkthrough, the deploy script step onward. The evaluator and production scripts
 (`scripts/deploy-ps-eval.sh`, `scripts/deploy-ps-prod.sh`) set most of the Authentik-related
 keys below for you; you only set them by hand when deploying the chart without a script.
 

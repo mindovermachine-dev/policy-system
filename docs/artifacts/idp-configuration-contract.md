@@ -128,8 +128,8 @@ variable. On macOS and Windows
 the fallback. A failed certificate check is reported as such, not as an unreachable host.
 Browsers need the CA imported into the OS or browser store too, and passkeys only work over such
 a trusted HTTPS origin. Production uses a public Let's Encrypt
-certificate, so none of this applies there. See the [Installation
-Guide, B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only).
+certificate, so none of this applies there. See the [Evaluator
+Installation Guide, Part 2](./evaluator-installation-guide.md#part-2-install-the-client).
 
 ### Passkey-only enrolment and recovery
 

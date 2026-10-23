@@ -28,8 +28,8 @@ One laptop can run both. The table below shows the supported setups.
 | 1 | One user, one laptop | [Backend on macOS](#backend-on-macos) | [Client on macOS](#client-on-macos) | Verified |
 | 2 | One user, one laptop | [Backend on WSL2](#backend-on-wsl2) | [Client on Windows](#client-on-windows) | Verified |
 | 3 | Several machines on a LAN | [Backend on WSL2](#backend-on-wsl2) | [Client on Windows](#client-on-windows) | Failing: a Windows client cannot connect to the backend, cause unknown |
-| 4 | Several machines on a LAN | [Backend on Linux](#backend-on-linux-headless) | [Client on Windows](#client-on-windows) | Verified 2026-10-23 on release 8.2.1, steps 1 to 6: Authentik passkey login (Android and iPhone QR code) and the Claude Desktop Code tab. Claude Code CLI and Claude Desktop were the latest versions that day; the exact versions were not recorded |
-| 5 | Several machines on a LAN | [Backend on Linux](#backend-on-linux-headless) | [Client on macOS](#client-on-macos) | Unverified |
+| 4 | Several machines on a LAN | [Backend on Linux](#backend-on-linux-headless) | [Client on Windows](#client-on-windows) | Verified |
+| 5 | Several machines on a LAN | [Backend on Linux](#backend-on-linux-headless) | [Client on macOS](#client-on-macos) | Verified |
 | 6 | Several machines on a LAN | [Backend on macOS](#backend-on-macos) | [Client on macOS](#client-on-macos) | Unverified |
 
 In the LAN scenarios (3 to 6), the backend path also has a LAN step. Do it.
@@ -85,6 +85,20 @@ Check that it runs:
 ```bash
 podman info
 ```
+
+> **Why 4 CPUs and 8 GB:** kind under Podman needs enough headroom to run a control plane and
+> both Policy System containers. 4 CPUs and 8 GB is the tested minimum.
+>
+> **Proxy footprint: measured.** The evaluator proxy adds one more container (`nginx:1.31.7-alpine`).
+> On a Podman machine with 9 CPUs and 16 GiB (macOS, 2026-10-20) it used 13 MiB of memory and 0m
+> CPU idle, and 19 MiB and 417m CPU while 8 workers requested `/health` for 60 seconds. The
+> proxy's memory is small next to the rest of the stack, so the minimum above is unchanged.
+> The measurement was taken on a larger machine than the minimum, and it has no node-wide row
+> because the kind cluster had no metrics-server. The declared `proxy.resources` limits are 128Mi
+> memory and 500m CPU, so a sustained load near the measured 417m CPU is close to the CPU limit.
+> To measure the footprint on your machine, follow [Operations Guide: Measuring the proxy
+> footprint](./operations-guide.md#measuring-the-proxy-footprint-evaluator) with
+> `scripts/measure-proxy-footprint.sh`.
 
 Install kind and kubectl:
 
@@ -146,6 +160,11 @@ kubectl cluster-info --context kind-policy-system
 > If a `policy-system` kind cluster already exists from an older install, delete it and create
 > it again with `kind delete cluster --name policy-system`. **This destroys the graph and both
 > Postgres databases stored in that cluster.**
+>
+> After you delete it, run the exposure check of step 2 and the `kind create cluster` command of
+> this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
+> Restore](./operations-guide.md#restore)) or load the content again (see [User Guide: Load curated
+> content](./user-guide.md#load-curated-content)).
 
 #### Step 4: Provision the Azure LLM backend
 
@@ -211,10 +230,6 @@ content](./user-guide.md#load-curated-content).
 
 #### Step 6: Make the backend reachable from the LAN (only if other machines will use it)
 
-> [!WARNING]
-> **Unverified.** Scenario 3 currently fails here or in the client steps, and the cause is not
-> known.
-
 Skip this step when this machine is the only client.
 
 Other machines reach the backend on `https://ps.test:30443`. For that to work:
@@ -234,7 +249,7 @@ included: [Part 2](#part-2-install-the-client).
 Scenarios 4 and 5.
 
 > [!NOTE]
-> **Verified in scenario 4.** Scenario 5 uses the same steps with a macOS client.
+> **Verified in scenarios 4 and 5.**
 
 #### Step 1: Install the tools and download the bundle
 
@@ -256,7 +271,7 @@ natively, so there is no `podman machine` step. Install kind, kubectl, Helm, the
 from the links in the table. `openssl` and `curl` are usually installed already.
 
 kind has extra requirements for rootless Podman. Read [kind: rootless](https://kind.sigs.k8s.io/docs/user/rootless/)
-before you create the cluster. What a clean Ubuntu or Fedora install needs is not recorded here yet.
+before you create the cluster.
 
 Download the deploy bundle. It holds the kind cluster config and the deploy scripts. You do not
 need git. Go to the folder where you want the bundle, then download and unpack it:
@@ -310,6 +325,11 @@ kubectl cluster-info --context kind-policy-system
 > If a `policy-system` kind cluster already exists from an older install, delete it and create
 > it again with `kind delete cluster --name policy-system`. **This destroys the graph and both
 > Postgres databases stored in that cluster.**
+>
+> After you delete it, run the exposure check of step 2 and the `kind create cluster` command of
+> this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
+> Restore](./operations-guide.md#restore)) or load the content again (see [User Guide: Load curated
+> content](./user-guide.md#load-curated-content)).
 
 #### Step 4: Provision the Azure LLM backend
 
@@ -374,14 +394,19 @@ content](./user-guide.md#load-curated-content).
 
 Other machines reach the backend on `https://ps.test:30443`. For that to work:
 
-- The hosts line on each client maps `ps.test` to an address of this machine that the client can reach. Use the address from the script's hosts line.
-- Port `30443` accepts connections from the LAN. Check the firewall of the server machine.
-- Reserve this machine's address in your router's DHCP settings. A new address breaks every client until its hosts line is updated.
+- The hosts line on each client maps `ps.test` to an address of this machine that the client can
+  reach. Use the address from the script's hosts line. If it is wrong, run the deploy script
+  again with `--lan-address <ip>`.
+- Port `30443` accepts connections from the LAN. Check the firewall of this machine.
+- Reserve this machine's address in your router's DHCP settings. A new address breaks every
+  client until its hosts line is updated.
 
-You can check from another computer on the LAN with:
+You can check from another computer on the LAN that the port is reachable. That computer has
+not trusted the CA yet and has no hosts line, so use the backend's address and skip the
+certificate check:
 
 ```bash
-curl https://ps.test:30443
+curl -k https://<backend address>:30443
 ```
 
 Expect a message that says "unauthenticated".
@@ -393,10 +418,6 @@ When you are done, continue on to: [Part 2](#part-2-install-the-client).
 Scenarios 2 and 3. Run every command of this path inside a Linux
 distribution on WSL2. The browser and the Claude Code CLI run on the Windows side: install the
 client on Windows ([Client on Windows](#client-on-windows)) after this path.
-
-> [!WARNING]
-> **Unverified as a recipe.** A customer ran this setup (scenario 2) and it worked, but the
-> install steps are not recorded here yet. Step 1 follows the Linux path.
 
 #### Step 1: Install the tools and download the bundle
 
@@ -472,6 +493,11 @@ kubectl cluster-info --context kind-policy-system
 > If a `policy-system` kind cluster already exists from an older install, delete it and create
 > it again with `kind delete cluster --name policy-system`. **This destroys the graph and both
 > Postgres databases stored in that cluster.**
+>
+> After you delete it, run the exposure check of step 2 and the `kind create cluster` command of
+> this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
+> Restore](./operations-guide.md#restore)) or load the content again (see [User Guide: Load curated
+> content](./user-guide.md#load-curated-content)).
 
 #### Step 4: Provision the Azure LLM backend
 
@@ -571,6 +597,9 @@ Scenarios 1, 5 and 6.
 
 #### Step 1: Add the hosts line
 
+If this machine is also the backend and you ran the deploy script with `--apply-host-setup`, the
+line is already there. Skip this step.
+
 Add the line the deploy script printed, with the backend's address:
 
 ```bash
@@ -579,12 +608,17 @@ echo '<backend address> ps.test' | sudo tee -a /etc/hosts
 
 #### Step 2: Trust the CA
 
+If this machine is also the backend and you ran the deploy script with `--apply-host-setup`, the
+CA is already trusted. Skip this step.
+
 > [!WARNING]
 > Copy `ca.pem` only. **Never copy `ca.key`** from the same folder. The CA can only vouch for the
 > evaluator hostname and only for TLS server authentication, and the key stays on the backend
 > machine.
 
-Copy `ca.pem` from the backend machine to this machine:
+Copy `ca.pem` from the backend machine to this machine. If this machine is also the backend, skip
+the copy and use `~/.config/policy-system/eval-tls/ca.pem` in the next command instead of
+`~/ca.pem`:
 
 ```bash
 scp <user>@<backend address>:~/.config/policy-system/eval-tls/ca.pem ~/ca.pem
@@ -605,7 +639,13 @@ registers from an invitation the owner sends. If you are not the owner, skip thi
 
 #### Step 4: Install the Claude Code CLI
 
-Follow [Claude Code setup](https://docs.claude.com/en/docs/claude-code/setup). Check it with:
+This needs [Homebrew](https://brew.sh).
+
+```bash
+brew install --cask claude-code
+```
+
+Check it with:
 
 ```bash
 claude --version
@@ -746,8 +786,6 @@ The plugin adds the Policy System skills and connects to the backend's MCP endpo
 
 4. Check it. Ask Claude: `List the policy system tools you have available`.
 
-Lowest verified version: Claude Code CLI 2.1.236. Lower versions are untested.
-
 #### Step 6: Claude Desktop (optional)
 
 Install [Claude Desktop](https://claude.com/download) and sign in. Once you have authenticated the
@@ -776,32 +814,95 @@ served through the proxy.
 
 To limit access to your own machine, block port `30443` from the LAN with the host firewall.
 
-Risks that remain on a shared LAN: anyone who can reach port `30443` can attempt logins and probe
-the allowlisted paths (every PS Service call still needs a bearer token), and a user can be
-tricked into approving a device code an attacker started, so approve a code only when you started
-the login yourself.
+**Transport and accepted risks.** The proxy accepts TLS 1.2 and TLS 1.3 only, every listener
+speaks TLS, and plain HTTP to port `30443` gets an nginx error page, never an API response. It
+sets `Secure` and `SameSite=Lax` on every cookie it relays and adds `HttpOnly` to all but
+Authentik's CSRF cookie, which the login page reads from JavaScript. A flag the upstream already
+set is not repeated. It sends no HSTS header, because the certificate comes from a local CA. Only
+the proxy pod mounts the private key of the local certificate. These risks remain on a shared LAN:
 
-The local CA private key (`ca.key`) can create a certificate only for the evaluator hostname,
-and only for TLS server authentication. Keep it on the backend machine with owner-only permissions
-and never copy it. The Authentik bootstrap token is administrator-equivalent and is stored in the
-Secret `policy-system-authentik-api-token`. Anyone with `kubectl` access can read it.
+- **A rogue host on the LAN.** Anyone who can reach port `30443` can attempt logins and probe the
+  allowlisted paths (`charts/policy-system/files/authentik-public-paths.txt`). Every PS Service
+  call still needs an Authentik-issued bearer token.
+- **Device-code phishing.** A user can be tricked into approving a device code that an attacker
+  started. Approve a code only when you started the login yourself.
+- **One shared origin.** PS Service and the Authentik login pages are served from one origin, so a
+  script injected into one can read what the other sets for that origin.
+- **MCP and DNS rebinding.** The MCP endpoint is protected by its bearer token alone.
 
-### Upgrade
+**Approval-page names.** The deploy script sets `psService.passkeySigning.allowedOrigins` to
+`https://<hostname>:30443`, where `<hostname>` is the name you pass to `--hostname` (`ps.test` by
+default). That origin is the WebAuthn relying party for signing approvals (`rp_id` is the
+hostname), and a POST to an approval route (`/approvals/<id>/...`) on any other `Host` is answered
+`421`. Open the approval page on `https://<hostname>:30443`, on any machine that maps the name and
+trusts the CA. The approval link the service hands out is built from the `Host` of the request that
+created it, so a client that reached PS Service under a name that is not listed receives a link that
+answers `421`; open it on `https://<hostname>:30443` instead.
 
-Download the deploy bundle again, then run `scripts/deploy-ps-eval.sh` again with the same owner
-email. The graph data stays. For the full procedure, see the [Operations
-Guide](./operations-guide.md#updating-to-the-latest-version).
+**The exposure check.** `scripts/deploy-ps-eval.sh` stops before any cluster call when an interface
+of the machine holds a public address, and `scripts/deploy-ps-eval.sh --check-exposure` runs only
+that check. Loopback, link-local, and private addresses pass: `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `169.254.0.0/16`, `fc00::/7`, and `fe80::/10`. Everything else fails, including a
+VPN address in `100.64.0.0/10`. If `ip` and `ifconfig` are both missing, the check fails because it
+cannot verify. `--allow-public-host` accepts the exposure. A machine with a public address needs the
+flag on both calls: `--check-exposure --allow-public-host` in the check step and
+`--allow-public-host` on the deploy script.
 
-### Recover the owner
+The local CA private key (`ca.key`, in the state directory) can create a certificate only for the
+evaluator hostname and its subdomains, because the CA carries a critical name constraint, and only
+for TLS server authentication. Keep the key on the backend machine with owner-only permissions.
+Never copy it. Share `ca.pem` only.
 
-Run `scripts/deploy-ps-eval.sh` again with the same email. Anyone who can run `kubectl` against
-the cluster can run it. What happens depends on the owner's state:
+The Authentik API token of the chart is the Authentik bootstrap token. It is
+**administrator-equivalent**. It is stored in the Secret `policy-system-authentik-api-token`.
+Anyone with `kubectl` access to the cluster can read it. The scripts never print it.
 
-| Owner state | Result |
-| --- | --- |
-| No passkey registered (the link expired or was never used) | The script prints a fresh link. |
-| A passkey is registered | The script changes nothing and prints no link. |
-| The only passkey device is lost | Remove the device on the owner's user page in the Authentik admin UI (see [What is exposed](#what-is-exposed)), then run the script again. |
+### What the deploy script does
+
+`scripts/deploy-ps-eval.sh` does these things, in this order:
+
+1. It checks that no interface of the machine holds a public address. It stops before any cluster
+   call, unless you passed `--allow-public-host`.
+2. It checks that `kubectl`, `helm`, `openssl`, `jq`, `curl`, and `podman` (or `docker`) are on
+   `PATH`. It stops and names every missing tool.
+3. It finds the IP address of the kind node.
+4. It creates a local certificate authority (CA) that can only vouch for the evaluator hostname.
+   The CA has a critical name constraint for that hostname, is valid for at most 730 days, and is
+   limited to TLS server authentication. It creates a certificate for exactly that hostname. It
+   stores both in the state directory with owner-only permissions. It creates the certificate again
+   when its names differ or it is close to expiry. It replaces the CA, and the certificate with it,
+   when the CA lacks the constraint, permits another name, is valid for longer than 730 days, or is
+   close to expiry. It keeps the replaced CA next to the new one as
+   `ca.replaced-<fingerprint prefix>.pem`.
+5. It runs **one** `helm upgrade --install`. This sets the issuer
+   (`https://<hostname>:30443/auth/application/o/ps-cli/`) and the bootstrap owner together. The
+   bootstrap owner is the owner's email as `sub`, with that issuer. There is no second deployment.
+   The script runs the upgrade again only when its values change.
+6. It waits until Authentik, the proxy and PS Service are Ready. The script then checks from inside
+   the PS Service pod that the issuer's OIDC discovery document can be fetched through the proxy.
+   Last, it checks from this machine, through port `30443` and verifying the CA, that `/health`
+   answers, that the discovery document reports exactly the issuer the release was given, and that a
+   request to `/mcp/` without a bearer token is refused with `401`.
+7. It creates the owner as an Authentik administrator. The username and email are the address you
+   gave. **No password is set, prompted for, or logged.** It prints a single-use, time-limited link
+   to register a passkey.
+
+The hostname is `ps.test` by default. The script rejects any `--hostname` that ends in `.local`,
+because Claude Code cannot resolve `.local` names. The hostname is also the issuer and the WebAuthn
+relying-party ID, so it cannot change later without losing every signing passkey.
+
+The address that the script prints in the hosts line is the address of the default-route interface,
+else the only private IPv4 address of the machine. If neither gives one address (for example,
+because container bridges add several private addresses and there is no default route), the script
+stops before it changes anything and asks for `--lan-address <ip>`. A hosts line that maps the name
+to another address is reported and never edited.
+
+### After the install
+
+To keep the evaluator running, see [Operations Guide: Evaluator (local-test)
+operations](./operations-guide.md#evaluator-local-test-operations). It covers
+[updating to the latest version](./operations-guide.md#updating-to-the-latest-version) and
+[owner recovery and certificate renewal](./operations-guide.md#owner-recovery-certificate-renewal-and-re-running-the-script).
 
 ### Common problems
 
@@ -809,6 +910,6 @@ the cluster can run it. What happens depends on the owner's state:
 | --- | --- |
 | The browser shows a certificate warning | The client has not trusted `ca.pem`. Do client step 2. |
 | `ps.test` does not resolve | The hosts line is missing, or a different line maps `ps.test` to another address. The script reports a conflicting line and never edits it. Fix the hosts file. |
-| The enrolment link no longer works | It expired or was used. Run the deploy script again with the owner's email. |
+| The enrolment link no longer works | It expired or was used. See [Operations Guide: Owner recovery](./operations-guide.md#owner-recovery-certificate-renewal-and-re-running-the-script). |
 | The script cannot choose a LAN address | Run it again with `--lan-address <ip>`. |
 | `/mcp` shows `ps-mcp` as failed with `Missing environment variables: PS_MCP_URL` | Set `PS_MCP_URL` (step 5) and start a new session. |

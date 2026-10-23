@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[3]
-_INSTALL = _REPO / "docs" / "artifacts" / "installation-guide.md"
+_INSTALL = _REPO / "docs" / "artifacts" / "evaluator-installation-guide.md"
 _OPERATIONS = _REPO / "docs" / "artifacts" / "operations-guide.md"
 _SIZING_MARKER = "> **Why 4 CPUs and 8 GB:**"
 _PROCEDURE_HEADING = "### Measuring the proxy footprint (evaluator)"
@@ -21,7 +21,7 @@ def _flat(text: str) -> str:
 
 def _sizing_block() -> str:
     text = _INSTALL.read_text().split(_SIZING_MARKER, 1)[1]
-    return _flat(text.split("\n### ", 1)[0])
+    return _flat(re.split(r"\n#{3,4} ", text, maxsplit=1)[0])
 
 
 def _procedure() -> str:
@@ -82,5 +82,8 @@ def test_procedure_names_the_script_the_load_profile_and_the_metrics_prerequisit
 def test_procedure_points_at_the_recorded_measurement() -> None:
     procedure = _flat(_procedure())
 
-    assert "installation-guide.md#evaluator-installation" in procedure
+    assert (
+        "evaluator-installation-guide.md#step-1-install-the-tools-and-download-the-bundle"
+        in procedure
+    )
     assert "Record a new measurement" in procedure

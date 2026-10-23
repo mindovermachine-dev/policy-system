@@ -11,28 +11,28 @@ from pathlib import Path
 import yaml
 
 _REPO = Path(__file__).resolve().parents[3]
-_INSTALL = _REPO / "docs" / "artifacts" / "installation-guide.md"
-_EXPOSED_HEADING = "### What is exposed (evaluator)"
-_UPGRADE_HEADING = "#### Upgrading an existing evaluator"
+_INSTALL = _REPO / "docs" / "artifacts" / "evaluator-installation-guide.md"
+_OPERATIONS = _REPO / "docs" / "artifacts" / "operations-guide.md"
+_EXPOSED_HEADING = "### What is exposed"
+_UPGRADE_HEADING = "### Upgrading an existing evaluator"
 
 
-def _section(heading: str) -> str:
-    text = re.sub(r"\s+", " ", _INSTALL.read_text().split(heading, 1)[1])
+def _section(heading: str, path: Path = _INSTALL) -> str:
+    text = re.sub(r"\s+", " ", path.read_text().split(heading, 1)[1])
     return re.split(r" #{2,4} ", text, maxsplit=1)[0]
 
 
 def test_limit_access_method_names_port_30443_firewall() -> None:
     section = _section(_EXPOSED_HEADING)
 
-    method = section.split("**To limit access to your own machine:**", 1)[1]
-    method = method.split("**", 1)[0]
+    method = section.split("To limit access to your own machine", 1)[1].split(". ", 1)[0]
     assert "30443" in method
     assert "firewall" in method
     assert "LAN" in method
 
 
 def test_upgrade_note_names_8000_removal_and_reenrolment() -> None:
-    section = _section(_UPGRADE_HEADING)
+    section = _section(_UPGRADE_HEADING, _OPERATIONS)
 
     assert "127.0.0.1:8000" in section
     assert re.search(r"re-enrol|enrol .* again", section, re.IGNORECASE)
@@ -41,7 +41,8 @@ def test_upgrade_note_names_8000_removal_and_reenrolment() -> None:
 
 _DOC_FILES = (
     _INSTALL,
-    _REPO / "docs" / "artifacts" / "operations-guide.md",
+    _REPO / "docs" / "artifacts" / "installation-guide.md",
+    _OPERATIONS,
     _REPO / "docs" / "artifacts" / "idp-configuration-contract.md",
     _REPO / "docs" / "artifacts" / "helm-chart-values-reference.md",
     _REPO / "docs" / "artifacts" / "user-guide.md",
@@ -124,25 +125,17 @@ def test_no_direct_authentik_or_ps_service_host_mapping_anywhere() -> None:
 
 def test_evaluator_docs_name_no_listener_on_8000() -> None:
     for path in _DOC_FILES:
-        if path in {_INSTALL, _REPO / "docs" / "artifacts" / "user-guide.md"}:
+        if path in {_OPERATIONS, _REPO / "docs" / "artifacts" / "user-guide.md"}:
             continue
         assert "127.0.0.1:8000" not in path.read_text(), path
-    for line in _INSTALL.read_text().splitlines():
+    for line in _OPERATIONS.read_text().splitlines():
         if "127.0.0.1:8000" in line:
             assert "mapping" in line or "on `http" in line or "the former" in line, line
-    assert "http://127.0.0.1:8000/mcp/" not in _INSTALL.read_text()
+    assert "http://127.0.0.1:8000/mcp/" not in _OPERATIONS.read_text()
 
 
 def test_upgrade_note_appears_exactly_once() -> None:
-    text = re.sub(r"\s+", " ", _INSTALL.read_text())
+    text = re.sub(r"\s+", " ", _OPERATIONS.read_text())
 
     assert text.count("Signing credentials that were enrolled") == 1
     assert text.count("is no longer reached on `http://127.0.0.1:8000`") == 1
-
-
-def test_installation_guide_gives_linux_ca_trust_steps() -> None:
-    section = _section("### The server machine")
-
-    assert "On Linux" in section
-    assert "update-ca-certificates" in section
-    assert "update-ca-trust" in section

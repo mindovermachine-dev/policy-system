@@ -1292,7 +1292,7 @@ def test_upgrade_listing_mentions_passkey_reenrolment_and_lan_colleagues(
 
     assert "passkey" in run.stderr
     assert "LAN" in run.stderr
-    assert "installation-guide.md#upgrading-an-existing-install" in run.stderr
+    assert "operations-guide.md#moving-an-existing-evaluator-off-a-local-hostname" in run.stderr
 
 
 def test_upgrade_listing_prints_the_role_assignment_reset_step(eval_fixture: EvalFixture) -> None:

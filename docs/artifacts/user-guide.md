@@ -35,7 +35,8 @@ With `ps-cli`, you ingest internal policies and administer an instance.
 
 - For an overview of the project, see [README.md](../../README.md).
 - To build, test, or release the project, see [CONTRIBUTING.md](../../CONTRIBUTING.md).
-- To deploy a new instance, see the [Installation Guide](./installation-guide.md).
+- To deploy a new instance, see the [Evaluator Installation Guide](./evaluator-installation-guide.md)
+  or, for production, the [Installation Guide](./installation-guide.md).
 - To upgrade, rotate credentials, back up, or tear down an instance, see the
   [Operations Guide](./operations-guide.md).
 
@@ -66,10 +67,10 @@ Installing `ps-cli`, pointing it at your instance and logging in are client setu
 are the same for the evaluator and for production, and they live in one place: [Installation
 Guide, Part B](./installation-guide.md#part-b-client-install).
 
-- [B3. Install ps-cli](./installation-guide.md#b3-install-ps-cli), including the Linux
+- [B2. Install ps-cli](./installation-guide.md#b2-install-ps-cli), including the Linux
   prerequisites.
-- [B4. Point ps-cli at the instance and log
-  in](./installation-guide.md#b4-point-ps-cli-at-the-instance-and-log-in).
+- [B3. Point ps-cli at the instance and log
+  in](./installation-guide.md#b3-point-ps-cli-at-the-instance-and-log-in).
 
 The account that you sign in with must first have a passkey. The owner registers one from the
 link that the deploy script printed. Everyone else registers one from an invitation (see
@@ -155,8 +156,8 @@ action requires `ComplianceOfficer`. See [Role System](#role-system).
 
 ## Using Claude Desktop - Code
 
-Install the Policy System Plugin (see [Installation Guide: B5. Install the
-Policy System Plugin](./installation-guide.md#b5-install-the-policy-system-plugin))
+Install the Policy System Plugin (see [Installation Guide: B4. Install the
+Policy System Plugin](./installation-guide.md#b4-install-the-policy-system-plugin))
 with:
 
 ```text
@@ -164,7 +165,7 @@ with:
 ```
 
 The Policy System MCP connector (`ps-mcp`) of the plugin reaches the PS Service in `PS_MCP_URL`
-(see [Install the Policy System Plugin](./installation-guide.md#b5-install-the-policy-system-plugin)).
+(see [Install the Policy System Plugin](./installation-guide.md#b4-install-the-policy-system-plugin)).
 The connector can need a moment to connect. If a query fails, try again.
 
 To see which Claude surfaces can reach your instance, and which are verified, see [Which Claude surfaces reach your deployment](./installation-guide.md#which-claude-surfaces-reach-your-deployment).
@@ -220,7 +221,7 @@ System](#role-system).
 The invitee opens the link, enters a username, a name, and an email, and registers a
 passkey. There is no password field, and the account has no password. On the evaluator
 instance, the machine of the invitee needs the hostname mapping and the CA trust (see
-[Installation Guide, B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only)).
+[Evaluator Installation Guide, Part 2](./evaluator-installation-guide.md#part-2-install-the-client)).
 On production, `invite_url` has the public address only when the deployed PS Service
 release supports `PS_AUTHENTIK_PUBLIC_URL`. See [Installation Guide: Verification
 status](./installation-guide.md#verification-status).
@@ -647,8 +648,8 @@ credential.
 The target PS Service instance decides if login is required. The server implements
 generic OIDC bearer-token validation against any OIDC-compliant provider. It does not
 assume the IdP of one vendor. A deployment enforces this validation when you configure
-it with an issuer and an audience. The evaluator deployment (see [Installation Guide:
-Evaluator installation](./installation-guide.md#evaluator-installation)) and the
+it with an issuer and an audience. The evaluator deployment (see the [Evaluator Installation
+Guide](./evaluator-installation-guide.md)) and the
 production deployment both enforce it. Therefore, each `ps-cli` command needs
 `ps-cli auth login` first.
 
@@ -735,8 +736,8 @@ Sometimes `ps-cli auth login` against an evaluator instance fails with `Could no
 <issuer>.` while Authentik is running. The issuer uses HTTPS with a certificate that
 was issued locally, and `ps-cli` verifies it against the operating system trust store.
 If the message says that it could not verify the TLS certificate, the machine does not
-trust the local CA. Trust it as described in [Installation Guide,
-B2](./installation-guide.md#b2-map-the-name-and-trust-the-ca-evaluator-only). Then try
+trust the local CA. Trust it as described in [Evaluator Installation Guide,
+Part 2](./evaluator-installation-guide.md#part-2-install-the-client). Then try
 again. A plain `Could not reach` message means that the host is not reachable. It is not
 a certificate problem. On Linux, `SSL_CERT_FILE` or `SSL_CERT_DIR` also work. On macOS
 and Windows, `ps-cli` ignores them.

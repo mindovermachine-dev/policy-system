@@ -1,4 +1,4 @@
-"""The installation guide's evaluator exposure table agrees with `deploy/kind/cluster.yaml`.
+"""The evaluator installation guide's exposure table agrees with `deploy/kind/cluster.yaml`.
 
 Reads the real files off disk; no fakes. A row counts as off-loopback when its address cell says
 `all interfaces` or `0.0.0.0`, and as loopback when it names `127.0.0.1:<port>`.
@@ -12,9 +12,9 @@ from pathlib import Path
 import yaml
 
 _REPO = Path(__file__).resolve().parents[3]
-_INSTALL = _REPO / "docs" / "artifacts" / "installation-guide.md"
+_INSTALL = _REPO / "docs" / "artifacts" / "evaluator-installation-guide.md"
 _CLUSTER = _REPO / "deploy" / "kind" / "cluster.yaml"
-_HEADING = "### What is exposed (evaluator)"
+_HEADING = "### What is exposed"
 _LOOPBACK_ADDRESS = re.compile(r"`127\.0\.0\.1:(\d+)`")
 _HOST_PORT = re.compile(r"[Hh]ost port `(\d+)`")
 

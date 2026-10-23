@@ -3,15 +3,6 @@
 ## Table of Contents
 
 - [Part A: Server install](#part-a-server-install)
-  - [Evaluator installation](#evaluator-installation)
-    - [Prerequisites](#prerequisites)
-    - [1. Install Podman and start its machine](#1-install-podman-and-start-its-machine)
-    - [2. Download the deploy bundle](#2-download-the-deploy-bundle)
-    - [3. Create the local cluster](#3-create-the-local-cluster)
-    - [4. Provision the Azure LLM backend](#4-provision-the-azure-llm-backend)
-    - [5. Deploy Policy System Backend](#5-deploy-policy-system-backend)
-    - [6. Register the owner's passkey](#6-register-the-owners-passkey)
-    - [What is exposed (evaluator)](#what-is-exposed-evaluator)
   - [Production installation](#production-installation)
     - [Prerequisites (Production)](#prerequisites-production)
     - [Download the deploy bundle (Production)](#download-the-deploy-bundle-production)
@@ -24,32 +15,32 @@
     - [What is exposed (production)](#what-is-exposed-production)
 - [Part B: Client install](#part-b-client-install)
   - [B1. Install Claude Desktop](#b1-install-claude-desktop)
-  - [B2. Map the name and trust the CA (evaluator only)](#b2-map-the-name-and-trust-the-ca-evaluator-only)
-  - [B3. Install ps-cli](#b3-install-ps-cli)
-  - [B4. Point ps-cli at the instance and log in](#b4-point-ps-cli-at-the-instance-and-log-in)
-  - [B5. Install the Policy System Plugin](#b5-install-the-policy-system-plugin)
+  - [B2. Install ps-cli](#b2-install-ps-cli)
+  - [B3. Point ps-cli at the instance and log in](#b3-point-ps-cli-at-the-instance-and-log-in)
+  - [B4. Install the Policy System Plugin](#b4-install-the-policy-system-plugin)
   - [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment)
 - [Reference](#reference)
   - [SystemOwner bootstrap](#systemowner-bootstrap)
   - [Upgrading an existing install](#upgrading-an-existing-install)
   - [Verification status](#verification-status)
 
-This guide shows how to **deploy** Policy System and how to set up the computers that use it. It
-has two parts:
+This guide shows how to **deploy** Policy System to production and how to set up the computers that
+use it.
 
-- **Part A: Server install.** The operator does it once. Pick one of two paths:
-  - An evaluator instance on your own laptop.
-  - A production rollout to a customer tenant in Azure.
+> [!NOTE]
+> **To install an evaluator on your own computer or LAN, use the [Evaluator Installation
+> Guide](./evaluator-installation-guide.md).** This guide covers the production path only.
+
+It has two parts:
+
+- **Part A: Server install.** The operator does it once: a production rollout to a customer tenant
+  in Azure with [`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh).
 - **Part B: Client install.** Every person who uses the deployment does it on their own computer.
-  This includes the server machine itself. Part B is the only place that describes client setup,
-  for the evaluator and for production alike.
+  Part B describes the `ps-cli` and plugin setup for a production deployment. The evaluator's
+  client steps are in the [Evaluator Installation
+  Guide](./evaluator-installation-guide.md#part-2-install-the-client).
 
-Each step sits in exactly one part. The two server paths are **separate**. Each has its own script
-([`scripts/deploy-ps-eval.sh`](../../scripts/deploy-ps-eval.sh) and
-[`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh)). Both scripts deploy the same
-Helm chart. Pick one path in Part A and follow only that section.
-
-Both scripts do the same three things:
+The production script does these three things (the evaluator script does the same):
 
 1. They ask for the owner's email.
 2. They create that person as an Authentik administrator and as the first `SystemOwner`.
@@ -67,428 +58,8 @@ Other documents:
 
 # Part A: Server install
 
-The operator does Part A once per deployment, on the machine that hosts it. It ends with a
-running backend and the owner's passkey. Then everyone, the operator included, continues with
+The operator does Part A once per deployment. It ends with a running backend and the owner's passkey. Then everyone, the operator included, continues with
 [Part B](#part-b-client-install).
-
-## Evaluator installation
-
-> [!NOTE]
-> **This path is for evaluators.** It runs Policy System on your own laptop. It uses a Helm
-> chart on a local `kind` cluster and the script
-> [`scripts/deploy-ps-eval.sh`](../../scripts/deploy-ps-eval.sh).
-
-
-### Prerequisites
-
-Install these tools before you start:
-
-| Tool                                                                 | Why                                         |
-| --------------------------------------------------------------------- | -------------------------------------------- |
-| [Podman](https://podman.io/docs/installation)                        | Container runtime for the local cluster     |
-| [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/)                   | Talks to the cluster                        |
-| [Helm](https://helm.sh/docs/intro/install/)                          | Installs the Policy System chart            |
-| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Provisions the Azure LLM backend (step 4)   |
-| [jq](https://jqlang.org/download/)                                   | Used by the Azure LLM scripts (step 4) and `deploy-ps-eval.sh` (step 5) |
-| [openssl](https://www.openssl.org/)                                  | `deploy-ps-eval.sh` uses it to issue the local CA and certificate (step 5) |
-| [curl](https://curl.se/)                                             | `deploy-ps-eval.sh` uses it to call the Authentik API (step 5) |
-
-The computers that use the evaluator need their own tools. [Part B](#part-b-client-install) lists them.
-
-### 1. Install Podman and start its machine
-
-Install Podman:
-
-```bash
-brew install podman
-```
-
-Create the Podman machine:
-
-```bash
-podman machine init --cpus 4 --memory 8192
-```
-
-Start the Podman machine:
-
-```bash
-podman machine start
-```
-
-Check that the machine runs:
-
-```bash
-podman info
-```
-
-> **Why 4 CPUs and 8 GB:** kind under Podman needs enough headroom to run a control plane and
-> both Policy System containers. 4 CPUs and 8 GB is the tested minimum.
->
-> **Proxy footprint: measured.** The evaluator proxy adds one more container (`nginx:1.31.7-alpine`).
-> On a Podman machine with 9 CPUs and 16 GiB (macOS, 2026-10-20) it used 13 MiB of memory and 0m
-> CPU idle, and 19 MiB and 417m CPU while 8 workers requested `/health` for 60 seconds. The
-> proxy's memory is small next to the rest of the stack, so the minimum above is unchanged.
-> The measurement was taken on a larger machine than the minimum, and it has no node-wide row
-> because the kind cluster had no metrics-server. The declared `proxy.resources` limits are 128Mi
-> memory and 500m CPU, so a sustained load near the measured 417m CPU is close to the CPU limit.
-> To measure the footprint on your machine, follow [Operations Guide: Measuring the proxy
-> footprint](./operations-guide.md#measuring-the-proxy-footprint-evaluator) with
-> `scripts/measure-proxy-footprint.sh`.
-
-### 2. Download the deploy bundle
-
-The bundle holds the few files that steps 3 to 5 use: the kind cluster config and the deploy
-scripts. The production path uses the same bundle. You do not need git or a clone of the repo.
-Each release attaches the bundle. The bundle installs the chart of the same release, so the
-scripts and the chart always match.
-
-Go to the folder where you want the bundle. Download and unpack it:
-
-```bash
-curl -fsSL https://github.com/mindovermachine-dev/policy-system/releases/latest/download/ps-deploy-bundle.tgz | tar xz
-```
-
-Go to the bundle folder:
-
-```bash
-cd policy-system-deploy
-```
-
-Run all the remaining steps from this folder. They use relative paths, such as
-`deploy/kind/cluster.yaml`.
-
-> **Prefer a clone?** `git clone https://github.com/mindovermachine-dev/policy-system` and
-> `cd policy-system` also work. Every step is the same. A clone installs the newest published
-> chart instead of the chart of one release.
-
-### 3. Create the local cluster
-
-Install kind and kubectl:
-
-```bash
-brew install kind kubectl
-```
-
-Tell kind to use Podman:
-
-```bash
-export KIND_EXPERIMENTAL_PROVIDER=podman
-```
-
-Check that this machine is safe to expose. The cluster publishes the proxy on every network
-interface of the machine (port `30443`), so the check lists the machine's addresses and fails
-when one is outside the loopback, link-local and private ranges:
-
-```bash
-scripts/deploy-ps-eval.sh --check-exposure
-```
-
-The command prints `Exposure check passed` and exits `0` when every address is private. If it
-fails, it names each public address. Disconnect or firewall that interface and run it again. If you
-accept the exposure, pass `--allow-public-host`. A VPN address (for example Tailscale's
-`100.64.0.0/10`) and a global IPv6 address also count as public. A machine with such an address
-needs the flag on both calls: `--check-exposure --allow-public-host` here and `--allow-public-host`
-on the `scripts/deploy-ps-eval.sh` run in step 5.
-
-Create the cluster:
-
-```bash
-kind create cluster --config deploy/kind/cluster.yaml --name policy-system
-```
-
-Check that the cluster runs:
-
-```bash
-kubectl cluster-info --context kind-policy-system
-```
-
-The command prints the cluster information when the cluster is up.
-
-> [!WARNING]
-> **Do you already have a `policy-system` kind cluster from before the HTTPS Authentik
-> setup?** If yes, delete it and create it again.
->
-> ```bash
-> kind delete cluster --name policy-system
-> ```
->
-> **This destroys all existing kind PVC data.** FalkorDB's graph, the PS Postgres database,
-> and Authentik's Postgres database all live on PVCs in this cluster's local storage.
->
-> After you delete the cluster:
->
-> 1. Run the exposure check and the `kind create cluster` command of this step again.
-> 2. Run step 4 and the steps after it again.
-> 3. Restore a PS Postgres backup (see [Operations Guide:
->    Restore](./operations-guide.md#restore)), or load the content again. See [User Guide: Load
->    curated content](./user-guide.md#load-curated-content).
->
-
-### 4. Provision the Azure LLM backend
-
-This step creates these resources in your own Azure subscription:
-
-- An Azure Cognitive Services (`AIServices`) account.
-- Two model deployments.
-- A Key Vault.
-
-It then syncs the credentials into the kind cluster from step 3. You can run both scripts
-again safely. They do nothing when nothing changed.
-
-Your signed-in Azure identity needs the `Owner` or `Contributor` role at subscription scope.
-
-Sign in to Azure:
-
-```bash
-az login
-```
-
-Run the provisioning script:
-
-```bash
-scripts/deploy-llm.sh
-```
-
-The script does these things:
-
-1. It prints a confirmation table. The table shows the region candidates, resource group,
-   account, both model deployments, and the Key Vault. The script reads all values from
-   `scripts/llm-defaults.conf`. To use other model names or capacities, edit that file before
-you run the script.
-2. It asks `Proceed with these values? [Y/n]`.
-3. It checks your subscription permissions.
-4. It checks the configured region and quota.
-5. It provisions the resources. It prints a summary line only, never a secret value.
-
-Sync the credentials into the cluster:
-
-```bash
-scripts/sync-llm-secrets-to-kind.sh
-```
-
-The script reads the three credentials from Key Vault. It writes them into the active kind
-cluster as the Secret `policy-system-llm-credentials`.
-
-### 5. Deploy Policy System Backend
-
-One script does the whole deployment. Before you run it, make sure that:
-
-- You are in the bundle folder from step 2 (or the repo root folder, if you cloned).
-- Your kubectl context is the kind cluster. The script refuses to run against any other
-  context than `kind-*`.
-- The LLM Secret from step 4 exists.
-- The cluster has the `30443` port mapping from step 3. If step 3's warning applies to you,
-  recreate the cluster first.
-- If step 3 needed `--allow-public-host`, pass it here too. The script runs the same exposure
-  check first.
-
-Run the script:
-
-```bash
-scripts/deploy-ps-eval.sh
-```
-
-The script asks for the **owner's email**. This person becomes the first `SystemOwner` and the
-Authentik administrator.
-
-
-The script does these things, in this order:
-
-1. It checks that no interface of the machine holds a public address (see step 3). It stops
-   before any cluster call, unless you passed `--allow-public-host`.
-2. It checks that `kubectl`, `helm`, `openssl`, `jq`, `curl`, and `podman` (or `docker`) are
-   on `PATH`. It stops and names every missing tool.
-3. It finds the IP address of the kind node.
-4. It creates a local certificate authority (CA) that can only vouch for the evaluator
-   hostname. The CA has a critical name constraint for that hostname, is valid for at most 730
-   days, and is limited to TLS server authentication. It creates a certificate for exactly that
-   hostname. It stores both in the state directory with owner-only permissions. It creates the
-   certificate again when its names differ or it is close to expiry. It replaces the CA, and
-   the certificate with it, when the CA lacks the constraint, permits another name, is
-   valid for longer than 730 days, or is close to expiry. It keeps the replaced CA next to the
-   new one as `ca.replaced-<fingerprint prefix>.pem`.
-5. It runs **one** `helm upgrade --install`. This sets the issuer
-   (`https://<hostname>:30443/auth/application/o/ps-cli/`) and the bootstrap owner together. The
-   bootstrap owner is the owner's email as `sub`, with that issuer. There is no second
-   deployment. The script runs the upgrade again only when its values change.
-6. It waits until Authentik, the proxy and PS Service are Ready. The proxy serves the local
-   certificate. The script then checks from inside the PS Service pod that the issuer's OIDC
-   discovery document can be fetched through the proxy, and stops with the cause when it cannot.
-   Last, it checks from this machine, through port `30443` and verifying the CA, that `/health`
-   answers, that the discovery document reports exactly the issuer the release was given, and that
-   a request to `/mcp/` without a bearer token is refused with `401`.
-7. It creates the owner as an Authentik administrator. The username and email are the address
-   you gave. **No password is set, prompted for, or logged.** It prints a single-use,
-   time-limited link to register a passkey.
-
-The script ends with these items, in this order:
-
-1. The client values for any machine that uses the evaluator: the hosts line (this machine's LAN
-   address and the name), the `ca.pem` path, the `ps-cli config set-context` command and the
-   `PS_MCP_URL` value. Keep this block. [Part B](#part-b-client-install) uses it on every client.
-2. What is left to do on this machine. On Linux this lists the Debian/Ubuntu and Fedora/RHEL
-   trust commands and never the macOS keychain command.
-3. The `ps-cli` login command.
-4. The enrolment link.
-
-Check the pods:
-
-```bash
-kubectl get pods
-```
-
-Check that PS Service is healthy:
-
-```bash
-curl --cacert ~/.config/policy-system/eval-tls/ca.pem https://ps.test:30443/health
-```
-
-Check that PS Service is ready:
-
-```bash
-curl --cacert ~/.config/policy-system/eval-tls/ca.pem https://ps.test:30443/ready
-```
-
-Open the FalkorDB web UI. Use it to explore the graph database:
-
-```bash
-open http://localhost:3001/login
-```
-
-A new system has an empty graph and cannot answer questions. To seed it, see [User Guide: Load
-curated content](./user-guide.md#load-curated-content).
-
-To upgrade to a newer release later, see the [Operations
-Guide](./operations-guide.md#updating-to-the-latest-version). Your graph data stays across
-upgrades. Download the bundle again before you re-run `scripts/deploy-ps-eval.sh` after an
-upgrade, because an old bundle installs the chart of its own release.
-
-#### Upgrading an existing evaluator
-
-Re-run `scripts/deploy-ps-eval.sh` with the new bundle. The upgrade changes what a cluster
-created earlier exposes:
-
-- Authentik and PS Service are `ClusterIP` Services and the proxy holds port `30443`. Re-running
-  is the recovery if Helm reports the port as allocated while the Services switch over.
-- The script creates a second Secret, `policy-system-local-ca`, that holds only the CA
-  certificate. `policy-system-local-tls` holds the certificate and key, and only the proxy
-  mounts it.
-- Authentik no longer serves the local certificate. If its keypair `ps-local-tls` is still
-  registered, the script prints how to remove it from the admin UI (System > Brands, then
-  System > Certificates).
-- A cluster created earlier keeps its `127.0.0.1:8000` host mapping. Nothing listens behind it
-  any more, and the evaluator is no longer reached on `http://127.0.0.1:8000`: use
-  `https://<hostname>:30443`, also on the evaluator machine.
-- Signing credentials that were enrolled on the relying party `localhost` do not work on the new
-  origin. Enrol them again after the upgrade.
-
-#### Recover the owner
-
-Run the script again with the same email. Whoever can run `kubectl` against the cluster can
-run it. The result depends on the owner's state:
-
-| Owner state | Result |
-| --- | --- |
-| No passkey registered (the link expired or was never used) | The script gives a fresh link. |
-| A passkey is registered | The script changes nothing and gives no link. |
-| A passkey is registered, but the only device is lost | Remove the device on the owner's user page in the Authentik admin UI. See [What is exposed (evaluator)](#what-is-exposed-evaluator) for how to reach it. Then run the script again. |
-| The run failed (invalid email, Authentik unreachable, a missing tool) | The script exits with a non-zero code and prints the fix. It leaves no half-created user. A new run completes. |
-
-### 6. Register the owner's passkey
-
-This machine is also a client, so it needs the hostname and the local CA before the passkey page
-opens. The closing output of the script in step 5 says what is still missing. Do
-[B2, The server machine](#the-server-machine) now if it lists anything, then return here.
-
-1. Open the enrolment link that the script printed last. Use a browser on this machine.
-2. Register a passkey when the page asks. You can use a security key, the platform
-   authenticator, or a phone. There is no username or password prompt.
-
-Registering the passkey also logs you in.
-
-The link works once. It expires after 30 minutes. If the link
-expired, run `scripts/deploy-ps-eval.sh` again for a new link.
-
-Registration ends on the Authentik application library. It shows **"No Applications
-available"**. This is expected, not a failure. The only application is the `ps-cli` OAuth
-client. It has no launch URL, so Authentik does not list it. You are registered and logged
-in.
-
-The backend is deployed and the owner is enrolled. Now do [Part B](#part-b-client-install) on this
-machine and on every other machine that uses the evaluator. Colleagues who are not the owner
-register their passkey from an invitation. See [SystemOwner bootstrap](#systemowner-bootstrap).
-
-### What is exposed (evaluator)
-
-The evaluator profile runs on one machine. It exposes one reverse proxy (nginx) to the local
-network on purpose, so colleagues on the LAN can log in. The proxy serves PS Service and the
-allowlisted Authentik login paths on one port. This table shows what is reachable and by whom:
-
-| Listener | Address | Reachable by | What it serves |
-| --- | --- | --- | --- |
-| Proxy over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the proxy's NodePort. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | PS Service (the REST API and the MCP endpoint, every call needs an Authentik-issued bearer token) and the Authentik paths on the allowlist (`charts/policy-system/files/authentik-public-paths.txt`): the login, enrolment and device-code pages. |
-| Authentik | ClusterIP only | Pods in the cluster only. | The deploy script reaches its API through a loopback `kubectl port-forward`. |
-| PS Service | ClusterIP only | Pods in the cluster, and clients through the proxy. | The REST API and the MCP endpoint. |
-| FalkorDB Browser | `127.0.0.1:3001` | This machine only | The graph explorer UI. Authentik does not protect it. |
-| FalkorDB (Redis) | ClusterIP only | Pods in the cluster only. It is never mapped. | The graph database. |
-
-**To reach the Authentik admin UI:**
-
-1. Forward the Authentik server to this machine:
-   `kubectl port-forward svc/policy-system-authentik-server 9000:80`.
-2. Open `http://127.0.0.1:9000/auth/if/admin/` and sign in as the owner.
-
-The admin UI is not served through the proxy.
-
-**The exposure preflight.** `scripts/deploy-ps-eval.sh` stops before any cluster call when an
-interface of the machine holds a public address, and `scripts/deploy-ps-eval.sh --check-exposure`
-runs only that check (step 3 runs it before `kind create cluster`). Loopback, link-local, and
-private addresses pass: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`,
-`fc00::/7`, and `fe80::/10`. Everything else fails, including a VPN address in `100.64.0.0/10`. If
-`ip` and `ifconfig` are both missing, the check fails because it cannot verify. `--allow-public-host`
-accepts the exposure.
-
-**Approval-page names.** The deploy script sets `psService.passkeySigning.allowedOrigins` to
-`https://<hostname>:30443`, where `<hostname>` is the name you pass to `--hostname` (`ps.test` by
-default). That origin is the WebAuthn relying party for signing approvals (`rp_id` is the
-hostname), and a POST to an approval route (`/approvals/<id>/...`) on any other `Host` is answered
-`421`. Open the approval page on `https://<hostname>:30443`, on this machine or any other that
-maps the name and trusts the CA. The approval link the service hands out is built from the `Host`
-of the request that created it, so a client that reached PS Service under a name that is not
-listed receives a link that answers `421`; open it on `https://<hostname>:30443` instead.
-
-**To limit access to your own machine:**
-
-- Block port `30443` of the laptop from the LAN with the host firewall.
-
-**Transport and accepted risks.** The proxy accepts TLS 1.2 and TLS 1.3 only, every listener
-speaks TLS, and plain HTTP to port `30443` gets an nginx error page, never an API response.
-It sets `Secure` and `SameSite=Lax` on every cookie it relays and adds `HttpOnly` to all but
-Authentik's CSRF cookie, which the login page reads from JavaScript. A flag the upstream already
-set is not repeated. It sends no HSTS header, because the certificate comes from a local CA. Only
-the proxy pod mounts the private key of the local certificate. These risks remain on a shared LAN:
-
-- **A rogue host on the LAN.** Anyone who can reach port `30443` can attempt logins and probe the
-  allowlisted paths. Every PS Service call still needs an Authentik-issued bearer token.
-- **Device-code phishing.** A user can be tricked into approving a device code that an attacker
-  started. Approve a code only when you started the login yourself.
-- **One shared origin.** PS Service and the Authentik login pages are served from one origin, so a
-  script injected into one can read what the other sets for that origin.
-- **MCP and DNS rebinding.** The MCP endpoint is protected by its bearer token alone; the loopback
-  restriction of the former `127.0.0.1:8000` mapping no longer applies.
-
-Things to know:
-
-- The local CA private key (`ca.key`, in the state directory) can create a certificate only for
-  the evaluator hostname and its subdomains, because the CA carries a critical name
-  constraint, and only for TLS server authentication. Keep the key on the evaluator machine
-  with owner-only permissions. Never copy it. Share `ca.pem` only.
-- The Authentik API token of the chart is the Authentik bootstrap token. It is
-  **administrator-equivalent**. It is stored in the Secret `policy-system-authentik-api-token`.
-  Anyone with `kubectl` access to the cluster can read it. The scripts never print it.
-
----
 
 ## Production installation
 
@@ -705,7 +276,7 @@ For the release that makes the link carry the public address, see [Verification
 status](#verification-status).
 
 Each person, the owner included, then sets up their own computer with [Part B](#part-b-client-install).
-Production uses a Let's Encrypt certificate, so skip B2.
+Production uses a Let's Encrypt certificate, so there is no hosts line or CA to install.
 
 ### What is exposed (production)
 
@@ -784,19 +355,20 @@ see the [Helm Chart Values Reference](./helm-chart-values-reference.md).
 
 # Part B: Client install
 
-Do Part B on **every machine that uses the deployment**: the server machine itself, and each
-colleague's computer. The steps and values are the same on both. Only B2 differs between a server
-machine and another machine, and only for the evaluator.
+Do Part B on **every machine that uses the deployment**. For an evaluator, the hosts line, the CA
+and the plugin are in [Part 2 of the Evaluator Installation
+Guide](./evaluator-installation-guide.md#part-2-install-the-client). Do those first, then B1 and the
+steps you need here.
 
 Get these values from the operator first:
 
 | Value | Evaluator | Production |
 | --- | --- | --- |
 | Service URL | `https://ps.test:30443` (or the `--hostname` the operator chose) | `https://<label>.<region>.cloudapp.azure.com`, printed by [production step 3](#3-run-scriptsdeploy-ps-prodsh) |
-| Hosts line and `ca.pem` | Needed. The closing output of `scripts/deploy-ps-eval.sh` prints them under "Client values" | Not needed. A Let's Encrypt certificate serves the host |
+| Hosts line and `ca.pem` | Needed. See the [Evaluator Installation Guide](./evaluator-installation-guide.md#part-2-install-the-client) | Not needed. A Let's Encrypt certificate serves the host |
 | `ps-cli` context | `eval` | `prod` |
 | `PS_MCP_URL` | `<service URL>/mcp/` | `<service URL>/mcp/` |
-| Your account | The owner's passkey ([step 6](#6-register-the-owners-passkey)), or an invitation | The owner's passkey ([step 5](#5-enrol-the-owners-passkey)), or an invitation |
+| Your account | The owner's passkey (see the [Evaluator Installation Guide](./evaluator-installation-guide.md#step-3-register-the-passkey-owner-only)), or an invitation | The owner's passkey ([step 5](#5-enrol-the-owners-passkey)), or an invitation |
 
 ## B1. Install Claude Desktop
 
@@ -806,101 +378,7 @@ Get these values from the operator first:
 
 You can skip B1 if you only use the Claude Code CLI.
 
-## B2. Map the name and trust the CA (evaluator only)
-
-Production clients skip B2.
-
-For the passkey page and `ps-cli` to work, every machine must do both of these:
-
-- Map `ps.test` to the **LAN address of the server machine** in the hosts file. All machines
-  use the same line, so one address works everywhere.
-- Trust the local CA for TLS server authentication only.
-
-Without both, the browser shows a certificate warning, passkey registration fails and
-`ps-cli auth login` cannot verify the certificate.
-
-### The server machine
-
-For the passkey page to open, this machine must do both of these:
-
-- Map `ps.test` to its own LAN address in the hosts file. This is the same line every other
-  machine uses. The script finds the address: it takes the
-  address of the default-route interface, else the only private IPv4 address of the machine. If
-  neither gives one address (for example, because container bridges add several private
-  addresses and there is no default route), the script stops before it changes anything and
-  asks for `--lan-address <ip>`.
-- Trust the local CA for TLS server authentication only. The CA file is
-  `~/.config/policy-system/eval-tls/ca.pem`, or the same file under `PS_EVAL_STATE_DIR`.
-
-The script checks both. Then one of these happens:
-
-- **Both are in place.** The script prints "This machine is ready". Go to [B3](#b3-install-ps-cli).
-- **One is missing.** The script asks whether to run the two `sudo` steps for you. The option
-  `--apply-host-setup` answers yes in advance.
-- **A hosts line maps `ps.test` to another address.** The script reports that line and
-  never edits it, and never adds a second one. Edit or remove it so that `ps.test` maps to the
-  LAN address, then run the script again.
-- **You declined, or a `sudo` step failed.** Run the commands that the output lists. Replace
-  `192.168.1.42` with the LAN address that the output shows:
-
-```bash
-echo '192.168.1.42 ps.test' | sudo tee -a /etc/hosts
-```
-
-On macOS, trust the CA for TLS server authentication only:
-
-```bash
-sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain ~/.config/policy-system/eval-tls/ca.pem
-```
-
-On Linux, the system trust store has no switch for the purpose, so what limits the trust
-depends on the distribution family. The CA itself is limited to TLS server authentication
-(its extended key usage) and to `ps.test` (a critical name constraint):
-
-- **Debian and Ubuntu.** The store ignores the extended key usage of a CA, so on this family
-  only the name constraint limits what the CA can vouch for.
-
-  ```bash
-  sudo cp ~/.config/policy-system/eval-tls/ca.pem /usr/local/share/ca-certificates/ps-local-ca.crt && sudo update-ca-certificates
-  ```
-
-- **Fedora and RHEL.** The store takes the purposes from the extended key usage of the CA, so
-  trust is limited to TLS server authentication, and it also enforces the name constraint.
-
-  ```bash
-  sudo cp ~/.config/policy-system/eval-tls/ca.pem /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust
-  ```
-
-On other systems, import `ca.pem` as a trusted root for TLS server authentication in the
-certificate store of the operating system or browser. Firefox has its own store.
-
-### Another machine (a colleague on the LAN)
-
-Do the same two things on every other machine, with the LAN address of the server machine:
-
-1. **Map the hostname to the LAN address of the server machine.** Add this line to the hosts
-   file of that machine. The closing output of the script prints the line with the address it
-   found. To find the address by hand on macOS, run `ipconfig getifaddr en0` on the server
-   machine.
-
-   ```text
-   192.168.1.42 ps.test
-   ```
-
-2. **Copy the CA certificate (`ca.pem`) from the server machine.**
-   - The file is `~/.config/policy-system/eval-tls/ca.pem`. If you set `PS_EVAL_STATE_DIR`,
-     the file is in that folder. The closing output of the script prints the full path.
-   - Send the certificate only. **Never send `ca.key`** from the same folder.
-   - You can use any file transfer: AirDrop, a shared drive, or `scp`.
-   - Trust the copy for TLS server authentication only, with the commands above (on macOS,
-     with `-p ssl`). `ps-cli` reads the same OS trust store.
-
-Every colleague's hosts line points at that one address. **Reserve the address for the
-server machine in the DHCP settings of your router** (a reserved DHCP address). If the
-address changes, every colleague's browser stops reaching `ps.test` until the hosts line is
-updated.
-
-## B3. Install ps-cli
+## B2. Install ps-cli
 
 `ps-cli` is a command-line client for the PS Service REST API. You can use it to:
 
@@ -995,7 +473,7 @@ On Debian or Ubuntu:
 
 For other distributions, install the equivalent packages. They are not verified.
 
-## B4. Point ps-cli at the instance and log in
+## B3. Point ps-cli at the instance and log in
 
 The account that you sign in with must first have a passkey. The owner registers it from the
 link the deploy script printed. Everyone else registers it from an invitation. Neither person sets
@@ -1003,7 +481,7 @@ a password.
 
 On the machine that ran `scripts/deploy-ps-eval.sh`, the script already set and selected the
 `eval` context, unless that context was already correct, or `ps-cli` was not on `PATH` while the
-script ran (see B3). Elsewhere, set it. Use the **service URL** from the table at the top of Part B.
+script ran (see B2). Elsewhere, set it. Use the **service URL** from the table at the top of Part B.
 
 Evaluator:
 
@@ -1044,16 +522,16 @@ ps-cli get health
 ```
 
 If `auth login` reports that it could not verify the TLS certificate, this machine does not trust
-the CA. Do [B2](#b2-map-the-name-and-trust-the-ca-evaluator-only).
+the CA. Do [Part 2 of the Evaluator Installation Guide](./evaluator-installation-guide.md#part-2-install-the-client).
 
 > **Why no environment variable:** `ps-cli` checks the Authentik certificate against the
-> operating system trust store. B2 adds the local CA to that store. On Linux, `SSL_CERT_FILE` or
+> operating system trust store. Trusting the local CA (Part 2 of the Evaluator Installation Guide) adds it to that store. On Linux, `SSL_CERT_FILE` or
 > `SSL_CERT_DIR` also work. On macOS and Windows, `ps-cli` ignores them.
 
 For what each command does, see [User Guide: Set up ps-cli](./user-guide.md#set-up-ps-cli). For
 credential storage, see the [Appendix](./user-guide.md#appendix-ps-cli-reference).
 
-## B5. Install the Policy System Plugin
+## B4. Install the Policy System Plugin
 
 The plugin has two named parts:
 
@@ -1152,7 +630,7 @@ To ask a question, see the [User Guide](./user-guide.md#using-claude-desktop---c
 Claude Chat and Cowork call a remote connector from Anthropic's cloud. So they can only reach a
 PS Service and an Authentik that are public on the internet. Claude Code runs on your machine,
 so it connects from there. The evaluator is a non-public deployment (local `kind`, Authentik on
-the LAN only). See [What is exposed (evaluator)](#what-is-exposed-evaluator). A production
+the LAN only). See [What is exposed](./evaluator-installation-guide.md#what-is-exposed) in the Evaluator Installation Guide. A production
 deployment has a public hostname. See [What is exposed (production)](#what-is-exposed-production).
 
 | Surface | Public deployment | Non-public deployment | Status |
@@ -1208,17 +686,17 @@ The first authenticated caller whose `(sub, iss)` matches those two values gets 
 exactly once. Anyone else who reaches an empty instance first gets nothing. PS Service audits
 that attempt as `access_role.bootstrap_rejected`.
 
-This applies to both the [Evaluator](#5-deploy-policy-system-backend) and the
+This applies to both the [Evaluator](./evaluator-installation-guide.md) and the
 [Production](#3-run-scriptsdeploy-ps-prodsh) installation. Only the script and the Authentik
 base URL are different.
 
 To become `SystemOwner`:
 
 1. **Register a passkey** from the link that the script printed
-   ([evaluator](#6-register-the-owners-passkey),
+   ([evaluator](./evaluator-installation-guide.md#step-3-register-the-passkey-owner-only),
    [production](#5-enrol-the-owners-passkey)).
 2. **Log in with `ps-cli`** (`ps-cli auth login`). Claude Desktop plugin sign-in is separate.
-   See [B5](#b5-install-the-policy-system-plugin).
+   See [B4](#b4-install-the-policy-system-plugin).
 3. **Make the first role-gated call** as the owner. For example, list the access roles with the
    `ps-manage-access-roles` skill. That call wins the bootstrap and makes you `SystemOwner`.
    For what to do next, see the [User Guide's Role System](./user-guide.md#role-system).
@@ -1315,172 +793,7 @@ To fix it:
 again.
 
 **Cluster with the old plain-HTTP port mapping:** you must recreate it in all cases. See the
-warning in [step 3](#3-create-the-local-cluster).
-
-### Moving an existing evaluator off a .local hostname
-
-**Applies to:** evaluators installed with a hostname ending in `.local` (the former default).
-
-Claude Code cannot resolve `.local` names. It fails with `ENOTFOUND`,
-even when `/etc/hosts` maps the name. The evaluator name is `ps.test`, and
-`deploy-ps-eval.sh` rejects any `--hostname` that ends in `.local`. The hostname is also the
-issuer and the WebAuthn relying-party ID, so moving an install changes all three. The steps:
-
-1. Download the bundle of the release that contains this change (step 2), or pull it if you
-   cloned the repo.
-2. Run `scripts/deploy-ps-eval.sh --owner-email <same email>`. Before it touches the cluster, it
-   prints what this machine still needs and the reset command in step 5. Read it first.
-3. Edit the hosts file: remove the `<old-name>.local` lines and add `<LAN address> ps.test`. The
-   script prints the exact line. Its `--apply-host-setup` adds it with `sudo` and never edits or
-   removes an existing line. The local CA is replaced by one that permits only `ps.test`. Remove
-   the old CA and trust the new one with the commands the script prints (see
-   [Moving an existing evaluator to ps.test](#moving-an-existing-evaluator-from-authentiktest-to-pstest)
-   for the removal commands).
-4. The script then does the rest in one pass:
-   - It regenerates the leaf certificate for the new name.
-   - It runs one `helm upgrade` that moves the issuer, the bootstrap owner's issuer, the Authentik
-     base URL and the `hostAliases` entry for PS Service.
-   - It restarts the Authentik pods, because the certificate checksum changed.
-   - The `ps-cli` redirect URIs and the audience (`ps-cli`) do not change. The redirect URIs hold
-     no hostname.
-5. Clear the role assignments recorded under the old issuer. Run this after the script finishes
-   (PS Service is up on the new issuer) and **before the owner signs in**. The script prints the
-   same block:
-
-   ```bash
-   POD=$(kubectl get pod -l app.kubernetes.io/component=ps-postgres -o jsonpath='{.items[0].metadata.name}')
-   STATE_PW=$(kubectl get secret policy-system-ps-postgres-state-credentials \
-     -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)
-   kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \
-     -c "DELETE FROM access_role_assignments;"
-   ```
-
-   - The bootstrap grants SystemOwner only while the table is empty. A grant recorded under the
-     old issuer would otherwise block it.
-   - After the reset, the first role-gated call by the configured owner grants SystemOwner under
-     the new issuer.
-   - The reset also deletes invitees' grants. Their issuer changed too. They re-enrol and are
-     granted again.
-   - Do not open the enrolment link before this step.
-   - If someone other than the owner calls first, the bootstrap grants nothing and the table stays
-     empty, so the step is safe to retry.
-   - Evaluator only. Never run it against a production install.
-6. Register a new passkey with the link the script prints. Passkeys are bound to the hostname, so
-   the old one no longer works. After a hostname change the script issues a fresh enrolment link
-   even though the old passkey is still listed. After signing in, the owner may delete the dead
-   passkey from the user settings page.
-7. Each LAN colleague changes their hosts line to `<LAN address> ps.test`, trusts the new
-   `ca.pem`, and registers a new passkey (invitation or recovery link).
-8. Everyone using `ps-cli` runs `ps-cli auth login` again. The stored tokens belong to the old
-   issuer.
-
-This procedure has not been verified on a live cluster. Treat the steps as unverified.
-
-### Moving an existing evaluator from authentik.test to ps.test
-
-**Applies to:** evaluators installed under the name `authentik.test`, whose Authentik issuer sits at the
-root path (`https://authentik.test:30443/application/o/ps-cli/`). This is the only place in the guide
-that names the old name.
-
-The evaluator now has one name, `ps.test`, with Authentik under `/auth/` as in production. The
-issuer is `https://ps.test:30443/auth/application/o/ps-cli/`. The local CA is replaced by one that
-permits only `ps.test`. **All passkeys must be registered again**: the owner and every invitee,
-because a passkey is bound to the name it was registered on.
-
-`scripts/deploy-ps-eval.sh` finds the old name and issuer in the recorded Helm values and
-announces the move before it changes the cluster. The steps:
-
-1. Run `scripts/deploy-ps-eval.sh --owner-email <same email>` from the release that contains this
-   change. Read what it prints first.
-2. Remove the old CA on every machine that trusted it. The script names the old CA by subject, SHA-1
-   and SHA-256 fingerprint (colon-free hex) and keeps a copy next to the new one in its state
-   directory as `ca.replaced-<first 8 hex of the SHA-1>.pem`. Use the commands it prints:
-   - macOS: `sudo security remove-trusted-cert -d <state dir>/ca.replaced-<first 8>.pem` clears the
-     admin trust settings the old trust command set. Then
-     `sudo security delete-certificate -Z <SHA-1> -t /Library/Keychains/System.keychain` deletes
-     the certificate.
-   - Debian/Ubuntu: `sudo rm /usr/local/share/ca-certificates/ps-local-ca.crt && sudo update-ca-certificates --fresh`
-   - Fedora/RHEL: `sudo rm /etc/pki/ca-trust/source/anchors/ps-local-ca.pem && sudo update-ca-trust`
-
-   Then trust the new `ca.pem` for TLS server authentication with the commands in
-   [B2, The server machine](#the-server-machine).
-3. Fix the hosts file. The script lists the lines it found for the old name, and you remove the
-   lines that map `authentik.test`. Add `<LAN address> ps.test` (the script prints the exact line). The
-   script never edits an existing hosts line. Its `--apply-host-setup` only appends the new line
-   when no line maps `ps.test`.
-4. The script then does the rest in one pass: it regenerates the CA and the leaf for `ps.test`,
-   runs one `helm upgrade` that moves the issuer, the bootstrap owner's issuer, the Authentik base
-   URL and the `hostAliases` entry, and waits for the rollouts. A re-run changes nothing: no second
-   upgrade, no second hosts line, no second CA and no duplicate user.
-5. Clear the role assignments recorded under the old issuer, **before the owner signs in**. The
-   script prints the same block as step 5 of
-   [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname)
-   (`DELETE FROM access_role_assignments;`). Evaluator only. Never run it against a production
-   install.
-6. Register a new passkey with the fresh single-use enrolment link the script prints. It issues
-   the link even though the owner already has a passkey on the old name. Every invitee registers
-   a new passkey too, with a new invitation or recovery link. The owner may delete the dead
-   passkeys in the user settings.
-7. Each LAN colleague changes their hosts line to `<LAN address> ps.test`, removes the old CA
-   and trusts the new `ca.pem` (never `ca.key`), then runs `ps-cli auth login` again. The stored
-   tokens belong to the old issuer.
-8. Reserve the server's address in your router's DHCP settings (a reserved DHCP address). Every
-   colleague's hosts line points at it.
-
-**The same host with a different issuer.** When the recorded hostname already is `ps.test` and
-only the issuer differs (for example the root-path issuer), the script announces the role
-assignment reset in step 5 but does not issue a new enrolment link: the passkeys are bound to the
-host name, which did not change, so they stay valid.
-
-**The name is permanent.** Once anyone registers a signing passkey, the WebAuthn `rp_id` is the
-name, so the evaluator name `ps.test` cannot change again without losing every signing passkey.
-Choose before the first signing passkey is registered.
-
-This procedure is unverified: it has not been run on a live evaluator moved from the old name.
-
-### Recording verification evidence
-
-The evaluator on `ps.test` has not yet been run from Claude Code, Claude Desktop or
-`ps-cli`. A person must run the checks below on a machine with those tools and record the result.
-Nothing in this guide may claim a verified result for this change until that is done.
-
-1. Deploy a fresh evaluator with the default options (`scripts/deploy-ps-eval.sh`).
-2. Claude Code CLI: add the plugin, run `/mcp` and complete the OAuth login for `ps-mcp`. Read the
-   `mcp-logs` output for `plugin:ps-plugin:ps-mcp` and copy the "Successfully connected" line. Run
-   `claude --version`.
-3. Claude Desktop, Code tab: do the same login. Record the Desktop app version and the bundled
-   Claude Code version.
-4. Run `ps-cli auth login` and record the result.
-5. Do a migration rehearsal. Take an evaluator installed under the former name and issuer. Follow
-   [Moving an existing evaluator to ps.test](#moving-an-existing-evaluator-from-authentiktest-to-pstest).
-   Record whether the owner got an enrolment link, registered a new passkey, and still holds
-   `SystemOwner`. Prove `SystemOwner` with an owner-only call. Record the command and result.
-6. Client install (Part B): follow only Part B, plus the "Client values" block that
-   `scripts/deploy-ps-eval.sh` printed, on each of the four machines below. Record the result in
-   the matrix. Use a clean machine for each cell.
-7. Fill in the template below and keep it with your deployment records.
-
-```text
-Evaluator verification evidence
-Date / operator:
-Evaluator hostname:               ps.test
-1. Claude Code CLI version (claude --version):
-2. mcp-logs line "Successfully connected" for plugin:ps-plugin:ps-mcp:
-3. Claude Desktop version / bundled Claude Code version:
-4. Desktop Code tab: ps-mcp OAuth result:
-5. ps-cli auth login result:
-6. Migration rehearsal: owner enrolment link issued (yes/no), new passkey registered (yes/no),
-   SystemOwner confirmed by an owner-only call (command and result):
-7. Client install matrix (Part B). For each cell, record the OS and version. Then record one
-   result per check: `ps-cli get health` after login; Claude Code (CLI) connected to the plugin
-   server; Desktop Code tab connected to the plugin server:
-   macOS, same machine as the server:
-   macOS, separate machine:
-   Linux, same machine as the server:
-   Linux, separate machine (headless: dbus session and keyring steps used, yes/no):
-```
-
-**After evidence is recorded.** Update the [surface table](#which-claude-surfaces-reach-your-deployment). In the CLI row and in the Desktop row, replace the pending sentence with the verified result and the recorded versions. For the CLI row, give the Claude Code version. For the Desktop row, give the Desktop app version and the bundled Claude Code version. Change the Desktop non-public status from "Expected" to "Verified" only with recorded evidence.
+warning in [step 3](./evaluator-installation-guide.md#step-3-create-the-cluster).
 
 **Graph mutation log.** Upgrading to a version with the graph mutation log also runs a
 provisioning Job. The Job applies the ordinary `ps_state` migrations. It also creates the
@@ -1493,65 +806,9 @@ log](./operations-guide.md#upgrading-to-the-graph-mutation-log).
 This section lists what the flows above were verified against, and what they were not. Read it
 before you rely on a claim for a real deployment.
 
-- **Evaluator path: verified live** on a clean `kind` cluster (Podman) with the real script.
-  The test covered:
-  - One deployment.
-  - Owner passkey enrolment in a browser.
-  - `ps-cli auth login` with `SSL_CERT_FILE`.
-  - `SystemOwner` granted on the first role-gated call.
-  - A second user invited and enrolled.
-  - Owner re-run recovery.
-  - Certificate refresh without a manual restart.
-  - This run used an earlier hostname.
-- **Evaluator on `ps.test`, macOS, same machine as the server: partly verified (2026-10-20).**
-  - An existing evaluator on the former name (chart 5.2.4) was moved to `ps.test` with
-    `scripts/deploy-ps-eval.sh` and the checkout chart. The script detected the former name, built
-    the name-constrained CA and printed the hosts and trust commands, which were run by hand.
-  - Through `https://ps.test:30443` with the CA trusted: `/health` returned 200, an unauthenticated
-    `/ready` returned only the status, `/mcp/` and a REST path returned 401 without a token,
-    `/auth/application/o/ps-cli/.well-known/openid-configuration` returned 200, and
-    `/auth/if/admin/` and `/auth/api/v3/core/users/` returned 403. TLS 1.1 failed to connect.
-    Plain HTTP to port 8000 on the LAN address returned nothing.
-  - The owner registered a new passkey on `ps.test`. `ps-cli auth login` then logged in and
-    `ps-cli get health` returned `alive` and `ready` (ps-cli 7.0.1, installed with `install.sh`).
-  - A `ps-cli` older than the service (5.2.5 against 7.0.1) logged in but `ps-cli get health`
-    failed with "unexpected response shape". Run `install.sh` again to upgrade the client.
-  - Claude Code CLI 2.1.285 with `PS_MCP_URL` set to `https://ps.test:30443/mcp/` in
-    `~/.claude/settings.json`: the OAuth login for `ps-mcp` completed (reported by the operator)
-    and `claude mcp list` then showed `plugin:ps-plugin:ps-mcp ... Connected`. The `mcp-logs` line
-    was not captured.
-  - After the owner's first role-gated call, `access_role_assignments` held `AuthenticatedUser`
-    and `SystemOwner` for the owner under the new issuer. The old rows had been deleted first, as
-    the script instructs. An owner-only call was not made: `ps-cli export instrument` answered
-    `access_denied`, and the role it requires was not checked.
-  - Claude Desktop 2.42304.2, Code tab, same `PS_MCP_URL` setting: `ps-mcp` worked (reported by
-    the operator). The bundled Claude Code version and the log line were not captured; the
-    Desktop install holds Claude Code 2.1.295 and 2.1.299.
-  - Not verified: an owner-only call after the migration.
-  - Two problems surfaced in this migration and are open: the deploy script drops
-    `psPostgres.*.existingSecret` values from the release, so an install with retained database
-    credentials loses PS Service until they are set again; and a migration that stopped before it
-    issued the owner link cannot issue it on a re-run, because the script then reports the owner as
-    already enrolled.
-- **A second machine on the LAN: simulated, not tried on physical hardware.**
-  - A separate container with the CA in its trust store reached the proxy over HTTPS through
-    the `0.0.0.0:30443` mapping of the host.
-  - A second browser profile completed a passkey device login. The hostname was mapped to the
-    LAN address.
-  - Browser trust in that run used a test flag. It did not use an imported CA. The macOS
-    keychain was untouched.
-- **Client install (Part B): not yet verified.** Part B restructured the client steps into one
-  place. It was not followed on a clean machine yet. Nothing below is claimed as verified until the
-  matrix in [Recording verification evidence](#recording-verification-evidence) is filled in:
-  - macOS, same machine as the server: `ps-cli`, Claude Code CLI and the Desktop Code tab
-    verified (see above).
-  - macOS, separate machine: pending.
-  - Linux, same machine as the server: pending.
-  - Linux, separate machine: pending.
-  - The Linux prerequisites in [B3](#b3-install-ps-cli) are the recipe to test. A real user hit
-    the failures on a headless Ubuntu machine, and the commands in B3 have not been re-run end to
-    end. The package names for a recent Ubuntu release (`libgirepository-2.0-dev`) and the
-    `gnome-keyring-daemon --unlock` step are the parts most likely to need a correction.
+- **Evaluator path: see the evaluator guide.** What is verified for each scenario is in the
+  [Supported scenarios](./evaluator-installation-guide.md#supported-scenarios) table. The older evidence
+  record is in the [Operations Guide](./operations-guide.md#evaluator-verification-history).
 - **Production path: verified on `kind`, not on AKS.** The real `deploy-ps-prod.sh` and
   `values-prod.yaml` ran against `kind`. The run used `ingress-nginx` and a stand-in Azure CLI.
   It skipped the cert-manager and Let's Encrypt steps.
