@@ -134,6 +134,12 @@ class ServiceConfig:
             separated). The first entry names the WebAuthn relying party and its origin; a POST
             on an approval route whose `Host` matches none is rejected. Empty when unset, in
             which case the relying party is derived from each request's own `Host`.
+        public_url: The service's public origin (`PS_PUBLIC_URL`), `https://host[:port]` with no
+            path, query, fragment or user info; `http` is accepted only while the local-test
+            bypass is active. It is the only source of the origin published in the
+            protected-resource metadata and in the `WWW-Authenticate` challenge. `None` when
+            unset, which is accepted only while the local-test bypass is active, where the
+            origin is derived from each request instead.
         state_postgres_host: Host of the PS state Postgres instance (`PS_STATE_POSTGRES_HOST`),
             separate from Passkey Signing's, with its own tables and migration tracking;
             `None` when unset. Unlike Passkey Signing, an unset host is not "not applicable":
@@ -190,6 +196,7 @@ class ServiceConfig:
     passkey_signing_postgres_user: str | None = None
     passkey_signing_postgres_password: str | None = field(default=None, repr=False)
     passkey_signing_allowed_origins: tuple[str, ...] = ()
+    public_url: str | None = None
     state_postgres_host: str | None = None
     state_postgres_port: int = _DEFAULT_STATE_POSTGRES_PORT
     state_postgres_database: str | None = None
@@ -791,6 +798,29 @@ def _resolve_passkey_signing_allowed_origins() -> tuple[str, ...]:
     return _parse_passkey_signing_allowed_origins(raw) if raw is not None else ()
 
 
+def _parse_public_url(raw: str | None, *, is_local_test_bypass_active: bool) -> str | None:
+    """Parse `PS_PUBLIC_URL`: `None` when unset, else a validated `https://host[:port]` origin.
+
+    An explicitly set value that is empty, not an absolute http(s) origin, carries a path (a
+    trailing slash included), query, fragment or user info, or uses `http` outside local-test
+    mode is rejected rather than treated as unset. The error names the variable, never the
+    offending value.
+    """
+    if raw is None:
+        return None
+    origin = raw.strip()
+    if not _is_plain_origin(origin):
+        message = (
+            "PS_PUBLIC_URL must be an absolute origin of the form https://host[:port] "
+            "with no path, query or fragment"
+        )
+        raise ServiceConfigurationError(message)
+    if urlsplit(origin).scheme != "https" and not is_local_test_bypass_active:
+        message = "PS_PUBLIC_URL must use https unless PS_SERVICE_LOCAL_TEST_BYPASS is true"
+        raise ServiceConfigurationError(message)
+    return origin
+
+
 def _is_plain_origin(origin: str) -> bool:
     """Return whether `origin` is exactly `http(s)://host[:port]`."""
     try:
@@ -1033,6 +1063,10 @@ def load_config() -> ServiceConfig:
         passkey_signing_postgres_user=passkey_signing_postgres_user,
         passkey_signing_postgres_password=passkey_signing_postgres_password,
         passkey_signing_allowed_origins=_resolve_passkey_signing_allowed_origins(),
+        public_url=_parse_public_url(
+            os.environ.get("PS_PUBLIC_URL"),
+            is_local_test_bypass_active=is_local_test_bypass_active,
+        ),
         state_postgres_host=state_postgres_host,
         state_postgres_port=state_postgres_port,
         state_postgres_database=state_postgres_database,

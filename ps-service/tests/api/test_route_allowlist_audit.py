@@ -156,6 +156,7 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
         "graceful_shutdown_seconds": 10,
         "logging_dir": None,
         "is_local_test_bypass_active": False,
+        "public_url": "https://ps.example.com",
         "auth_issuer": provider.issuer,
         "auth_audience": _AUDIENCE,
         "authz_bootstrap_owner_subject": "first-owner-subject",

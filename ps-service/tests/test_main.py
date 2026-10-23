@@ -268,6 +268,7 @@ def _complete_config(**overrides: object) -> ServiceConfig:
         "auth_audience": "https://api.example.com",
         "authz_bootstrap_owner_subject": "first-owner-subject",
         "authz_bootstrap_owner_issuer": "https://issuer.example.com",
+        "public_url": "https://ps.example.com",
         "authentik_api_token": "test-authentik-token",
         "authentik_base_url": "https://authentik.example.com",
     }
@@ -651,14 +652,14 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair, a
     fake `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`
-    pair, and `REQUIRED_STARTUP_ENV` (currently
+    pair, a fake `PS_PUBLIC_URL`, and `REQUIRED_STARTUP_ENV` (currently
     `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`): these tests call `main()`
     end to end (real `load_config()`, not `_complete_config()`), have nothing to do with auth,
     RBAC bootstrap, or Authentik, and don't set the local-test bypass --
     without fake values, `create_app` would now fail closed
     (`AuthConfigurationError`, then `AccessRoleBootstrapConfigurationError`,
-    then `AuthentikCredentialConfigurationError` -- the last one
-    unconditionally, bypass or not). Kept deliberately independent of the
+    then `AuthentikCredentialConfigurationError` -- unconditionally, bypass or not -- then
+    `AuthConfigurationError` again for the public URL). Kept deliberately independent of the
     bypass (never set here) so a host override to a non-loopback address
     (see the parametrized test below) never collides with
     `_refuse_non_loopback_bypass_bind`'s bypass-active-only guard.
@@ -669,6 +670,7 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PS_AUTH_AUDIENCE", "https://api.example.com")
     monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT", "first-owner-subject")
     monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER", "https://issuer.example.com")
+    monkeypatch.setenv("PS_PUBLIC_URL", "https://ps.example.com")
     for key, value in REQUIRED_STARTUP_ENV.items():
         monkeypatch.setenv(key, value)
 

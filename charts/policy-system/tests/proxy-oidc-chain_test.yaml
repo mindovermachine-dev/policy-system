@@ -18,6 +18,7 @@ set:
   psService.auth.audience: ps-cli
   psService.authzBootstrapOwner.subject: owner@example.test
   psService.authzBootstrapOwner.issuer: https://ps.test:30443/auth/application/o/ps-cli/
+  psService.publicUrl: https://ps.test:30443
   psService.authentik.baseUrl: http://policy-system-authentik-server/auth
   psService.authentik.publicUrl: https://ps.test:30443/auth
 templates:

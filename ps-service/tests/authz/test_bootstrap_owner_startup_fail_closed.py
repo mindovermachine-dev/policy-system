@@ -37,6 +37,7 @@ def _config(**overrides: object) -> ServiceConfig:
         "graceful_shutdown_seconds": 10,
         "logging_dir": None,
         "is_local_test_bypass_active": False,
+        "public_url": "https://ps.example.com",
         # Unconditional: `require_authentik_credential_configured`
         # carries no bypass exemption, so every test in this file needs both
         # set too -- including `test_create_app_does_not_raise_when_bypass_

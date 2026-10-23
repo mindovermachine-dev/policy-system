@@ -11,6 +11,9 @@ metadata:
 {{- if and (not .Values.psService.localTestBypass.enabled) (or (not .Values.psService.authzBootstrapOwner.subject) (not .Values.psService.authzBootstrapOwner.issuer)) }}
 {{- fail "psService.authzBootstrapOwner.subject and psService.authzBootstrapOwner.issuer must both be set when psService.localTestBypass.enabled=false: set both (the configured expected first-owner identity for RBAC bootstrap, issue #144), or set psService.localTestBypass.enabled=true for local-only evaluation. See docs/artifacts/idp-configuration-contract.md." }}
 {{- end }}
+{{- if and (not .Values.psService.localTestBypass.enabled) (not .Values.psService.publicUrl) }}
+{{- fail "psService.publicUrl must be set when psService.localTestBypass.enabled=false: the public origin clients use to reach PS Service, as https://host[:port] with no path (for example https://ps.example.com). PS Service publishes it in its OAuth protected-resource metadata. See docs/artifacts/helm-chart-values-reference.md." }}
+{{- end }}
 spec:
   replicas: 1
   selector:
@@ -221,6 +224,10 @@ spec:
             {{- if .Values.psService.auth.issuer }}
             - name: PS_AUTH_ISSUER
               value: {{ .Values.psService.auth.issuer | quote }}
+            {{- end }}
+            {{- if .Values.psService.publicUrl }}
+            - name: PS_PUBLIC_URL
+              value: {{ .Values.psService.publicUrl | quote }}
             {{- end }}
             {{- if .Values.psService.passkeySigning.allowedOrigins }}
             - name: PS_PASSKEYSIGNING_ALLOWED_ORIGINS

@@ -73,6 +73,12 @@ psService:
     # Opt-in only — even under the local-test profile this stays off by
     # default; an evaluator flips it with --set psService.localTestBypass.enabled=true.
     enabled: false
+  # Public origin clients use to reach PS Service, as https://host[:port] with no path, query or
+  # fragment (for example https://ps.example.com). Required (render fails naming it) whenever
+  # localTestBypass.enabled=false. It is the only source of the origin PS Service publishes in its
+  # protected-resource metadata and in the WWW-Authenticate challenge. An http:// origin is
+  # accepted only together with localTestBypass.enabled=true.
+  publicUrl: ""
   passkeySigning:
     # Origins (scheme://host[:port]) the companion-browser approval page may be served from.
     # The first entry names the WebAuthn relying party (its host is the rp_id); a POST on an

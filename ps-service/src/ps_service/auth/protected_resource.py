@@ -22,6 +22,7 @@ from fastapi import (  # FastAPI needs Request at runtime (else a 422 body field
 )
 
 from ps_service.api.models import ProtectedResourceMetadata
+from ps_service.auth.public_origin import resolve_public_origin
 
 MCP_RESOURCE_PATH = "mcp"
 
@@ -49,16 +50,19 @@ def _build_metadata(request: Request, resource: str) -> ProtectedResourceMetadat
 
 
 def _origin(request: Request) -> str:
-    """Return `scheme://host` as the client addressed the service (the `Host` header wins)."""
+    """Return the configured public origin, or the request's own origin when none is configured."""
     host = request.headers.get("host", request.url.netloc)
-    return f"{request.url.scheme}://{host}"
+    return resolve_public_origin(
+        request.app.state.config.public_url, scheme=request.url.scheme, host=host
+    )
 
 
 def protected_resource_metadata(request: Request) -> ProtectedResourceMetadata:
     """Return the RFC 9728 protected-resource metadata for authenticating to this service.
 
-    `resource` is derived from the live request (scheme + host), never hardcoded, so it is correct
-    under a local bind, a NodePort, and behind a TLS-terminating ingress alike. The document
+    `resource` is the configured public origin (`PS_PUBLIC_URL`), so no request header can change
+    it. Only while the local-test bypass runs without a configured origin is it derived from the
+    live request (scheme + host). The document
     names the OIDC issuer as the authorization server and lists the advertised scopes. When the
     service runs in the local-test bypass there is no issuer, so the server and scope lists are
     empty rather than the call failing.
@@ -68,7 +72,7 @@ def protected_resource_metadata(request: Request) -> ProtectedResourceMetadata:
             its application state.
 
     Returns:
-        The metadata document: `resource` (this service's origin), `authorization_servers`,
+        The metadata document: `resource` (this service's public origin), `authorization_servers`,
         `scopes_supported` and, only when configured, `ps_cli_client_id` (omitted from the
         response body when unset).
 
@@ -90,7 +94,8 @@ def protected_resource_metadata_for_path(
     client given the MCP URL `https://<host>/mcp/` asks for
     `/.well-known/oauth-protected-resource/mcp/` and requires the document's `resource` to equal
     that URL. Only the MCP mount is a resource with its own path; any other suffix is a 404, so
-    the route never reflects arbitrary client-chosen paths into `resource`.
+    the route never reflects arbitrary client-chosen paths into `resource`. The origin part of
+    `resource` follows `protected_resource_metadata`.
 
     Args:
         request: The incoming request; the service's authentication configuration is read from
@@ -99,7 +104,7 @@ def protected_resource_metadata_for_path(
             trailing slash is accepted and echoed into `resource`.
 
     Returns:
-        The metadata document whose `resource` is the MCP URL as the client addressed it, with
+        The metadata document whose `resource` is the public origin plus the MCP path, with
         the same other fields as `protected_resource_metadata`.
 
     Raises:

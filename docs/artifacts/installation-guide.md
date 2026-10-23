@@ -175,7 +175,8 @@ The script does these things:
 3. It asks for the **owner's email**, unless `--owner-email <address>` or `AUTHZ_OWNER_EMAIL`
    gives it. An invalid address stops the run before any Azure call.
 4. It prints a `==> <step>` progress line at the start of each phase.
-5. It waits for Authentik after the Helm release.
+5. It waits for Authentik after the Helm release. The release sets `psService.publicUrl` to
+   `https://<public hostname>`.
 6. It creates the owner as an Authentik administrator. The username and email are the address
    you gave. **No password is set, prompted for, or logged.**
 7. It prints a summary.
@@ -750,7 +751,23 @@ echo '<access_token>' | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | .
 
 ## Upgrading an existing install
 
-**Applies to:** installs made before this flow existed.
+**Public URL (breaking change).** PS Service now requires its public origin. The Helm value
+`psService.publicUrl` (environment variable `PS_PUBLIC_URL`) is rendered into the Deployment,
+and the chart fails to render without it unless `psService.localTestBypass.enabled=true`. Set it
+**before** you upgrade:
+
+- Production: `https://<hostname>`, the public hostname of the install.
+- Evaluator: `https://<hostname>:30443`.
+
+`scripts/deploy-ps-prod.sh` and `scripts/deploy-ps-eval.sh` set it for you, so re-run the script
+before `scripts/ps-upgrade.sh`; on a production release without the value, `ps-upgrade.sh` stops
+and names it.
+If you run `helm upgrade` yourself, add `--set psService.publicUrl=https://<hostname>`. The value
+has no path, query or fragment, and uses `https` unless the local-test bypass is on. See the
+[Helm Chart Values
+Reference](./helm-chart-values-reference.md).
+
+**Authentik API token.** **Applies to:** installs made before this flow existed.
 
 Those installs used a fixed placeholder as the API token that PS Service sends to Authentik
 (`ps-service-authentik-dev-token`). No Authentik token matched it. These items are gone:

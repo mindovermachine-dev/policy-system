@@ -120,3 +120,25 @@ def resolve_auth_context(
         jwks_uri=jwks_uri,
         allowed_algorithms=allowed_algorithms,
     )
+
+
+def require_public_url_configured(config: ServiceConfig) -> None:
+    """Fail closed unless the service's public origin is configured or the bypass is active.
+
+    Args:
+        config: The service configuration; reads `is_local_test_bypass_active` and `public_url`.
+
+    Returns:
+        `None` when the bypass is active or `public_url` is set.
+
+    Raises:
+        AuthConfigurationError: The bypass is inactive and `public_url` is unset; the message
+            names `PS_PUBLIC_URL` and the bypass as the local-only alternative.
+    """
+    if config.is_local_test_bypass_active or config.public_url is not None:
+        return
+    message = (
+        "PS_PUBLIC_URL is unset; set it to the service's public origin (https://host[:port]), "
+        f"or set {_LOCAL_TEST_BYPASS_VAR}=true for local-only evaluation."
+    )
+    raise AuthConfigurationError(message)

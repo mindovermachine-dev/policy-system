@@ -630,3 +630,28 @@ tests:
       # POSTGRES_PASSWORD is the key of the admin Secret (and only of it).
       - notExists:
           path: spec.template.spec.containers[0].env[?(@.valueFrom.secretKeyRef.key=="POSTGRES_PASSWORD")]
+
+  - it: PS_PUBLIC_URL equals psService.publicUrl when set
+    set:
+      psService.publicUrl: https://ps.example.com:30443
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PUBLIC_URL")].value
+          value: https://ps.example.com:30443
+
+  - it: render with localTestBypass.enabled=false and no publicUrl fails naming the value
+    set:
+      llm.provider: ollama
+      psService.localTestBypass.enabled: false
+      psService.auth.issuer: https://example-issuer.test
+      psService.auth.audience: ps-service
+      psService.authzBootstrapOwner.subject: first-owner-subject
+      psService.authzBootstrapOwner.issuer: https://example-issuer.test
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.publicUrl
+
+  - it: localTestBypass.enabled=true with no publicUrl renders without PS_PUBLIC_URL
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PUBLIC_URL")]

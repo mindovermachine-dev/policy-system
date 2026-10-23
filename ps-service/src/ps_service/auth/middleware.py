@@ -25,6 +25,7 @@ from ps_service.api.error_handlers import (
     _error_body,  # pyright: ignore[reportPrivateUsage]
 )
 from ps_service.auth.models import Principal
+from ps_service.auth.public_origin import resolve_public_origin
 
 if TYPE_CHECKING:
     from starlette.types import ASGIApp, Receive, Scope, Send
@@ -68,16 +69,17 @@ def _extract_bearer_token(headers: Headers) -> str | None:
     return token or None
 
 
-def _resource_metadata_url(scope: Scope) -> str:
+def _resource_metadata_url(scope: Scope, public_url: str | None) -> str:
     """Build the `resource_metadata` URL for the `WWW-Authenticate` header.
 
-    Derived from the request itself (scheme + host), not hardcoded, so it works identically under
-    a local dev bind, a `kind` NodePort, and a production ClusterIP plus Ingress.
+    Built from the configured public origin. Only when none is configured (the local-test
+    bypass) is the origin derived from the request's scheme and `Host` header.
     """
     headers = Headers(scope=scope)
     scheme = scope.get("scheme", "http")
     host = headers.get("host", "")
-    return f"{scheme}://{host}{_PROTECTED_RESOURCE_PATH}"
+    origin = resolve_public_origin(public_url, scheme=scheme, host=host)
+    return f"{origin}{_PROTECTED_RESOURCE_PATH}"
 
 
 class RestAuthMiddleware:
@@ -97,6 +99,7 @@ class RestAuthMiddleware:
         *,
         verifier: PsTokenVerifier | None,
         auth_context: AuthContext | None,
+        public_url: str | None,
     ) -> None:
         """Wrap `app` with the bearer-token gate.
 
@@ -107,6 +110,8 @@ class RestAuthMiddleware:
                 `None`.
             auth_context: The `AuthContext` the verifier was built from, or `None` under the
                 bypass; stored for symmetry with the MCP-side wiring and not read by this class.
+            public_url: The configured public origin named in the 401 challenge, or `None` to
+                derive it from the request (local-test bypass only).
 
         Side Effects:
             None; the instance only stores its arguments.
@@ -114,6 +119,7 @@ class RestAuthMiddleware:
         self._app = app
         self._verifier = verifier
         self._auth_context = auth_context
+        self._public_url = public_url
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Gate one ASGI connection: pass it on if authorised, otherwise answer 401.
@@ -176,20 +182,20 @@ class RestAuthMiddleware:
         """Send the fixed 401 body with a `WWW-Authenticate` header naming the metadata URL.
 
         Args:
-            scope: The ASGI connection scope (used to derive the metadata URL).
+            scope: The ASGI connection scope (used to derive the metadata URL when no public
+                origin is configured).
             receive: The ASGI receive callable.
             send: The ASGI send callable the response is written to.
 
         Side Effects:
             Writes a complete 401 JSON response to `send`.
         """
+        metadata_url = _resource_metadata_url(scope, self._public_url)
         response = JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content=_error_body(
                 code=_UNAUTHENTICATED_CODE, message=_UNAUTHENTICATED_MESSAGE, run_id=None
             ),
-            headers={
-                "WWW-Authenticate": f'Bearer resource_metadata="{_resource_metadata_url(scope)}"'
-            },
+            headers={"WWW-Authenticate": f'Bearer resource_metadata="{metadata_url}"'},
         )
         await response(scope, receive, send)

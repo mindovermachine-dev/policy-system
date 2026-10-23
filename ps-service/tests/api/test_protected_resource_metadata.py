@@ -37,6 +37,12 @@ if TYPE_CHECKING:
 
 _AUDIENCE = "ps-service"
 _PATH = "/.well-known/oauth-protected-resource"
+_PUBLIC_URL = "https://ps.example.com:30443"
+_FORGED_HEADERS = {
+    "Host": "evil.example.net",
+    "X-Forwarded-Host": "evil.example.net",
+    "X-Forwarded-Proto": "http",
+}
 
 
 def _config(provider: MockOidcProvider | None, **overrides: object) -> ServiceConfig:
@@ -57,6 +63,7 @@ def _config(provider: MockOidcProvider | None, **overrides: object) -> ServiceCo
         defaults["auth_audience"] = _AUDIENCE
         defaults["authz_bootstrap_owner_subject"] = "first-owner-subject"
         defaults["authz_bootstrap_owner_issuer"] = provider.issuer
+        defaults["public_url"] = _PUBLIC_URL
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
 
@@ -72,7 +79,7 @@ def test_returns_200_with_rfc9728_shape_and_no_cli_client_id_when_unset(
     body = response.json()
     assert body["authorization_servers"] == [mock_oidc_provider.issuer]
     assert body["scopes_supported"] == []
-    assert body["resource"].startswith("http://")
+    assert body["resource"] == _PUBLIC_URL
     assert "ps_cli_client_id" not in body
 
 
@@ -155,18 +162,49 @@ def test_path_specific_document_for_the_mcp_url_names_that_url_as_the_resource(
 
         assert response.status_code == 200
         body = response.json()
-        assert body["resource"] == f"http://testserver/{suffix}"
+        assert body["resource"] == f"{_PUBLIC_URL}/{suffix}"
         assert body["authorization_servers"] == [mock_oidc_provider.issuer]
 
 
-def test_path_specific_document_uses_the_forwarded_scheme_when_trusted(
+def test_resource_is_the_configured_origin_whatever_the_request_headers_claim(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    client = TestClient(create_app(_config(mock_oidc_provider)), base_url="https://ps.example.com")
+    client = TestClient(create_app(_config(mock_oidc_provider)))
 
-    body = client.get(f"{_PATH}/mcp/").json()
+    body = client.get(_PATH, headers=_FORGED_HEADERS).json()
 
-    assert body["resource"] == "https://ps.example.com/mcp/"
+    assert body["resource"] == _PUBLIC_URL
+
+
+def test_path_specific_resource_is_the_configured_origin_whatever_the_request_headers_claim(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    client = TestClient(create_app(_config(mock_oidc_provider)))
+
+    body = client.get(f"{_PATH}/mcp", headers=_FORGED_HEADERS).json()
+
+    assert body["resource"] == f"{_PUBLIC_URL}/mcp"
+
+
+def test_local_test_mode_without_a_public_url_derives_the_origin_from_the_request() -> None:
+    client = TestClient(create_app(_config(None)))
+
+    assert client.get(_PATH).json()["resource"] == "http://testserver"
+    assert client.get(f"{_PATH}/mcp").json()["resource"] == "http://testserver/mcp"
+
+
+def test_local_test_mode_without_a_public_url_uses_the_scheme_of_the_request() -> None:
+    client = TestClient(create_app(_config(None)), base_url="https://ps.example.com")
+
+    assert client.get(f"{_PATH}/mcp/").json()["resource"] == "https://ps.example.com/mcp/"
+
+
+def test_local_test_mode_with_a_public_url_uses_the_configured_origin() -> None:
+    client = TestClient(create_app(_config(None, public_url="http://localhost:8000")))
+
+    body = client.get(_PATH, headers=_FORGED_HEADERS).json()
+
+    assert body["resource"] == "http://localhost:8000"
 
 
 def test_path_specific_document_is_404_for_any_non_mcp_path(

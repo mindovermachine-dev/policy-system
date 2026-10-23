@@ -62,6 +62,12 @@ def _authentik(values: dict[str, object]) -> dict[str, str]:
     return cast("dict[str, str]", ps_service["authentik"])
 
 
+def _public_url(values: dict[str, object]) -> str:
+    """Narrows `values["psService"]["publicUrl"]` like `_auth` narrows `auth`."""
+    ps_service = cast("dict[str, object]", values["psService"])
+    return cast("str", ps_service["publicUrl"])
+
+
 def _bootstrap_owner(values: dict[str, object]) -> dict[str, str]:
     """Narrows `values["psService"]["authzBootstrapOwner"]` the same way `_auth` narrows
     `values["psService"]["auth"]`.
@@ -216,6 +222,7 @@ def test_rerun_only_compares_the_nine_script_set_fields_not_falkordb_or_llm_prov
                 "auth": dict(first_auth),
                 "authzBootstrapOwner": _bootstrap_owner(first_values),
                 "authentik": dict(_authentik(first_values)),
+                "publicUrl": _public_url(first_values),
                 "service": {"type": "ClusterIP"},
             },
             "falkordb": {
@@ -253,6 +260,7 @@ def test_changed_scopes_triggers_a_new_helm_upgrade_call(
                 "auth": stale_auth,
                 "authzBootstrapOwner": _bootstrap_owner(first_values),
                 "authentik": dict(_authentik(first_values)),
+                "publicUrl": _public_url(first_values),
             },
         },
         release=HELM_RELEASE_NAME,
@@ -304,6 +312,47 @@ def test_fresh_release_splits_the_authentik_urls_in_cluster_api_and_public_link(
     assert authentik["publicUrl"] == f"https://{issuer_host}/auth"
 
 
+def test_fresh_release_sets_the_public_url_to_the_https_origin_of_the_public_hostname(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _seed(deploy_ps_fixture)
+
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
+    assert values is not None
+    issuer_host = _auth(values)["issuer"].removeprefix("https://").split("/", maxsplit=1)[0]
+    assert _public_url(values) == f"https://{issuer_host}"
+
+
+def test_a_release_deployed_without_a_public_url_triggers_a_new_helm_upgrade_call(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _seed(deploy_ps_fixture)
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+    first_values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
+    assert first_values is not None
+    calls_after_first_run = len(_upgrade_calls(deploy_ps_fixture))
+    deploy_ps_fixture.seed_helm_release(
+        {
+            "llm": {"existingSecret": LLM_SECRET_NAME},
+            "psService": {
+                "auth": dict(_auth(first_values)),
+                "authzBootstrapOwner": _bootstrap_owner(first_values),
+                "authentik": dict(_authentik(first_values)),
+            },
+        },
+        release=HELM_RELEASE_NAME,
+    )
+
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    assert len(_upgrade_calls(deploy_ps_fixture)) == calls_after_first_run + 1
+    values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
+    assert values is not None
+    assert _public_url(values).startswith("https://")
+
+
 def test_rerun_with_a_changed_owner_email_triggers_a_new_helm_upgrade_call(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
@@ -337,6 +386,7 @@ def test_a_changed_authentik_url_triggers_a_new_helm_upgrade_call(
                 "auth": dict(_auth(first_values)),
                 "authzBootstrapOwner": _bootstrap_owner(first_values),
                 "authentik": stale,
+                "publicUrl": _public_url(first_values),
             },
         },
         release=HELM_RELEASE_NAME,

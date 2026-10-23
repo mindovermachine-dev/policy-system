@@ -609,8 +609,8 @@ authentik_issuer() {
 # checksum that restarts it on a rotated leaf), PS Service's CA-only Secret, the issuer/audience/
 # client for ps-cli, the bootstrap owner (subject == the owner's email, issuer == the issuer
 # above), the in-cluster Authentik base URL PS Service calls for invitations with the public
-# address handed to invitees, and the one origin the approval page is served from (the proxy
-# on the configured name).
+# address handed to invitees, and the one origin PS Service publishes for itself and serves the
+# approval page from (the proxy on the configured name).
 release_values_json() {
   local host="$1" issuer="$2" checksum="$3"
   jq -n --arg llm "$LLM_SECRET_NAME" --arg tls "$TLS_SECRET_NAME" --arg ca "$CA_SECRET_NAME" \
@@ -624,6 +624,7 @@ release_values_json() {
       authentik: {enabled: true},
       psService: {localTestBypass: {enabled: false},
         localCa: {secretName: $ca},
+        publicUrl: $origin,
         passkeySigning: {allowedOrigins: [$origin]},
         authentikHostname: $host, authentikHostAliasIP: $ip,
         auth: {issuer: $issuer, audience: $app, cliClientId: $app, scopes: $scopes},

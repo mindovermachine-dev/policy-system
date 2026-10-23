@@ -30,6 +30,7 @@ def auth_enabled_config(**overrides: object) -> ServiceConfig:
         "authz_bootstrap_owner_issuer": AUTH_ISSUER,
         "authentik_api_token": "test-authentik-token",
         "authentik_base_url": "https://authentik.example.com",
+        "public_url": "https://api.example.com",
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs

@@ -1096,3 +1096,68 @@ def test_load_config_rejects_a_malformed_allowed_origins_value(
 
     with pytest.raises(ServiceConfigurationError, match="PS_PASSKEYSIGNING_ALLOWED_ORIGINS"):
         load_config()
+
+
+# --- PS_PUBLIC_URL ---------------------------------------------------------
+
+
+def test_load_config_without_public_url_yields_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset `PS_PUBLIC_URL` resolves to `None`; requiredness is checked at app startup."""
+    monkeypatch.delenv("PS_PUBLIC_URL", raising=False)
+
+    assert load_config().public_url is None
+
+
+def test_load_config_reads_an_https_public_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
+    monkeypatch.setenv("PS_PUBLIC_URL", "https://ps.example.com:30443")
+
+    assert load_config().public_url == "https://ps.example.com:30443"
+
+
+def test_load_config_accepts_an_http_public_url_in_local_test_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    monkeypatch.setenv("PS_PUBLIC_URL", "http://localhost:8000")
+
+    assert load_config().public_url == "http://localhost:8000"
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "",
+        "   ",
+        "ps.example.com",
+        "ps.example.com:8000",
+        "ftp://ps.example.com",
+        "https://ps.example.com/",
+        "https://ps.example.com/path",
+        "https://ps.example.com?x=1",
+        "https://ps.example.com#frag",
+        "https://",
+        "https://user@ps.example.com",
+        "https://ps.example.com:notaport",
+        "http://ps.example.com",
+    ],
+)
+def test_load_config_rejects_a_malformed_public_url(
+    invalid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A set value that is not `https://host[:port]` fails closed outside local-test mode."""
+    monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
+    monkeypatch.setenv("PS_PUBLIC_URL", invalid)
+
+    with pytest.raises(ServiceConfigurationError, match="PS_PUBLIC_URL"):
+        load_config()
+
+
+def test_load_config_rejects_a_public_url_with_a_path_in_local_test_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    monkeypatch.setenv("PS_PUBLIC_URL", "http://localhost:8000/api")
+
+    with pytest.raises(ServiceConfigurationError, match="PS_PUBLIC_URL"):
+        load_config()

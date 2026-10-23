@@ -43,7 +43,8 @@ fi
 
 RELEASE_VALUES = (
     '{"psService":{"auth":{"issuer":"https://idp/","audience":"a","cliClientId":"c","scopes":"s"},'
-    '"authzBootstrapOwner":{"subject":"sub","issuer":"https://idp/"}}}'
+    '"authzBootstrapOwner":{"subject":"sub","issuer":"https://idp/"},'
+    '"publicUrl":"https://ps.example.com"}}'
 )
 
 
@@ -125,6 +126,19 @@ def test_production_upgrade_refuses_a_release_without_auth_values(tmp_path: Path
 
     assert code == 1
     assert "psService.auth.issuer" in stderr
+    assert not any(call.startswith("upgrade ") for call in calls)
+
+
+def test_production_upgrade_refuses_a_release_without_a_public_url(tmp_path: Path) -> None:
+    release_values = (
+        '{"psService":{"auth":{"issuer":"https://idp/","audience":"a"},'
+        '"authzBootstrapOwner":{"subject":"sub","issuer":"https://idp/"}}}'
+    )
+
+    code, calls, stderr = _run_upgrade(tmp_path, context="aks-prod", release_values=release_values)
+
+    assert code == 1
+    assert "psService.publicUrl" in stderr
     assert not any(call.startswith("upgrade ") for call in calls)
 
 

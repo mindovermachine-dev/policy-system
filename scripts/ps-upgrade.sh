@@ -62,16 +62,16 @@ update_client() {
   "${REPO_ROOT}/ps-cli/install.sh"
 }
 
-# require_release_auth_issuer: refuses to upgrade a release that has no stored OIDC issuer.
-# Production values are reused from the release, so a missing issuer means there is nothing to
+# require_release_value <jq path>: refuses to upgrade a release that lacks a stored value.
+# Production values are reused from the release, so a missing value means there is nothing to
 # reuse (never deployed, or deployed without the deploy script) and the upgrade would silently
 # fall back to chart defaults.
-require_release_auth_issuer() {
-  local issuer
-  issuer="$(helm get values "$RELEASE_NAME" -o json | jq -r '.psService.auth.issuer')"
-  if [[ -z "$issuer" || "$issuer" == "null" ]]; then
-    print_error 'Could not read "%s" from the current release'"'"'s values -- refusing to upgrade\n' \
-      ".psService.auth.issuer"
+require_release_value() {
+  local path="$1" value
+  value="$(helm get values "$RELEASE_NAME" -o json | jq -r "$path")"
+  if [[ -z "$value" || "$value" == "null" ]]; then
+    print_error 'Could not read "%s" from the current release'"'"'s values -- refusing to upgrade. Fix: run scripts/deploy-ps-prod.sh first; it sets every value the new chart requires.\n' \
+      "$path"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -87,7 +87,8 @@ upgrade_local_test() {
 
 upgrade_production() {
   log_step "Checking the current release's auth values"
-  require_release_auth_issuer
+  require_release_value '.psService.auth.issuer'
+  require_release_value '.psService.publicUrl'
 
   log_step "Upgrading Policy System (Production)"
   set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"

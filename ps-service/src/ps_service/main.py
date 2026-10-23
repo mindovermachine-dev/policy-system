@@ -39,7 +39,7 @@ from ps_service.auth.protected_resource import (
     protected_resource_metadata,
     protected_resource_metadata_for_path,
 )
-from ps_service.auth.startup import resolve_auth_context
+from ps_service.auth.startup import require_public_url_configured, resolve_auth_context
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.startup import require_bootstrap_owner_configured
 from ps_service.config import ServiceConfig, load_config, missing_ingestion_config_fields
@@ -896,6 +896,7 @@ def _add_http_middleware(
     auth_context: AuthContext | None,
     max_request_body_bytes: int,
     metrics: MetricsHandle,
+    public_url: str | None,
 ) -> None:
     """Wire the four HTTP middleware layers; the last one added is the outermost.
 
@@ -908,13 +909,16 @@ def _add_http_middleware(
         max_request_body_bytes: The largest accepted `Content-Length`, in bytes.
         metrics: The app's metrics handle; its request-duration instrument feeds
             `MetricsMiddleware`.
+        public_url: The configured public origin the 401 challenge names, or `None`.
     """
     # `RestAuthMiddleware` is added *before* `_MaxBodySizeMiddleware` so the latter runs first of
     # the two: `add_middleware` makes the most-recently-added call the outermost, so an oversized
     # request gets a cheap 413 on its `Content-Length` header before any JWT/RSA verification work
     # happens -- there is no data dependency the other way (the size check never reads
     # `Authorization`), so this ordering costs nothing and avoids wasted verify work.
-    app.add_middleware(RestAuthMiddleware, verifier=verifier, auth_context=auth_context)
+    app.add_middleware(
+        RestAuthMiddleware, verifier=verifier, auth_context=auth_context, public_url=public_url
+    )
     app.add_middleware(_MaxBodySizeMiddleware, max_bytes=max_request_body_bytes)
     # Added last, so outermost: a gated request is answered before any size check or JWT work,
     # and tells an unauthenticated caller nothing beyond "not ready".
@@ -999,6 +1003,21 @@ async def _is_verified_caller(request: Request, verifier: PsTokenVerifier | None
     return bool(token) and await verifier.verify_token(token) is not None
 
 
+def _require_complete_startup_config(config: ServiceConfig) -> None:
+    """Fail closed on any startup configuration the process cannot run without.
+
+    Raises:
+        AccessRoleBootstrapConfigurationError: Unless the local-test bypass is active or both
+            `authz_bootstrap_owner_subject`/`_issuer` are set.
+        AuthentikCredentialConfigurationError: Unless both `authentik_api_token`/
+            `authentik_base_url` are set, regardless of the bypass.
+        AuthConfigurationError: Unless the local-test bypass is active or `public_url` is set.
+    """
+    require_bootstrap_owner_configured(config)
+    require_authentik_credential_configured(config)
+    require_public_url_configured(config)
+
+
 def create_app(
     config: ServiceConfig, *, pending_entries: Callable[[], int] | None = None
 ) -> FastAPI:
@@ -1042,7 +1061,9 @@ def create_app(
     `PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER` are both set: only the principal with that `(sub, iss)` is
     ever granted `SYSTEM_OWNER` by the access role store's first-owner bootstrap.
     `require_authentik_credential_configured(config)` carries no bypass exemption: it fails
-    unless `PS_AUTHENTIK_API_TOKEN` and `PS_AUTHENTIK_BASE_URL` are both set. `RestAuthMiddleware`
+    unless `PS_AUTHENTIK_API_TOKEN` and `PS_AUTHENTIK_BASE_URL` are both set.
+    `require_public_url_configured(config)` fails closed unless the bypass is active or
+    `PS_PUBLIC_URL` is set. `RestAuthMiddleware`
     is then wired to a `PsTokenVerifier` built from the auth context (or `None` when the bypass
     is active, in which case every request is let through unauthenticated). Every path other than
     `/health`, `/ready`, `/.well-known/*`, `/mcp*` (gated by the MCP SDK) and `/approvals/*`
@@ -1062,7 +1083,7 @@ def create_app(
 
     Raises:
         AuthConfigurationError: If the bypass is inactive and the authentication issuer or
-            audience is not configured.
+            audience is not configured, or the public URL is not configured.
         AccessRoleBootstrapConfigurationError: If the bypass is inactive and the bootstrap owner
             subject or issuer is not configured.
         AuthentikCredentialConfigurationError: If the Authentik API token or base URL is not
@@ -1165,20 +1186,17 @@ def create_app(
     # Resolved synchronously here too, right after `resolve_auth_context`, for the same reason:
     # a config-completeness fact that cannot change for the life of the process must fail before
     # `create_app` ever returns an app, not asynchronously after `TestClient`/uvicorn have
-    # started. Raises `AccessRoleBootstrapConfigurationError` (never returns a value) unless the
-    # local-test bypass is active or both `authz_bootstrap_owner_subject`/`_issuer` are set.
-    require_bootstrap_owner_configured(config)
-    # check it has no local-test-bypass exemption: raises `AuthentikCredentialConfigurationError`
-    # unless both `authentik_api_token`/`authentik_base_url` are set, regardless of
-    # `config.is_local_test_bypass_active`.
-    require_authentik_credential_configured(config)
+    # started.
+    _require_complete_startup_config(config)
     # One `PsTokenVerifier` instance per `create_app()` call, never module-level (no import-time
     # side effects) -- this exact instance is what both `RestAuthMiddleware` below and the MCP
     # `token_verifier=` wiring share, so there is one discovery fetch, one `PyJWKClient`, one JWKS
     # cache per process, never two parallel verifiers.
     verifier = PsTokenVerifier(auth_context) if auth_context is not None else None
     metrics = app.state.metrics = _build_app_metrics(config, pending_entries)
-    _add_http_middleware(app, verifier, auth_context, config.max_request_body_bytes, metrics)
+    _add_http_middleware(
+        app, verifier, auth_context, config.max_request_body_bytes, metrics, config.public_url
+    )
     _wire_http_surface(app)
 
     mcp_asgi_app = build_streamable_http_app(

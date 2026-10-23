@@ -166,11 +166,12 @@ helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/po
   --set psService.auth.issuer=https://<authentik-hostname>/application/o/<application-slug>/ \
   --set psService.auth.audience=<provider-client-id> \
   --set psService.auth.cliClientId=<provider-client-id> \
-  --set psService.auth.scopes="openid profile email offline_access"
+  --set psService.auth.scopes="openid profile email offline_access" \
+  --set psService.publicUrl=https://<ps-service-hostname>
 ```
 
 (Or set the equivalent `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE`/
-`PS_AUTH_CLI_CLIENT_ID`/`PS_AUTH_SCOPES` environment variables directly, if
+`PS_AUTH_CLI_CLIENT_ID`/`PS_AUTH_SCOPES`/`PS_PUBLIC_URL` environment variables directly, if
 not deploying via the Helm chart.) PS Service's own startup then performs
 OIDC discovery against the issuer above, confirming it can reach
 `<issuer>/.well-known/openid-configuration` and that the response advertises

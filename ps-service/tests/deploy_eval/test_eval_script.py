@@ -99,6 +99,7 @@ def test_fresh_run_deploys_once_with_owner_subject_issuer_and_base_url(
     assert ps["authentik"] == {"baseUrl": IN_CLUSTER_AUTH, "publicUrl": AUTH_BASE}
     assert ps["authentikHostname"] == HOST
     assert ps["authentikHostAliasIP"] == NODE_IP
+    assert ps["publicUrl"] == f"https://{HOST}:30443"
     assert ps["localTestBypass"] == {"enabled": False}
     assert values["authentik"]["enabled"] is True
     assert ps["localCa"] == {"secretName": "policy-system-local-ca"}
@@ -114,6 +115,7 @@ def test_the_release_pins_the_signing_origin_to_the_configured_name_and_proxy_po
 
     ps = eval_fixture.deployed_values()["psService"]
     assert ps["passkeySigning"] == {"allowedOrigins": ["https://ps.example.test:30443"]}
+    assert ps["publicUrl"] == "https://ps.example.test:30443"
     assert "localhost:8000" not in json.dumps(eval_fixture.deployed_values())
 
 

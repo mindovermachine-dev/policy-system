@@ -61,6 +61,7 @@ from ps_test_support.mock_oidc_provider import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+_PUBLIC_URL = "https://ps.example.com:30443"
 _AUDIENCE = "ps-service"
 
 
@@ -90,6 +91,7 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
         "authz_bootstrap_owner_issuer": provider.issuer,
         "authentik_api_token": "test-authentik-token",
         "authentik_base_url": "https://authentik.example.com",
+        "public_url": _PUBLIC_URL,
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
@@ -163,6 +165,26 @@ def _client_with_principal_capturing_handler(
     return client, override
 
 
+def test_challenge_names_the_configured_origin_whatever_the_request_headers_claim(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    client, _ = _client_with_fake_catalog_transport(mock_oidc_provider)
+
+    response = client.get(
+        "/catalog",
+        headers={
+            "Host": "evil.example.net",
+            "X-Forwarded-Host": "evil.example.net",
+            "X-Forwarded-Proto": "http",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == (
+        f'Bearer resource_metadata="{_PUBLIC_URL}/.well-known/oauth-protected-resource"'
+    )
+
+
 def test_no_authorization_header_returns_401_with_www_authenticate_and_handler_never_invoked(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
@@ -172,7 +194,7 @@ def test_no_authorization_header_returns_401_with_www_authenticate_and_handler_n
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == (
-        'Bearer resource_metadata="http://testserver/.well-known/oauth-protected-resource"'
+        f'Bearer resource_metadata="{_PUBLIC_URL}/.well-known/oauth-protected-resource"'
     )
     body = response.json()
     assert body == {

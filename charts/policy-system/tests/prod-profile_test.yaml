@@ -12,6 +12,7 @@ set:
   psService.auth.audience: ps-service
   psService.authzBootstrapOwner.subject: first-owner-subject
   psService.authzBootstrapOwner.issuer: https://example-issuer.test
+  psService.publicUrl: https://ps.example.com
 templates:
   - falkordb-deployment.yaml
   - falkordb-browser-service.yaml

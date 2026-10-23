@@ -1090,29 +1090,30 @@ ensure_llm_secret() {
 }
 
 # release_values_json <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>
-# <authentik_base_url> <authentik_public_url>: prints the JSON shape of the --set values this
-# script passes to `helm upgrade --install`, in the same structure `helm get values -o json`
-# returns -- lets ensure_release compare desired vs. deployed. Exactly 9 leaf fields:
+# <authentik_base_url> <authentik_public_url> <public_url>: prints the JSON shape of the --set
+# values this script passes to `helm upgrade --install`, in the same structure `helm get values
+# -o json` returns -- lets ensure_release compare desired vs. deployed. Exactly 10 leaf fields:
 # llm.existingSecret, psService.auth.{issuer,audience,cliClientId,scopes}, (issues #161/#165)
 # psService.authzBootstrapOwner.{subject,issuer} -- the owner's email and the issuer, both known
 # before Authentik exists -- and (issue #165, OD-1 = B) psService.authentik.{baseUrl,publicUrl}:
 # the in-cluster API address PS Service calls, and the public address used only for the
-# invitee-facing link.
+# invitee-facing link -- and psService.publicUrl, the origin PS Service publishes for itself.
 release_values_json() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4" owner_subject="$5" owner_issuer="$6"
-  local authentik_base_url="$7" authentik_public_url="$8"
+  local authentik_base_url="$7" authentik_public_url="$8" public_url="$9"
   jq -n --arg secret "$LLM_SECRET_NAME" --arg issuer "$issuer" --arg audience "$audience" \
     --arg cli "$cli_client_id" --arg scopes "$scopes" \
     --arg owner_subject "$owner_subject" --arg owner_issuer "$owner_issuer" \
     --arg base "$authentik_base_url" --arg public "$authentik_public_url" \
+    --arg ps_public "$public_url" \
     '{llm: {existingSecret: $secret},
       psService: {auth: {issuer: $issuer, audience: $audience, cliClientId: $cli, scopes: $scopes},
         authzBootstrapOwner: {subject: $owner_subject, issuer: $owner_issuer},
-        authentik: {baseUrl: $base, publicUrl: $public}}}'
+        authentik: {baseUrl: $base, publicUrl: $public}, publicUrl: $ps_public}}'
 }
 
 # ensure_release <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>
-# <authentik_base_url> <authentik_public_url>:
+# <authentik_base_url> <authentik_public_url> <public_url>:
 # write-if-changed against the currently deployed release's values (`helm get values`), since
 # plain `helm upgrade --install` has no built-in no-op detection of its own -- it creates a new
 # revision even when nothing changed. <audience> is the fixed Authentik application slug
@@ -1120,7 +1121,7 @@ release_values_json() {
 # <owner_issuer> the issuer (issue #165): rerunning with the same values is a no-op here, and
 # ps_service's own "grantable once" bootstrap is unaffected either way.
 #
-# Compares only the 9 fields release_values_json sets, extracted from `helm get values`'s output
+# Compares only the 10 fields release_values_json sets, extracted from `helm get values`'s output
 # via the same jq shape, rather than the whole object -- `helm get values` also echoes back
 # everything from `-f values-prod.yaml` (falkordb.*, llm.provider, psService.service.type), which
 # this script never sets itself via --set and doesn't need to compare; a whole-object comparison
@@ -1130,10 +1131,11 @@ release_values_json() {
 ensure_release() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4"
   local owner_subject="$5" owner_issuer="$6" authentik_base_url="$7" authentik_public_url="$8"
+  local public_url="$9"
   local desired_json
   set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"
   desired_json="$(release_values_json "$issuer" "$audience" "$cli_client_id" "$scopes" \
-    "$owner_subject" "$owner_issuer" "$authentik_base_url" "$authentik_public_url")"
+    "$owner_subject" "$owner_issuer" "$authentik_base_url" "$authentik_public_url" "$public_url")"
   if helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
     local current_json current_subset_json
     current_json="$(helm get values "$HELM_RELEASE_NAME" -o json)"
@@ -1144,7 +1146,8 @@ ensure_release() {
           authzBootstrapOwner: {subject: .psService.authzBootstrapOwner.subject,
             issuer: .psService.authzBootstrapOwner.issuer},
           authentik: {baseUrl: .psService.authentik.baseUrl,
-            publicUrl: .psService.authentik.publicUrl}}}' \
+            publicUrl: .psService.authentik.publicUrl},
+          publicUrl: .psService.publicUrl}}' \
       <<< "$current_json")"
     if [[ "$(jq -S . <<< "$current_subset_json")" == "$(jq -S . <<< "$desired_json")" ]]; then
       return 0
@@ -1161,6 +1164,7 @@ ensure_release() {
     --set psService.authzBootstrapOwner.issuer="$owner_issuer" \
     --set psService.authentik.baseUrl="$authentik_base_url" \
     --set psService.authentik.publicUrl="$authentik_public_url" \
+    --set psService.publicUrl="$public_url" \
     --wait --wait-for-jobs --timeout 10m >/dev/null
   made_changes=true
 }
@@ -1751,7 +1755,8 @@ main() {
   local issuer
   issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
   ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES" \
-    "$OWNER_EMAIL" "$issuer" "$AUTHENTIK_IN_CLUSTER_BASE_URL" "https://${public_hostname}/auth"
+    "$OWNER_EMAIL" "$issuer" "$AUTHENTIK_IN_CLUSTER_BASE_URL" "https://${public_hostname}/auth" \
+    "https://${public_hostname}"
 
   # Issue #165: the owner (an Authentik admin, username == email, no password) and the
   # single-use passkey-enrolment link. The port-forward is killed however the script ends.
