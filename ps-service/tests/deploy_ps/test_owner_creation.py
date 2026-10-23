@@ -61,15 +61,17 @@ def test_authentik_is_awaited_before_the_owner_is_created(
 
     deploy_ps_fixture.run_deploy("--yes", expect=0)
 
-    kubectl = deploy_ps_fixture.read_kubectl_log()
+    events = deploy_ps_fixture.read_event_log()
+    upgrade = next(
+        i for i, c in enumerate(events) if c.startswith("helm upgrade --install policy-system ")
+    )
     rollout = next(
-        i for i, c in enumerate(kubectl) if f"rollout status deployment/{AUTHENTIK_SERVICE}" in c
+        i
+        for i, c in enumerate(events)
+        if f"kubectl rollout status deployment/{AUTHENTIK_SERVICE}" in c
     )
-    forward = next(i for i, c in enumerate(kubectl) if c.startswith("port-forward"))
-    ingress = next(
-        i for i, c in enumerate(kubectl) if c == f"apply -f - kind=Ingress name={AUTHENTIK_SERVICE}"
-    )
-    assert ingress < rollout < forward
+    forward = next(i for i, c in enumerate(events) if c.startswith("kubectl port-forward"))
+    assert upgrade < rollout < forward
 
 
 def test_the_printed_link_carries_the_public_authority_once(

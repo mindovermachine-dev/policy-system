@@ -24,7 +24,7 @@ pattern rather than folded into the same substring set.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from conftest import DeployPsFixture
@@ -39,6 +39,10 @@ HELM_RELEASE_NAME = "policy-system"
 CERT_MANAGER_RELEASE_NAME = "cert-manager"
 CLUSTER_ISSUER_NAME = "letsencrypt-prod"
 PS_SERVICE_NAME = f"{HELM_RELEASE_NAME}-ps-service"
+# The fake `az cognitiveservices account create`'s default initial key values -- the secret
+# material a leaking summary line would expose.
+FIXTURE_KEY1 = "FAKE-KEY-1-INITIAL"
+FIXTURE_KEY2 = "FAKE-KEY-2-INITIAL"
 
 # A call's own VERB (not its command family) that marks it as a mutating, non-idempotent-by-
 # rerun operation -- IMPL_SLICE_18's own resolved filter.
@@ -176,10 +180,11 @@ def test_fresh_subscription_completes_end_to_end_provisioning_everything(
     )
     assert cluster_issuer_manifest is not None, "ClusterIssuer was never applied"
 
-    # PS Service Ingress + closing summary.
-    assert deploy_ps_fixture.read_kubectl_applied("Ingress", PS_SERVICE_NAME) is not None, (
-        "PS Service Ingress was never applied"
-    )
+    # The chart-owned Ingress is enabled by the release; the script applies no Ingress manifest.
+    release_values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
+    assert release_values is not None
+    assert cast("dict[str, object]", release_values["ingress"])["enabled"] is True
+    assert deploy_ps_fixture.read_kubectl_applied("Ingress", PS_SERVICE_NAME) is None
     assert "PS Service: https://" in run.stdout, "summary line never printed the HTTPS URL"
 
 
@@ -255,8 +260,8 @@ def test_ingress_and_certificate_steps_run_before_the_helm_release_wait(
 ) -> None:
     """`helm --wait` only returns once PS Service is Ready, and PS Service's startup
     does OIDC discovery over the public HTTPS issuer, which needs the Ingress and certificate.
-    cert-manager, the ClusterIssuer and both Ingresses must therefore be set up before the
-    Helm release step.
+    cert-manager and the ClusterIssuer must therefore be set up before the Helm release step, and
+    the script applies no Ingress itself (the release renders them).
     """
     _seed(deploy_ps_fixture)
     run = deploy_ps_fixture.run_deploy("--yes", expect=0)
@@ -265,7 +270,18 @@ def test_ingress_and_certificate_steps_run_before_the_helm_release_wait(
     for step in (
         "==> Installing cert-manager",
         "==> Ensuring the Let's Encrypt ClusterIssuer",
-        "==> Ensuring the PS Service Ingress",
-        "==> Ensuring the Authentik Ingress",
     ):
         assert run.stderr.index(step) < release_index, f"{step!r} ran after the Helm release"
+    assert [line for line in deploy_ps_fixture.read_kubectl_log() if "kind=Ingress" in line] == []
+
+
+def test_summary_line_prints_the_https_url_never_a_secret_value(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _seed(deploy_ps_fixture)
+
+    run = deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    assert "PS Service: https://" in run.stdout
+    assert FIXTURE_KEY1 not in run.output
+    assert FIXTURE_KEY2 not in run.output

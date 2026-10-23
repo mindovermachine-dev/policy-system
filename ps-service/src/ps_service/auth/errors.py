@@ -21,8 +21,8 @@ class AuthDiscoveryError(Exception):
     """OIDC discovery against the configured issuer failed, or its response is unusable.
 
     Raised by `ps_service.auth.startup.resolve_auth_context` when the discovery document fetch
-    fails, `jwks_uri` is absent from the response, or the issuer advertises no asymmetric
-    algorithm this component recognises. The message names the issuer, never the raw underlying
-    transport or parse error (which is chained as `__cause__` for fetch failures). The caller
-    should verify the issuer URL and its reachability, then restart.
+    keeps failing until its retry budget is spent, `jwks_uri` is absent from the response, or the
+    issuer advertises no asymmetric algorithm this component recognises. The message names the
+    issuer, never the raw underlying transport or parse error (which is chained as `__cause__` for
+    fetch failures). The caller should verify the issuer URL and its reachability, then restart.
     """

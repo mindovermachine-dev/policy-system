@@ -9,6 +9,8 @@ bypass) the moment the app exists, since the middleware runs per request whether
 
 from __future__ import annotations
 
+import sys
+import time
 import urllib.request
 from typing import TYPE_CHECKING, cast
 
@@ -21,9 +23,14 @@ from ps_service.auth.errors import AuthConfigurationError, AuthDiscoveryError
 from ps_service.auth.models import AuthContext
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import Any
+
     from ps_service.config import ServiceConfig
 
 _LOCAL_TEST_BYPASS_VAR = "PS_SERVICE_LOCAL_TEST_BYPASS"
+_INITIAL_BACKOFF_SECONDS = 1.0
+_MAX_BACKOFF_SECONDS = 30.0
 
 
 def _format_missing_auth_config_message(missing: list[str]) -> str:
@@ -36,8 +43,61 @@ def _format_missing_auth_config_message(missing: list[str]) -> str:
     )
 
 
+def _report_retry(attempt: int, retry_in_seconds: float, error: Exception) -> None:
+    """Write one line to stderr for a failed discovery attempt that will be retried.
+
+    The log facade is not configured yet when startup resolves authentication, so this uses
+    stderr directly. Only the error class is written, never the raw error text.
+    """
+    sys.stderr.write(
+        f"component=auth action=oidc_discovery outcome=retrying attempt={attempt} "
+        f"retry_in_seconds={retry_in_seconds:g} error_class={type(error).__name__}\n"
+    )
+
+
+def _fetch_with_retry(
+    issuer: str,
+    *,
+    transport: DiscoveryTransport,
+    budget_seconds: int,
+    sleep: Callable[[float], None],
+    monotonic: Callable[[], float],
+) -> dict[str, Any]:
+    """Fetch the discovery document, retrying failures with doubling backoff within a budget.
+
+    Backoff starts at one second, doubles and is capped at thirty seconds; the last sleep is
+    shortened so the total sleeping never exceeds `budget_seconds`. A budget of zero makes one
+    attempt. The failure of the final attempt is chained on the raised error.
+
+    Raises:
+        AuthDiscoveryError: Every attempt within the budget failed; the message names the issuer.
+    """
+    started = monotonic()
+    delay = _INITIAL_BACKOFF_SECONDS
+    attempt = 1
+    while True:
+        try:
+            return fetch_discovery_document(issuer, transport=transport)
+        except Exception as exc:
+            remaining = budget_seconds - (monotonic() - started)
+            if remaining <= 0:
+                raise AuthDiscoveryError(
+                    f"OIDC discovery failed for issuer {issuer!r}. "
+                    "Verify the issuer URL is reachable and correctly configured."
+                ) from exc
+            pause = min(delay, remaining)
+            _report_retry(attempt, pause, exc)
+            sleep(pause)
+            delay = min(delay * 2, _MAX_BACKOFF_SECONDS)
+            attempt += 1
+
+
 def resolve_auth_context(
-    config: ServiceConfig, *, transport: DiscoveryTransport = urllib.request.urlopen
+    config: ServiceConfig,
+    *,
+    transport: DiscoveryTransport = urllib.request.urlopen,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> AuthContext | None:
     """Resolve `config` into the process-lifetime `AuthContext`, failing closed when it cannot.
 
@@ -50,12 +110,19 @@ def resolve_auth_context(
           non-empty `jwks_uri`, and computes the asymmetric-algorithm allow-list from the
           advertised algorithms (non-string entries are ignored); an empty allow-list is a
           failure.
+        - A failed fetch is retried with doubling backoff (1 s, capped at 30 s) until
+          `auth_discovery_retry_budget_seconds` is spent, then fails closed; a budget of zero
+          makes one attempt. Only the fetch is retried: a missing issuer or audience, a document
+          without `jwks_uri` and a document without a supported algorithm fail at once.
 
     Args:
         config: The service configuration; reads `is_local_test_bypass_active`, `auth_issuer`,
-            `auth_audience`, `auth_cli_client_id` and `auth_scopes`.
+            `auth_audience`, `auth_discovery_retry_budget_seconds`, `auth_cli_client_id` and
+            `auth_scopes`.
         transport: HTTP transport for the discovery fetch; defaults to the real
             `urllib.request.urlopen` and is overridden only by tests.
+        sleep: Pause between discovery attempts; defaults to `time.sleep`.
+        monotonic: Clock that measures the retry budget; defaults to `time.monotonic`.
 
     Returns:
         The resolved `AuthContext`, or `None` when the local-test bypass is active (no
@@ -63,13 +130,14 @@ def resolve_auth_context(
 
     Raises:
         AuthConfigurationError: The bypass is inactive and the issuer or audience is unset.
-        AuthDiscoveryError: The discovery fetch failed (the cause is chained), `jwks_uri` is
-            missing or empty, or the issuer advertises no supported asymmetric algorithm. The
-            message names the issuer.
+        AuthDiscoveryError: The discovery fetch kept failing until the retry budget was spent
+            (the last cause is chained), `jwks_uri` is missing or empty, or the issuer advertises
+            no supported asymmetric algorithm. The message names the issuer.
 
     Side Effects:
-        One outbound HTTP GET to the issuer's discovery endpoint when the bypass is inactive and
-        configuration is complete; none otherwise.
+        One or more outbound HTTP GETs to the issuer's discovery endpoint, with sleeps totalling
+        at most the retry budget between them, when the bypass is inactive and configuration is
+        complete; none otherwise. Each retried failure writes one line to stderr.
     """
     if config.is_local_test_bypass_active:
         return None
@@ -86,13 +154,13 @@ def resolve_auth_context(
         raise AuthConfigurationError(_format_missing_auth_config_message(missing))
 
     issuer = config.auth_issuer
-    try:
-        document = fetch_discovery_document(issuer, transport=transport)
-    except Exception as exc:
-        raise AuthDiscoveryError(
-            f"OIDC discovery failed for issuer {issuer!r}. "
-            "Verify the issuer URL is reachable and correctly configured."
-        ) from exc
+    document = _fetch_with_retry(
+        issuer,
+        transport=transport,
+        budget_seconds=config.auth_discovery_retry_budget_seconds,
+        sleep=sleep,
+        monotonic=monotonic,
+    )
 
     jwks_uri: object = document.get("jwks_uri")
     if not isinstance(jwks_uri, str) or not jwks_uri:

@@ -1,0 +1,300 @@
+suite: ps-service ingress
+templates:
+  - ingress-ps-service.yaml
+release:
+  name: policy-system
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing for the evaluator proxy profile
+    set:
+      proxy.enabled: true
+      proxy.tls.secretName: tls
+      psService.authentikHostname: ps.test
+      psService.localTestBypass.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: names the Ingress after the PS Service Service and routes to its http port
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: metadata.name
+          value: policy-system-ps-service
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: policy-system-ps-service
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.name
+          value: http
+
+  - it: paths equal exactly the entries of ps-service-public-paths.txt as prefixes
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+    asserts:
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 11
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /health
+      - equal:
+          path: spec.rules[0].http.paths[0].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /ready
+      - equal:
+          path: spec.rules[0].http.paths[1].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[2].path
+          value: /.well-known/
+      - equal:
+          path: spec.rules[0].http.paths[2].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[3].path
+          value: /catalog
+      - equal:
+          path: spec.rules[0].http.paths[3].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[4].path
+          value: /ingestions
+      - equal:
+          path: spec.rules[0].http.paths[4].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[5].path
+          value: /restorations
+      - equal:
+          path: spec.rules[0].http.paths[5].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[6].path
+          value: /exports
+      - equal:
+          path: spec.rules[0].http.paths[6].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[7].path
+          value: /change-checks
+      - equal:
+          path: spec.rules[0].http.paths[7].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[8].path
+          value: /near-misses
+      - equal:
+          path: spec.rules[0].http.paths[8].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[9].path
+          value: /approvals
+      - equal:
+          path: spec.rules[0].http.paths[9].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[10].path
+          value: /mcp
+      - equal:
+          path: spec.rules[0].http.paths[10].pathType
+          value: Prefix
+
+  - it: has no catch-all rule and forwards neither /metrics nor anything below it
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+    asserts:
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: policy-system-ps-service
+                port:
+                  name: http
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: policy-system-ps-service
+                port:
+                  name: http
+      - lengthEqual:
+          path: spec.rules
+          count: 1
+
+  - it: uses the host of psService.publicUrl without its port for the rule and the tls hosts
+    set:
+      ingress.enabled: true
+      ingress.tls.secretName: policy-system-ps-service-tls
+      psService.publicUrl: https://ps.example.com:8443
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: ps.example.com
+      - equal:
+          path: spec.tls[0].hosts
+          value:
+            - ps.example.com
+
+  - it: passes the class, annotations and tls secret through unchanged
+    set:
+      ingress.enabled: true
+      ingress.className: webapprouting.kubernetes.azure.com
+      ingress.annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+        example.com/other: value
+      ingress.tls.secretName: policy-system-ps-service-tls
+      psService.publicUrl: https://ps.example.com
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: webapprouting.kubernetes.azure.com
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: metadata.annotations["example.com/other"]
+          value: value
+      - equal:
+          path: spec.tls[0].secretName
+          value: policy-system-ps-service-tls
+
+  - it: renders no tls block and no class when their values are empty
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+    asserts:
+      - notExists:
+          path: spec.tls
+      - notExists:
+          path: spec.ingressClassName
+
+  - it: fails naming psService.publicUrl when ingress is enabled without it, even under the bypass
+    set:
+      ingress.enabled: true
+      psService.localTestBypass.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.publicUrl
+
+  - it: fails for a NodePort Service type with ingress enabled
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      psService.service.type: NodePort
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.service\.type
+
+  - it: fails for a LoadBalancer Service type with ingress enabled
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      psService.service.type: LoadBalancer
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.service\.type
+
+  - it: renders for a ClusterIP Service type
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      psService.service.type: ClusterIP
+    asserts:
+      - isKind:
+          of: Ingress
+
+  - it: derives the proxy-body-size annotation from the default maximum request body as a string
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          value: "157286400"
+      - matchRegex:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          pattern: ^[0-9]+$
+
+  - it: derives the proxy-body-size annotation as 1.5 times an overridden maximum request body
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      psService.maxRequestBodyBytes: 200000000
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          value: "300000000"
+      - matchRegex:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          pattern: ^[0-9]+$
+
+  - it: rounds the proxy-body-size annotation up for an odd maximum request body
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      psService.maxRequestBodyBytes: 100000001
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          value: "150000002"
+
+  - it: keeps user annotations next to the derived proxy-body-size annotation
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      ingress.annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          value: "157286400"
+
+  - it: fails naming psService.maxRequestBodyBytes when proxy-body-size is set in ingress.annotations
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      ingress.annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size: 200m
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.maxRequestBodyBytes
+
+  - it: fails naming psService.maxRequestBodyBytes for zero
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      psService.maxRequestBodyBytes: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.maxRequestBodyBytes
+
+  - it: fails naming psService.maxRequestBodyBytes for a negative value
+    set:
+      ingress.enabled: true
+      psService.publicUrl: https://ps.example.com
+      psService.maxRequestBodyBytes: -5
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.maxRequestBodyBytes

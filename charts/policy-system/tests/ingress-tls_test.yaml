@@ -1,0 +1,29 @@
+suite: ingress tls and service exposure
+templates:
+  - ingress-ps-service.yaml
+  - ingress-authentik.yaml
+  - ps-service-service.yaml
+release:
+  name: policy-system
+set:
+  ingress.enabled: true
+  ingress.tls.secretName: policy-system-ps-service-tls
+  authentik.enabled: true
+  psService.publicUrl: https://ps.example.com
+tests:
+  - it: only the PS Service Ingress carries a tls block
+    asserts:
+      - equal:
+          path: spec.tls[0].secretName
+          value: policy-system-ps-service-tls
+        template: ingress-ps-service.yaml
+      - notExists:
+          path: spec.tls
+        template: ingress-authentik.yaml
+
+  - it: keeps the PS Service Service a ClusterIP with the Ingress enabled
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+        template: ps-service-service.yaml

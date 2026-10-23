@@ -63,10 +63,10 @@ authentik:
       durableStorageClass:
         enabled: true
 
-  # AC-BI-002: explicitly re-pin to ClusterIP. Without this override, prod would
+  # Explicitly re-pin to ClusterIP. Without this override, prod would
   # inherit values.yaml's local-test NodePort default (Helm merges -f values-prod.yaml
   # ON TOP of values.yaml; it does not replace it) -- prod's own Ingress-based exposure
-  # (ensure_authentik_ingress, docs/architecture/customer-azure-deployment.md's
+  # (the chart's ingress.* templates, docs/architecture/customer-azure-deployment.md's
   # "Dual-purpose, single-hostname Ingress" section) is the only exposure mechanism in
   # production, and must remain so.
   server:

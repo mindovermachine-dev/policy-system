@@ -25,6 +25,7 @@
   - [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph)
   - [What `/ready` reveals](#what-ready-reveals)
   - [Metrics](#metrics)
+  - [Request body limit and startup discovery retry](#request-body-limit-and-startup-discovery-retry)
   - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
   - [Rotate the API key later](#rotate-the-api-key-later)
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
@@ -861,10 +862,12 @@ degraded dependency or a stuck ingestion needs no log scraping.
 - `/metrics` is anonymous: it is exempt from authentication and from the startup replay gate,
   like `/health` and `/ready`, so it answers `200` while a graph replay runs.
 - It is in-cluster only. Any pod that can reach the service port can read it. The chart proxy
-  returns 403 for `/metrics` and everything under it, so the public entry point never serves it.
-- Keep it that way: deny `/metrics` on any Ingress you add in front of PS Service, and do not
-  expose the service with NodePort or LoadBalancer, because either one publishes an anonymous
-  endpoint. The chart's default service type is `ClusterIP`.
+  returns 403 for `/metrics` and everything under it, and the chart-owned PS Service Ingress
+  renders only an allowlist of paths without `/metrics`, so neither public entry point serves it.
+- Keep it that way: deny `/metrics` on any Ingress you write yourself in front of PS Service, and
+  do not expose the service with NodePort or LoadBalancer, because either one publishes an
+  anonymous endpoint. The chart's default service type is `ClusterIP`, and `ingress.enabled=true`
+  fails the render for any other type.
 - It exposes nothing that anonymous `/ready` withholds: no dependency names, no graph names, no
   error text and no user, document or run identifiers. Labels are fixed values, and route labels
   are route templates, never raw paths. Per-dependency and per-graph detail stays behind
@@ -959,6 +962,25 @@ Other `drift_check` entries are normal and need no action:
 
 Each pass also logs `drift_pass` with `graph_count` and `drift_count`, and the monitor logs
 `drift_monitor` (`started`, `stopped`, `disabled`) with `interval_seconds`.
+
+### Request body limit and startup discovery retry
+
+`psService.maxRequestBodyBytes` (default 104857600, 100 MiB) is the largest request body PS
+Service accepts. A request whose `Content-Length` is larger is answered `413` before its body is
+read. The PS Service Ingress limit (`nginx.ingress.kubernetes.io/proxy-body-size`) is derived
+from it as 1.5 times the value, so the application limit is the one a client meets first and an
+oversized upload gets PS Service's own `413`. To raise the limit, change this one value; setting
+the annotation through `ingress.annotations` fails the render. The evaluator proxy has its own,
+independent limit (`proxy.tunables.clientMaxBodySize`).
+
+At startup PS Service fetches the OIDC discovery document from the issuer. On a first install the
+issuer's certificate can still be pending, so a failed fetch is retried for
+`psService.auth.discoveryRetryBudgetSeconds` (default 300, `0` for a single attempt) before the
+process exits. Each retry logs a line with `action=oidc_discovery outcome=retrying`, the attempt
+number and the error class. Nothing listens while it retries; the startup probe holds liveness
+and readiness back, and its window is derived from the budget, so the container is not restarted
+during the retries. When the budget is spent PS Service exits with an error naming the issuer.
+A malformed discovery document is not retried.
 
 ### Owner recovery and the Authentik admin UI
 

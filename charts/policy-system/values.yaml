@@ -26,13 +26,18 @@ psService:
     tag: ""
   service:
     # ClusterIP in every profile: clients reach PS Service through the proxy (proxy.* below) or
-    # the production Ingress. Port is named "http" and serves both the REST API and, once built,
+    # the chart-owned Ingress (ingress.* below). Port is named "http" and serves both the REST API and, once built,
     # the Streamable HTTP MCP endpoint under the same host:port. A nodePort is rendered only when
     # type is NodePort and nodePort is set.
-    # /metrics is anonymous and served on this port: the chart proxy denies it, but a NodePort or an
-    # Ingress that forwards to this Service publishes it. Keep ClusterIP and deny /metrics on any Ingress.
+    # /metrics is anonymous and served on this port: the chart proxy and the chart Ingress never
+    # route it, but a NodePort Service or a hand-written Ingress that forwards to this Service
+    # publishes it. Keep ClusterIP; the chart Ingress requires it.
     type: ClusterIP
     nodePort: null
+  # Largest request body PS Service accepts, in bytes (PS_SERVICE_MAX_REQUEST_BODY_BYTES): a request
+  # whose Content-Length is larger is answered 413 before its body is read. Must be positive. The PS
+  # Service Ingress limit (nginx.ingress.kubernetes.io/proxy-body-size) is derived as 1.5 times this.
+  maxRequestBodyBytes: 104857600
   companyMerge:
     capabilityMergeThreshold: 0.59
     # Similarity at or above which a Capability near miss is raised for review; pairs below it are
@@ -69,6 +74,12 @@ psService:
       timeoutSeconds: 5
       periodSeconds: 15
       failureThreshold: 5
+    # Holds liveness and readiness back while PS Service starts. Its failureThreshold is derived in
+    # the template so the window covers psService.auth.discoveryRetryBudgetSeconds plus 90 seconds
+    # for process boot and one last discovery attempt.
+    startup:
+      timeoutSeconds: 5
+      periodSeconds: 10
   localTestBypass:
     # Opt-in only — even under the local-test profile this stays off by
     # default; an evaluator flips it with --set psService.localTestBypass.enabled=true.
@@ -99,6 +110,11 @@ psService:
     audience: ""
     cliClientId: ""
     scopes: ""
+    # Seconds PS Service keeps retrying a failed OIDC discovery fetch at startup before it exits.
+    # 0 makes a single attempt. About five minutes lets a first install wait for the issuer's
+    # certificate; it stays below the deploy script's helm wait. Nothing listens while it retries,
+    # which the startup probe covers.
+    discoveryRetryBudgetSeconds: 300
   authzBootstrapOwner:
     # subject/issuer are required (render fails naming them) whenever
     # localTestBypass.enabled=false -- see templates/ps-service-deployment.yaml's
@@ -158,6 +174,24 @@ psService:
     # PS Service trusts the system CAs plus that CA through SSL_CERT_FILE. Empty = off.
     secretName: ""
 
+# Opt-in Ingress for the production profile. When enabled, two Ingresses publish the host of
+# psService.publicUrl: one for PS Service (the paths in files/ps-service-public-paths.txt, never
+# /metrics and no catch-all) and one for Authentik (the paths in files/authentik-public-paths.txt,
+# only when authentik.enabled). Requires psService.publicUrl and, for PS Service, a ClusterIP
+# Service type.
+ingress:
+  enabled: false
+  # ingressClassName of both Ingresses. Empty leaves it unset so the cluster default class applies.
+  className: ""
+  # Annotations of the PS Service Ingress, for example the cert-manager issuer. They are not copied
+  # to the Authentik Ingress. nginx.ingress.kubernetes.io/proxy-body-size is derived from
+  # psService.maxRequestBodyBytes and must not be set here.
+  annotations: {}
+  tls:
+    # Secret holding the certificate for the PS Service Ingress host. Empty renders no tls block.
+    # The Authentik Ingress never has one: it shares the host and so the certificate.
+    secretName: ""
+
 # Reverse proxy in front of PS Service and Authentik (local-test/evaluator profile). One nginx
 # Deployment terminates TLS with the certificate in `tls.secretName` (keys `tls.crt` and `tls.key`;
 # created by the evaluator install script, never by this chart, and mounted by this workload only),
@@ -183,6 +217,7 @@ proxy:
   # restarts the proxy.
   podAnnotations: {}
   tunables:
+    # Evaluator proxy body limit. Independent of psService.maxRequestBodyBytes, which governs the PS Service Ingress and the application limit.
     clientMaxBodySize: 150m
     proxyTimeoutSeconds: 3600
   # Provisional sizing: configuration, not a measurement.

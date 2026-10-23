@@ -265,3 +265,58 @@ location ^~ {{ $path }}/ {
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+Host name of the public origin: psService.publicUrl without scheme, port or path.
+*/}}
+{{- define "policy-system.ingressHost" -}}
+{{- if not .Values.psService.publicUrl }}
+{{- fail "psService.publicUrl must be set when ingress.enabled=true: the Ingress host is derived from it (for example https://ps.example.com)." }}
+{{- end }}
+{{- $host := (urlParse .Values.psService.publicUrl).hostname }}
+{{- if not $host }}
+{{- fail "psService.publicUrl must be an absolute URL with a host when ingress.enabled=true (for example https://ps.example.com)." }}
+{{- end }}
+{{- $host }}
+{{- end }}
+
+{{/*
+One Ingress path per entry of a paths file, each a Prefix rule to the named Service's http port.
+Takes a dict with "root" (the chart context), "file" (a path below files/) and "service".
+Blank lines and lines starting with "#" are skipped.
+*/}}
+{{- define "policy-system.ingressRules" -}}
+{{- $ctx := . -}}
+{{- range ($ctx.root.Files.Lines $ctx.file) }}
+{{- $path := trim . }}
+{{- if and $path (not (hasPrefix "#" $path)) }}
+- path: {{ $path }}
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ $ctx.service }}
+      port:
+        name: http
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+psService.maxRequestBodyBytes as integer text; fails the render for a value that is not positive.
+Helm numbers are float64, so int64 keeps large values from printing in exponent form.
+*/}}
+{{- define "policy-system.maxRequestBodyBytes" -}}
+{{- $bytes := int64 .Values.psService.maxRequestBodyBytes -}}
+{{- if lt $bytes 1 }}
+{{- fail "psService.maxRequestBodyBytes must be a positive number of bytes." }}
+{{- end }}
+{{- $bytes }}
+{{- end }}
+
+{{/*
+NGINX request body limit of the PS Service Ingress as integer text: 1.5 times
+psService.maxRequestBodyBytes, rounded up, so the Ingress never rejects a body the application accepts.
+*/}}
+{{- define "policy-system.ingressBodySizeBytes" -}}
+{{- div (add (mul (int64 (include "policy-system.maxRequestBodyBytes" .)) 3) 1) 2 -}}
+{{- end }}

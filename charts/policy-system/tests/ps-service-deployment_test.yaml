@@ -655,3 +655,87 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PUBLIC_URL")]
+
+  - it: PS_SERVICE_MAX_REQUEST_BODY_BYTES renders the default as an integer string
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_SERVICE_MAX_REQUEST_BODY_BYTES")].value
+          value: "104857600"
+
+  - it: PS_SERVICE_MAX_REQUEST_BODY_BYTES follows psService.maxRequestBodyBytes
+    set:
+      psService.maxRequestBodyBytes: 200000000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_SERVICE_MAX_REQUEST_BODY_BYTES")].value
+          value: "200000000"
+
+  - it: a non-positive psService.maxRequestBodyBytes fails the render naming the value
+    set:
+      psService.maxRequestBodyBytes: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.maxRequestBodyBytes
+
+  - it: PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS renders the default budget as a string
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS")].value
+          value: "300"
+
+  - it: PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS follows psService.auth.discoveryRetryBudgetSeconds
+    set:
+      psService.auth.discoveryRetryBudgetSeconds: 45
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS")].value
+          value: "45"
+
+  - it: startupProbe renders path /health, period 10, timeout 5 and failureThreshold 39 at defaults
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 39
+
+  - it: startupProbe failureThreshold covers an overridden retry budget
+    set:
+      psService.auth.discoveryRetryBudgetSeconds: 600
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 69
+
+  - it: startupProbe failureThreshold still covers the boot margin with a zero retry budget
+    set:
+      psService.auth.discoveryRetryBudgetSeconds: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 9
+
+  - it: startupProbe follows the configured period and timeout
+    set:
+      psService.probes.startup.periodSeconds: 20
+      psService.probes.startup.timeoutSeconds: 7
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 20
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 7
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 20

@@ -28,6 +28,7 @@ _DEFAULT_FALKORDB_PORT = 6379
 _DEFAULT_PASSKEY_SIGNING_POSTGRES_PORT = 5432
 _DEFAULT_STATE_POSTGRES_PORT = 5432
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB
+_DEFAULT_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS = 300
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
 _DEFAULT_QUERY_ROW_CAP = 1000
 _DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS = 3600
@@ -110,6 +111,9 @@ class ServiceConfig:
         auth_issuer: Expected token issuer (`PS_AUTH_ISSUER`); `None` when unset. With
             `auth_audience`, required unless the local-test bypass is active.
         auth_audience: Expected token audience (`PS_AUTH_AUDIENCE`); `None` when unset.
+        auth_discovery_retry_budget_seconds: Total time startup keeps retrying a failed OIDC
+            discovery fetch before failing closed (`PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS`);
+            zero means a single attempt, default 300.
         auth_cli_client_id: OAuth client id advertised to command-line clients
             (`PS_AUTH_CLI_CLIENT_ID`); `None` when unset.
         auth_scopes: Informational scope names advertised to clients (`PS_AUTH_SCOPES`, split
@@ -186,6 +190,7 @@ class ServiceConfig:
     ingestion_runs_max_in_flight: int = _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT
     auth_issuer: str | None = None
     auth_audience: str | None = None
+    auth_discovery_retry_budget_seconds: int = _DEFAULT_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS
     auth_cli_client_id: str | None = None
     auth_scopes: tuple[str, ...] = ()
     curated_source_base_url: str = _DEFAULT_CURATED_SOURCE_BASE_URL
@@ -430,6 +435,39 @@ def _parse_max_request_body_bytes(raw: str) -> int:
         message = f"PS_SERVICE_MAX_REQUEST_BODY_BYTES must be positive, got {max_bytes}"
         raise ServiceConfigurationError(message)
     return max_bytes
+
+
+def _parse_auth_discovery_retry_budget_seconds(raw: str) -> int:
+    """Parse and range-check `PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS`, failing closed if bad.
+
+    Zero is valid and means a single discovery attempt with no retry; a negative or non-integer
+    value is rejected, with a message naming this env var.
+    """
+    try:
+        budget_seconds = int(raw)
+    except ValueError as exc:
+        message = f"PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if budget_seconds < 0:
+        message = (
+            f"PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS must not be negative, got {budget_seconds}"
+        )
+        raise ServiceConfigurationError(message)
+    return budget_seconds
+
+
+def _load_auth_discovery_retry_budget_seconds() -> int:
+    """Read `PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS` from the environment, defaulting when unset.
+
+    Raises:
+        ServiceConfigurationError: The value is not a non-negative integer.
+    """
+    return _parse_auth_discovery_retry_budget_seconds(
+        os.environ.get(
+            "PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS",
+            str(_DEFAULT_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS),
+        )
+    )
 
 
 def _parse_query_timeout_ms(raw: str) -> int:
@@ -1053,6 +1091,7 @@ def load_config() -> ServiceConfig:
         ),
         auth_issuer=auth_issuer,
         auth_audience=auth_audience,
+        auth_discovery_retry_budget_seconds=_load_auth_discovery_retry_budget_seconds(),
         auth_cli_client_id=auth_cli_client_id,
         auth_scopes=auth_scopes,
         curated_source_base_url=curated_source_base_url,

@@ -121,6 +121,13 @@ spec:
             limits:
               cpu: {{ .Values.psService.resources.limits.cpu | quote }}
               memory: {{ .Values.psService.resources.limits.memory | quote }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            timeoutSeconds: {{ .Values.psService.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.psService.probes.startup.periodSeconds }}
+            failureThreshold: {{ div (add (add (int64 .Values.psService.auth.discoveryRetryBudgetSeconds) 90) (sub (int64 .Values.psService.probes.startup.periodSeconds) 1)) (int64 .Values.psService.probes.startup.periodSeconds) }}
           readinessProbe:
             httpGet:
               path: /ready
@@ -213,6 +220,10 @@ spec:
               value: {{ .Values.psService.graphGateway.driftCheckIntervalSeconds | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS
               value: {{ .Values.psService.localTestBypass.enabled | quote }}
+            - name: PS_SERVICE_MAX_REQUEST_BODY_BYTES
+              value: {{ include "policy-system.maxRequestBodyBytes" . | quote }}
+            - name: PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS
+              value: {{ int64 .Values.psService.auth.discoveryRetryBudgetSeconds | quote }}
             - name: PS_LLMINTERFACE_MODEL
               value: {{ include "policy-system.llmModel" . | quote }}
             - name: PS_LLMINTERFACE_EMBED_MODEL

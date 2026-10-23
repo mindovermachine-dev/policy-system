@@ -1,0 +1,49 @@
+suite: ingress names and TLS secret match the deploy script
+templates:
+  - ingress-ps-service.yaml
+  - ingress-authentik.yaml
+release:
+  name: policy-system
+set:
+  ingress.enabled: true
+  ingress.className: webapprouting.kubernetes.azure.com
+  ingress.tls.secretName: policy-system-ps-service-tls
+  ingress.annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  authentik.enabled: true
+  psService.publicUrl: https://ps.example.com
+tests:
+  - it: PS Service Ingress carries the name, class, issuer, host and TLS secret the deploy script uses
+    template: ingress-ps-service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: policy-system-ps-service
+      - equal:
+          path: spec.ingressClassName
+          value: webapprouting.kubernetes.azure.com
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.rules[0].host
+          value: ps.example.com
+      - equal:
+          path: spec.tls[0].secretName
+          value: policy-system-ps-service-tls
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: ps.example.com
+
+  - it: Authentik Ingress carries the name, class and host the deploy script uses
+    template: ingress-authentik.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: policy-system-authentik-server
+      - equal:
+          path: spec.ingressClassName
+          value: webapprouting.kubernetes.azure.com
+      - equal:
+          path: spec.rules[0].host
+          value: ps.example.com

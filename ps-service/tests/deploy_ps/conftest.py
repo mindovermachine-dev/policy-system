@@ -580,6 +580,7 @@ case "${1:-} ${2:-}" in
     ;;
   *)
     printf '%s\n' "$*" >> "$PS_TEST_KUBECTL_LOG"
+    printf 'kubectl %s\n' "$*" >> "$PS_TEST_EVENT_LOG"
     case "${1:-} ${2:-}" in
       "apply -f")
         manifest="$(cat)"
@@ -617,6 +618,41 @@ case "${1:-} ${2:-}" in
         path="$state/services/$ns/$name.json"
         [[ -f "$path" ]]
         jq -r '.status.loadBalancer.ingress[0].ip // empty' "$path"
+        ;;
+      "get ingress")
+        # get ingress <name> -o jsonpath=<managed-by label>|<release-name annotation>|
+        # <release-namespace annotation> -- the only jsonpath the script asks for; a missing
+        # Ingress fails like kubectl's NotFound, or succeeds with no output under
+        # --ignore-not-found; PS_TEST_KUBECTL_GET_INGRESS_ERROR makes every call fail with that
+        # message on stderr.
+        if [[ -n "${PS_TEST_KUBECTL_GET_INGRESS_ERROR:-}" ]]; then
+          echo "Error from server ($PS_TEST_KUBECTL_GET_INGRESS_ERROR)" >&2
+          exit 1
+        fi
+        path="$state/ingresses/$3.json"
+        if [[ ! -f "$path" ]]; then
+          [[ " $* " == *" --ignore-not-found "* ]] && exit 0
+          echo "Error from server (NotFound): ingresses \"$3\" not found" >&2
+          exit 1
+        fi
+        jq -r '[(.metadata.labels["app.kubernetes.io/managed-by"] // ""),
+                (.metadata.annotations["meta.helm.sh/release-name"] // ""),
+                (.metadata.annotations["meta.helm.sh/release-namespace"] // "")]
+               | join("|")' "$path"
+        ;;
+      "annotate ingress"|"label ingress")
+        # annotate|label ingress <name> k=v ... --overwrite -- merges into the stored metadata.
+        path="$state/ingresses/$3.json"
+        [[ -f "$path" ]]
+        field=annotations
+        [[ "$1" == label ]] && field=labels
+        for arg in "${@:4}"; do
+          [[ "$arg" == *=* ]] || continue
+          updated="$(jq --arg f "$field" --arg k "${arg%%=*}" --arg v "${arg#*=}" \
+            '.metadata[$f][$k] = $v' "$path")"
+          printf '%s\n' "$updated" > "$path"
+        done
+        printf 'ingress.networking.k8s.io/%s configured\n' "$3"
         ;;
       "wait --for=condition=Available")
         # wait --for=condition=Available --timeout=<t> --namespace <ns> deployment/<a>
@@ -693,6 +729,7 @@ set -euo pipefail
 state="$PS_TEST_HELM_STATE_DIR"
 mkdir -p "$state/releases"
 printf '%s\n' "$*" >> "$PS_TEST_HELM_LOG"
+printf 'helm %s\n' "$*" >> "$PS_TEST_EVENT_LOG"
 
 verb="${1:-}"
 
@@ -713,8 +750,11 @@ case "$verb" in
           kv="$2"
           key="${kv%%=*}"
           val="${kv#*=}"
+          # Like helm: `\.` in a key is a literal dot, and true/false become booleans.
           acc="$(jq -n --argjson acc "$acc" --arg path "$key" --arg val "$val" \
-            '$acc | setpath($path | split("."); $val)')"
+            '$acc | setpath(
+              $path | gsub("\\\\\\."; "\u0001") | split(".") | map(gsub("\u0001"; "."));
+              (if $val == "true" then true elif $val == "false" then false else $val end))')"
           shift 2
           ;;
         -f|--values|--namespace)
@@ -807,6 +847,7 @@ class DeployPsFixture:
     helm_log: Path
     curl_state: Path
     curl_log: Path
+    event_log: Path
 
     @property
     def config_path(self) -> Path:
@@ -853,6 +894,7 @@ class DeployPsFixture:
             "PS_TEST_KUBECTL_STATE_DIR": str(self.kubectl_state),
             "PS_TEST_HELM_STATE_DIR": str(self.helm_state),
             "PS_TEST_HELM_LOG": str(self.helm_log),
+            "PS_TEST_EVENT_LOG": str(self.event_log),
             "PS_TEST_CHART_DIR": str(REPO_ROOT / "charts" / "policy-system"),
             # The owner-creation step's fake Authentik API (`curl`) and the shared
             # token the fake kubectl serves as base64 (a real Secret's data field).
@@ -1452,6 +1494,41 @@ class DeployPsFixture:
         )
         return state.get("users", {})
 
+    def read_event_log(self) -> list[str]:
+        """Every `kubectl <argv>` and `helm <argv>` line the fakes recorded, interleaved in the
+        order the calls happened -- for asserting ordering across the two tools.
+        """
+        return (
+            self.event_log.read_text(encoding="utf-8").splitlines()
+            if self.event_log.exists()
+            else []
+        )
+
+    def seed_ingress(
+        self,
+        name: str,
+        *,
+        labels: dict[str, str] | None = None,
+        annotations: dict[str, str] | None = None,
+    ) -> None:
+        """Pre-populate an existing Ingress with the given metadata, as the fake `kubectl get
+        ingress`/`annotate`/`label` see it.
+        """
+        directory = self.kubectl_state / "ingresses"
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "metadata": {"name": name, "labels": labels or {}, "annotations": annotations or {}}
+        }
+        (directory / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def read_ingress_metadata(self, name: str) -> dict[str, dict[str, str]] | None:
+        """The `labels` and `annotations` the fake holds for an Ingress, or None if it has none."""
+        path = self.kubectl_state / "ingresses" / f"{name}.json"
+        if not path.exists():
+            return None
+        metadata = json.loads(path.read_text(encoding="utf-8"))["metadata"]
+        return {"labels": metadata["labels"], "annotations": metadata["annotations"]}
+
     def read_helm_log(self) -> list[str]:
         """Every argv line the fake `helm` recorded, in order."""
         return (
@@ -1550,4 +1627,5 @@ def deploy_ps_fixture(tmp_path: Path) -> DeployPsFixture:
         helm_log=tmp_path / "helm.log",
         curl_state=curl_state,
         curl_log=tmp_path / "curl.log",
+        event_log=tmp_path / "events.log",
     )

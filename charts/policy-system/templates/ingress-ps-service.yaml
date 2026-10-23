@@ -1,0 +1,37 @@
+{{- if .Values.ingress.enabled }}
+{{- if ne (.Values.psService.service.type | default "ClusterIP") "ClusterIP" }}
+{{- fail "ingress.enabled=true requires psService.service.type=ClusterIP; the Ingress is the only public path to PS Service, and NodePort/LoadBalancer would publish every route including /metrics" }}
+{{- end }}
+{{- if hasKey (.Values.ingress.annotations | default dict) "nginx.ingress.kubernetes.io/proxy-body-size" }}
+{{- fail "ingress.annotations must not set nginx.ingress.kubernetes.io/proxy-body-size; it is derived from psService.maxRequestBodyBytes, so set that value instead" }}
+{{- end }}
+{{- $service := printf "%s-ps-service" (include "policy-system.fullname" .) }}
+{{- $host := include "policy-system.ingressHost" . }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $service }}
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ps-service
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ include "policy-system.ingressBodySizeBytes" . | quote }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.secretName }}
+  tls:
+    - hosts:
+        - {{ $host }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ $host }}
+      http:
+        paths:
+          {{- include "policy-system.ingressRules" (dict "root" . "file" "files/ps-service-public-paths.txt" "service" $service) | trim | nindent 10 }}
+{{- end }}

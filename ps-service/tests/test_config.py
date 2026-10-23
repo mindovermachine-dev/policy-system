@@ -1161,3 +1161,23 @@ def test_load_config_rejects_a_public_url_with_a_path_in_local_test_mode(
 
     with pytest.raises(ServiceConfigurationError, match="PS_PUBLIC_URL"):
         load_config()
+
+
+def test_load_config_parses_discovery_retry_budget_and_rejects_bad_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS", raising=False)
+    assert load_config().auth_discovery_retry_budget_seconds == 300
+
+    monkeypatch.setenv("PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS", "45")
+    assert load_config().auth_discovery_retry_budget_seconds == 45
+
+    monkeypatch.setenv("PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS", "0")
+    assert load_config().auth_discovery_retry_budget_seconds == 0
+
+    for bad in ("-1", "abc", ""):
+        monkeypatch.setenv("PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS", bad)
+        with pytest.raises(
+            ServiceConfigurationError, match="PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS"
+        ):
+            load_config()

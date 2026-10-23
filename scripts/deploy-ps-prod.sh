@@ -78,16 +78,15 @@ AUTHENTIK_API_BASE=""
 AUTHENTIK_LINK_BASE=""
 AUTHENTIK_CURL_ARGS=()
 # account_endpoint / made_changes are process-wide state written by ensure_account/ensure_*
-# below (S9). Set via plain assignment inside functions that are always called as a plain
+# below. Set via plain assignment inside functions that are always called as a plain
 # statement, never wrapped in a `$(...)` command substitution -- that would fork a subshell
 # whose variable writes never reach the caller (same discipline as scripts/deploy-llm.sh's own
-# top-of-file note, IMPL_SLICE_6.md's select_region bug). made_changes isn't consumed yet (S9
-# has no closing summary line of its own -- that's S18's job) but is tracked now so every
-# ensure_* function's own idempotency contract matches deploy-llm.sh's/the spike's proven shape.
+# top-of-file note). made_changes is set by every ensure_*/adopt_* function that changes
+# something and read by the closing summary.
 account_endpoint=""
 made_changes=false
-# public_hostname is set by S16's own main() steps below (fetch_public_ip_fqdn) -- S18 needs it
-# for the PS Service Ingress and the closing summary line. Same plain-assignment state-sharing
+# public_hostname is set by main() below (fetch_public_ip_fqdn); the release values and the
+# closing summary line derive from it. Same plain-assignment state-sharing
 # discipline as every other process-wide variable above.
 public_hostname=""
 
@@ -443,25 +442,20 @@ readonly LLM_SECRET_NAME="policy-system-llm-credentials"
 # unreleased local chart (issue #165's live verification); unset, the published chart is used.
 readonly CHART_REF="${PS_CHART_REF:-oci://ghcr.io/mindovermachine-dev/charts/policy-system}"
 readonly HELM_RELEASE_NAME="policy-system"
-# PS Service Ingress name (S18) -- matches the chart's own rendered Service name exactly
-# ("{{ include "policy-system.fullname" . }}-ps-service", charts/policy-system/templates/
-# ps-service-service.yaml, confirmed by reading it and _helpers.tpl's own policy-system.fullname
-# template before writing this): fullname resolves to the bare release name whenever the chart
-# name is already contained in the release name, which is the case here (both "policy-system").
+# PS Service name -- equals the chart's rendered PS Service Service and PS Service Ingress name
+# ("{{ include "policy-system.fullname" . }}-ps-service"): fullname resolves to the bare release
+# name whenever the chart name is already contained in the release name, which is the case here
+# (both "policy-system").
 readonly PS_SERVICE_NAME="${HELM_RELEASE_NAME}-ps-service"
-# Authentik server Service name (S5, #129/CHANGES.md row F1) -- the upstream `authentik`
-# dependency chart's own rendered server Service name, confirmed empirically by running
-# `helm template charts/policy-system policy-system -f values-prod.yaml ...` (this repo's fixed
-# Helm release name, HELM_RELEASE_NAME) and reading the rendered `kind: Service` document's own
-# `metadata.name`: the upstream chart's `authentik.fullname` template renders
-# "<release-name>-authentik" (release name "policy-system" does not already contain "authentik",
-# so it is NOT collapsed to the bare release name the way PS_SERVICE_NAME's own fullname is), and
-# its `authentik.server.fullname` template appends "-server" to that -- see IMPL_SLICE_5.md for
-# the full derivation and the exact `helm template` output this was read from.
+# Authentik server Service name -- equals the upstream `authentik` dependency chart's rendered
+# server Service and the chart's Authentik Ingress name: its `authentik.fullname` template renders
+# "<release-name>-authentik" (the release name "policy-system" does not already contain
+# "authentik", so it is not collapsed to the bare release name the way PS_SERVICE_NAME's fullname
+# is), and its `authentik.server.fullname` template appends "-server" to that.
 readonly AUTHENTIK_SERVICE_NAME="${HELM_RELEASE_NAME}-authentik-server"
-# Issue #165. PS Service calls Authentik in-cluster: the Ingress routes only the login/enrolment
-# paths (the shared path file, see read_authentik_public_paths), so the invitation API PS Service needs for `invite_user`
-# is reachable only through the Service. `/auth` is Authentik's web path (AUTHENTIK_WEB__PATH in
+# PS Service calls Authentik in-cluster: the Ingress routes only the login/enrolment paths (the
+# chart's files/authentik-public-paths.txt), so the invitation API PS Service needs for
+# `invite_user` is reachable only through the Service. `/auth` is Authentik's web path (AUTHENTIK_WEB__PATH in
 # values-prod.yaml); the Service's port 80 is the default and needs no port here.
 readonly AUTHENTIK_IN_CLUSTER_BASE_URL="http://${AUTHENTIK_SERVICE_NAME}/auth"
 # The Secret holding the one shared API token (chart-generated: templates/authentik-api-token-
@@ -1092,12 +1086,13 @@ ensure_llm_secret() {
 # release_values_json <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>
 # <authentik_base_url> <authentik_public_url> <public_url>: prints the JSON shape of the --set
 # values this script passes to `helm upgrade --install`, in the same structure `helm get values
-# -o json` returns -- lets ensure_release compare desired vs. deployed. Exactly 10 leaf fields:
-# llm.existingSecret, psService.auth.{issuer,audience,cliClientId,scopes}, (issues #161/#165)
+# -o json` returns -- lets ensure_release compare desired vs. deployed. Exactly 14 leaf fields:
+# llm.existingSecret, psService.auth.{issuer,audience,cliClientId,scopes},
 # psService.authzBootstrapOwner.{subject,issuer} -- the owner's email and the issuer, both known
-# before Authentik exists -- and (issue #165, OD-1 = B) psService.authentik.{baseUrl,publicUrl}:
-# the in-cluster API address PS Service calls, and the public address used only for the
-# invitee-facing link -- and psService.publicUrl, the origin PS Service publishes for itself.
+# before Authentik exists -- psService.authentik.{baseUrl,publicUrl}: the in-cluster API address
+# PS Service calls, and the public address used only for the invitee-facing link --
+# psService.publicUrl, the origin PS Service publishes for itself, and the chart-owned Ingress:
+# ingress.{enabled,className,tls.secretName} and the cert-manager issuer annotation.
 release_values_json() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4" owner_subject="$5" owner_issuer="$6"
   local authentik_base_url="$7" authentik_public_url="$8" public_url="$9"
@@ -1105,11 +1100,15 @@ release_values_json() {
     --arg cli "$cli_client_id" --arg scopes "$scopes" \
     --arg owner_subject "$owner_subject" --arg owner_issuer "$owner_issuer" \
     --arg base "$authentik_base_url" --arg public "$authentik_public_url" \
-    --arg ps_public "$public_url" \
+    --arg ps_public "$public_url" --arg ingress_class "$INGRESS_CLASS" \
+    --arg cluster_issuer "$CLUSTER_ISSUER_NAME" --arg tls_secret "${PS_SERVICE_NAME}-tls" \
     '{llm: {existingSecret: $secret},
       psService: {auth: {issuer: $issuer, audience: $audience, cliClientId: $cli, scopes: $scopes},
         authzBootstrapOwner: {subject: $owner_subject, issuer: $owner_issuer},
-        authentik: {baseUrl: $base, publicUrl: $public}, publicUrl: $ps_public}}'
+        authentik: {baseUrl: $base, publicUrl: $public}, publicUrl: $ps_public},
+      ingress: {enabled: true, className: $ingress_class,
+        annotations: {"cert-manager.io/cluster-issuer": $cluster_issuer},
+        tls: {secretName: $tls_secret}}}'
 }
 
 # ensure_release <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>
@@ -1121,7 +1120,7 @@ release_values_json() {
 # <owner_issuer> the issuer (issue #165): rerunning with the same values is a no-op here, and
 # ps_service's own "grantable once" bootstrap is unaffected either way.
 #
-# Compares only the 10 fields release_values_json sets, extracted from `helm get values`'s output
+# Compares only the 14 fields release_values_json sets, extracted from `helm get values`'s output
 # via the same jq shape, rather than the whole object -- `helm get values` also echoes back
 # everything from `-f values-prod.yaml` (falkordb.*, llm.provider, psService.service.type), which
 # this script never sets itself via --set and doesn't need to compare; a whole-object comparison
@@ -1147,7 +1146,11 @@ ensure_release() {
             issuer: .psService.authzBootstrapOwner.issuer},
           authentik: {baseUrl: .psService.authentik.baseUrl,
             publicUrl: .psService.authentik.publicUrl},
-          publicUrl: .psService.publicUrl}}' \
+          publicUrl: .psService.publicUrl},
+        ingress: {enabled: .ingress.enabled, className: .ingress.className,
+          annotations: {"cert-manager.io/cluster-issuer":
+            .ingress.annotations["cert-manager.io/cluster-issuer"]},
+          tls: {secretName: .ingress.tls.secretName}}}' \
       <<< "$current_json")"
     if [[ "$(jq -S . <<< "$current_subset_json")" == "$(jq -S . <<< "$desired_json")" ]]; then
       return 0
@@ -1165,8 +1168,49 @@ ensure_release() {
     --set psService.authentik.baseUrl="$authentik_base_url" \
     --set psService.authentik.publicUrl="$authentik_public_url" \
     --set psService.publicUrl="$public_url" \
+    --set ingress.enabled=true \
+    --set ingress.className="$INGRESS_CLASS" \
+    --set 'ingress.annotations.cert-manager\.io/cluster-issuer'="$CLUSTER_ISSUER_NAME" \
+    --set ingress.tls.secretName="${PS_SERVICE_NAME}-tls" \
     --wait --wait-for-jobs --timeout 10m >/dev/null
   made_changes=true
+}
+
+# adopt_legacy_ingress <name>: Takes over an Ingress that exists without Helm ownership so the
+# release can manage it in place; an Ingress already owned by this release is skipped, an absent
+# one is left for the chart to create, and an Ingress owned by another release stops the run.
+# Only the ownership annotations and label are written; the Ingress is never deleted or applied.
+adopt_legacy_ingress() {
+  local name="$1" ownership label release_name release_namespace namespace
+  if ! ownership="$(kubectl get ingress "$name" --ignore-not-found -o \
+    jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}{"|"}{.metadata.annotations.meta\.helm\.sh/release-name}{"|"}{.metadata.annotations.meta\.helm\.sh/release-namespace}' \
+    2>&1)"; then
+    print_error 'Could not read Ingress %s: %s. Fix: check cluster access (kubectl auth can-i get ingress), then re-run.\n' \
+      "$name" "$ownership"
+    exit "$EXIT_FAILURE"
+  fi
+  [[ -n "$ownership" ]] || return 0
+  IFS='|' read -r label release_name release_namespace <<<"$ownership"
+  namespace="$(current_kube_namespace)"
+  if [[ -n "$release_name" && "$release_name" != "$HELM_RELEASE_NAME" ]]; then
+    print_error 'Ingress %s is owned by Helm release %s, not %s. Fix: remove or rename that Ingress, then re-run.\n' \
+      "$name" "$release_name" "$HELM_RELEASE_NAME"
+    exit "$EXIT_FAILURE"
+  fi
+  if [[ "$label" == "Helm" && "$release_name" == "$HELM_RELEASE_NAME" \
+    && "$release_namespace" == "$namespace" ]]; then
+    return 0
+  fi
+  kubectl annotate ingress "$name" "meta.helm.sh/release-name=${HELM_RELEASE_NAME}" \
+    "meta.helm.sh/release-namespace=${namespace}" --overwrite >/dev/null
+  kubectl label ingress "$name" app.kubernetes.io/managed-by=Helm --overwrite >/dev/null
+  made_changes=true
+}
+
+# adopt_legacy_ingresses: runs adopt_legacy_ingress for the PS Service and Authentik Ingresses.
+adopt_legacy_ingresses() {
+  adopt_legacy_ingress "$PS_SERVICE_NAME"
+  adopt_legacy_ingress "$AUTHENTIK_SERVICE_NAME"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1183,8 +1227,8 @@ readonly INGRESS_IP_WAIT_ATTEMPTS="${INGRESS_IP_WAIT_ATTEMPTS:-30}"
 readonly INGRESS_IP_WAIT_INTERVAL_SECONDS="${INGRESS_IP_WAIT_INTERVAL_SECONDS:-10}"
 
 # The AKS application-routing add-on's own fixed ingress-class name, set by Azure itself on every
-# cluster with the add-on enabled -- used by S17's ClusterIssuer HTTP-01 solver below and by
-# S18's PS Service Ingress.
+# cluster with the add-on enabled -- used by the ClusterIssuer HTTP-01 solver below and as the
+# chart Ingress class.
 readonly INGRESS_CLASS="webapprouting.kubernetes.azure.com"
 
 # approuting_enabled <cluster_name>: true if the add-on is already on.
@@ -1314,163 +1358,9 @@ EOF
 }
 
 # ---------------------------------------------------------------------------------------------
-# PS Service Ingress (S18, AC-BI-015 completion), the closing provisioning summary, and
-# `--rotate-key` mode carried over from scripts/deploy-llm.sh's own proven implementation.
+# Authentik readiness, the closing provisioning summary, and `--rotate-key` mode carried over
+# from scripts/deploy-llm.sh's own proven implementation.
 # ---------------------------------------------------------------------------------------------
-
-# ensure_ps_service_ingress <hostname>: create-if-absent the TLS-terminated Ingress exposing PS
-# Service over HTTPS at <hostname> -- the chart itself has no ingress template (confirmed by
-# reading charts/policy-system/templates/ before writing this), so this applies a plain manifest
-# directly against the chart's own rendered Service name/port ($PS_SERVICE_NAME/"http") rather
-# than a chart change. The cert-manager.io/cluster-issuer annotation references S17's
-# ClusterIssuer by name; ingressClassName is S16's app-routing add-on class ($INGRESS_CLASS).
-#
-# nginx.ingress.kubernetes.io/proxy-body-size: the app-routing add-on's NGINX defaults to a 1 MiB
-# client_max_body_size, which 413s any restore/import payload above that (real incident: `ps-cli
-# restore instrument` against a live instrument). PS Service's own ServiceConfig.max_request_body
-# _bytes (ps_service/config.py) is the actual, precisely-configured limit -- currently a compiled
-# default of 100 MiB, not wired into the chart as an env var. This annotation is deliberately set
-# above that default (150m) rather than matched to it exactly, so NGINX stays a coarse outer guard
-# and never becomes a second source of truth that has to be kept in lockstep with the app's limit.
-# If max_request_body_bytes is ever raised past 150 MiB, this value needs raising too.
-#
-# Idempotent via the same apply_output_changed detection S14 established -- a rerun with an
-# unchanged manifest reports "unchanged" and does not set made_changes.
-ensure_ps_service_ingress() {
-  local hostname="$1" apply_output
-  apply_output="$(kubectl apply -f - <<EOF
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ${PS_SERVICE_NAME}
-  annotations:
-    cert-manager.io/cluster-issuer: ${CLUSTER_ISSUER_NAME}
-    nginx.ingress.kubernetes.io/proxy-body-size: "150m"
-spec:
-  ingressClassName: ${INGRESS_CLASS}
-  tls:
-    - hosts:
-        - ${hostname}
-      secretName: ${PS_SERVICE_NAME}-tls
-  rules:
-    - host: ${hostname}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: ${PS_SERVICE_NAME}
-                port:
-                  name: http
-EOF
-)"
-  apply_output_changed "$apply_output" && made_changes=true
-  return 0
-}
-
-# The Authentik paths the public Ingress routes are defined once, in the chart
-# (files/authentik-public-paths.txt), and read from the chart version this script installs: the
-# same file the evaluator's proxy renders its locations from. They are what an end user's browser
-# and ps-cli need to log in and enroll -- OIDC discovery/authorize/token, the device-code entry, the
-# default flows, the flow UI with its executor/config/brand endpoints, and static assets.
-# Everything else -- the admin UI, the admin and core APIs, the invitation API PS Service calls
-# in-cluster -- is simply not routed here: PS Service's own catch-all Ingress answers those, never
-# Authentik. This Ingress keeps that fall-through; only the evaluator proxy rejects them with 403.
-readonly AUTHENTIK_PUBLIC_PATHS_FILE="files/authentik-public-paths.txt"
-
-# read_authentik_public_paths: prints the shared path list, one path per line, for the chart
-# version set_chart_version_args selects (the bundle's VERSION) or the newest published chart when
-# there is none. The Ingress is applied before the release exists, so the list is read from the
-# chart itself: a local chart directory directly, an OCI reference through `helm pull`. Stops
-# before the Ingress is touched when the chart cannot be fetched, predates the shared file, or the
-# file lists no path -- an Ingress without its paths would hide the login flow.
-read_authentik_public_paths() {
-  local chart_dir="$CHART_REF" pull_dir="" version_label="the newest published chart" lines path
-  set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"
-  if ((${#chart_version_args[@]} == 2)); then
-    version_label="chart version ${chart_version_args[1]}"
-  fi
-  if [[ ! -d "$CHART_REF" ]]; then
-    pull_dir="$(mktemp -d)"
-    if ! helm pull "$CHART_REF" ${chart_version_args[@]+"${chart_version_args[@]}"} \
-        --untar --untardir "$pull_dir" >/dev/null; then
-      rm -rf "$pull_dir"
-      print_error 'Could not fetch %s of %s to read the Authentik public paths. Fix: check network access to the chart registry, then re-run.\n' \
-        "$version_label" "$CHART_REF"
-      exit "$EXIT_FAILURE"
-    fi
-    chart_dir="$pull_dir/policy-system"
-  fi
-  lines=""
-  if [[ -f "$chart_dir/$AUTHENTIK_PUBLIC_PATHS_FILE" ]]; then
-    while IFS= read -r path || [[ -n "$path" ]]; do
-      path="${path//[[:space:]]/}"
-      [[ -z "$path" || "$path" == \#* ]] && continue
-      lines+="${path}"$'\n'
-    done <"$chart_dir/$AUTHENTIK_PUBLIC_PATHS_FILE"
-  fi
-  [[ -n "$pull_dir" ]] && rm -rf "$pull_dir"
-  if [[ -z "$lines" ]]; then
-    print_error '%s of %s defines no Authentik public paths (%s is missing or empty), so the Authentik Ingress cannot be built. Fix: run the script from a deploy bundle whose VERSION matches a published chart that has this file, or point PS_CHART_REF at a current chart, then re-run.\n' \
-      "$version_label" "$CHART_REF" "$AUTHENTIK_PUBLIC_PATHS_FILE"
-    exit "$EXIT_FAILURE"
-  fi
-  printf '%s' "$lines"
-}
-
-# ensure_authentik_ingress <hostname>: create-if-absent a SECOND Ingress object exposing
-# Authentik's own server Service at the SAME <hostname> ensure_ps_service_ingress already resolved
-# for PS Service -- S5, #129, per CHANGES.md row F1 (this supersedes PLAN.md §0.6/§5's original
-# dual-hostname/dual-DNS-label design, rejected there as infeasible: one Azure Public IP has
-# exactly one `dnsSettings.domainNameLabel`, so a second `ensure_dns_label` call would steal PS
-# Service's own label rather than add a second hostname).
-#
-# Routes only the shared public path prefixes to $AUTHENTIK_SERVICE_NAME (the upstream
-# `authentik` dependency chart's own rendered server Service, confirmed via `helm template` -- see
-# this script's own AUTHENTIK_SERVICE_NAME comment and IMPL_SLICE_5.md), leaving PS Service's
-# existing Ingress (ensure_ps_service_ingress) to keep handling every other path on the same host.
-# Since issue #165 that is an allowlist, not the whole `/auth` prefix: the admin UI and admin API
-# stay cluster-internal (an administrator reaches them with `kubectl port-forward`).
-#
-# Deliberately carries NO `tls:` block and NO `cert-manager.io/cluster-issuer` annotation:
-# ensure_ps_service_ingress's own Ingress for this exact same $hostname already provisions the one
-# Certificate/Secret (named "${PS_SERVICE_NAME}-tls"), and nginx-ingress applies that Secret to
-# every Ingress object for the same host, regardless of which object declared the `tls:` block. A
-# second cert-manager annotation here would create a second, competing Certificate request for the
-# same host -- CHANGES.md Appendix A's own explicit rationale.
-#
-# Idempotent via the same apply_output_changed detection ensure_ps_service_ingress uses.
-ensure_authentik_ingress() {
-  local hostname="$1" apply_output path paths_yaml="" newline=$'\n' public_paths
-  public_paths="$(read_authentik_public_paths)"
-  while IFS= read -r path; do
-    paths_yaml+="          - path: ${path}
-            pathType: Prefix
-            backend:
-              service:
-                name: ${AUTHENTIK_SERVICE_NAME}
-                port:
-                  name: http
-"
-  done <<<"$public_paths"
-  apply_output="$(kubectl apply -f - <<EOF
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ${AUTHENTIK_SERVICE_NAME}
-spec:
-  ingressClassName: ${INGRESS_CLASS}
-  rules:
-    - host: ${hostname}
-      http:
-        paths:
-${paths_yaml%"$newline"}
-EOF
-)"
-  apply_output_changed "$apply_output" && made_changes=true
-  return 0
-}
 
 # wait_for_authentik: blocks until Authentik's server Deployment is Ready -- the owner-creation
 # step below talks to its API. A first install pulls large images, hence the generous default.
@@ -1704,12 +1594,10 @@ main() {
   log_step "Syncing LLM credentials into the cluster"
   ensure_llm_secret "$vault_name"
 
-  # issue #129 (CHANGES.md row F3): the ingress/DNS-label/hostname-resolution steps below moved
-  # here, ahead of "Reconciling the Helm release" -- Authentik's own issuer is now a path under PS
-  # Service's own hostname (row F1: "https://<hostname>/auth/application/o/ps-cli/"), so
-  # $public_hostname must already be resolved before ensure_release can compute it. This is the
-  # exact reordering PLAN.md §0.6 originally flagged (there, for a since-rejected dual-hostname
-  # design; the reordering itself still applies to this single, already-existing hostname).
+  # The ingress/DNS-label/hostname-resolution steps come before "Reconciling the Helm release":
+  # Authentik's issuer is a path under PS Service's own hostname
+  # ("https://<hostname>/auth/application/o/ps-cli/"), so $public_hostname must be resolved before
+  # ensure_release computes it.
   log_step "Enabling the application-routing ingress add-on on $cluster_name"
   ensure_approuting "$cluster_name"
 
@@ -1725,33 +1613,24 @@ main() {
   public_hostname="$(fetch_public_ip_fqdn "$public_ip_id")"
   log_step "Public hostname: $public_hostname"
 
-  # Issue #236: cert-manager, the issuer and both Ingresses come BEFORE the Helm release.
-  # `helm --wait` below only returns once PS Service is Ready, and PS Service's startup does OIDC
-  # discovery against the public https://<hostname>/auth/... issuer, which needs the Ingress and
-  # its Let's Encrypt certificate to exist already. The Ingresses reference the chart's Services
-  # by name only, so they can be applied before those Services exist.
+  # cert-manager and the ClusterIssuer exist before the Helm release: the chart's Ingress carries
+  # the issuer annotation, and PS Service's startup does OIDC discovery against the public
+  # https://<hostname>/auth/... issuer, which needs the certificate cert-manager issues.
   log_step "Installing cert-manager"
   ensure_cert_manager
 
   log_step "Ensuring the Let's Encrypt ClusterIssuer"
   ensure_cluster_issuer "$TLS_CONTACT_EMAIL"
 
-  log_step "Ensuring the PS Service Ingress"
-  ensure_ps_service_ingress "$public_hostname"
-
-  # S5 (#129/CHANGES.md row F1): a second Ingress, same $public_hostname, routing only /auth to
-  # Authentik's own server Service -- called alongside (never instead of)
-  # ensure_ps_service_ingress.
-  log_step "Ensuring the Authentik Ingress"
-  ensure_authentik_ingress "$public_hostname"
+  log_step "Adopting existing Ingresses into the Helm release"
+  adopt_legacy_ingresses
 
   log_step "Reconciling the Helm release"
-  # Fixed constants, never an `az ad app show`-derived value (issue #129, AC-BI-001: no
-  # tenant app registrations) -- S4's blueprint defines exactly one OAuth2 Provider/Application, both
-  # named "ps-cli" (PLAN.md §0.5), so audience and cliClientId are the SAME literal, not two
-  # distinct app IDs. issuer is path-based under PS Service's own
-  # already-resolved $public_hostname (CHANGES.md row F1) -- never a second, Authentik-only
-  # hostname, never an external IdP's host.
+  # Fixed constants, never an `az ad app show`-derived value (no tenant app registrations): the
+  # blueprint defines exactly one OAuth2 Provider/Application, both named "ps-cli", so audience
+  # and cliClientId are the same literal, not two distinct app IDs. issuer is path-based under PS
+  # Service's own already-resolved $public_hostname -- never a second, Authentik-only hostname,
+  # never an external IdP's host.
   local issuer
   issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
   ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES" \
@@ -1767,11 +1646,6 @@ main() {
   provision_authentik_owner "$public_hostname"
 
   print_provisioning_summary
-
-  # main() is now feature-complete end-to-end for S1-S18 (see .orchestrator/tracker/
-  # issue-111-deploy-ps-azure-script/PLAN.md §5) -- S19 adds only a capstone test file
-  # (ps-service/tests/deploy_ps/test_happy_path.py) proving this whole flow end to end against a
-  # fresh subscription, then a true no-op rerun. No further script code is expected to land here.
 }
 
 main "$@"

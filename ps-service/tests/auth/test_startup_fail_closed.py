@@ -152,7 +152,9 @@ def test_resolve_auth_context_builds_context_from_successful_discovery() -> None
 def test_resolve_auth_context_raises_naming_issuer_when_discovery_fetch_fails() -> None:
     with pytest.raises(AuthDiscoveryError) as excinfo:
         resolve_auth_context(
-            _config(auth_issuer=_ISSUER, auth_audience=_AUDIENCE),
+            _config(
+                auth_issuer=_ISSUER, auth_audience=_AUDIENCE, auth_discovery_retry_budget_seconds=0
+            ),
             transport=_FailingDiscoveryTransport(),
         )
 
@@ -219,7 +221,11 @@ def test_resolve_auth_context_discovery_failure_names_issuer_but_not_raw_excepti
     """
     with pytest.raises(AuthDiscoveryError) as excinfo:
         resolve_auth_context(
-            _config(auth_issuer=_AUTHENTIK_SHAPED_ISSUER, auth_audience=_AUDIENCE),
+            _config(
+                auth_issuer=_AUTHENTIK_SHAPED_ISSUER,
+                auth_audience=_AUDIENCE,
+                auth_discovery_retry_budget_seconds=0,
+            ),
             transport=_AuthentikShapedFailingDiscoveryTransport(),
         )
 

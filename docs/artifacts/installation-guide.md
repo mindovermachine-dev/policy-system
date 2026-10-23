@@ -281,8 +281,15 @@ Production uses a Let's Encrypt certificate, so there is no hosts line or CA to 
 
 ### What is exposed (production)
 
-`deploy-ps-prod.sh` publishes PS Service and a **restricted** part of Authentik on one public
+`deploy-ps-prod.sh` publishes **restricted** parts of PS Service and of Authentik on one public
 hostname: `https://<label>.<region>.cloudapp.azure.com`. A Let's Encrypt certificate serves it.
+The Helm chart renders both Ingresses from `psService.publicUrl`; the script does not apply any
+Ingress manifest. An Ingress left by an earlier script run is taken over by the release
+automatically before the upgrade, and its certificate Secret name is unchanged.
+
+The Ingress of PS Service routes only the paths in the chart file `files/ps-service-public-paths.txt`:
+`/health`, `/ready`, `/.well-known/`, and the API and MCP prefixes. It has no catch-all rule, so
+`/metrics` and the interactive API documentation are never routed.
 
 The Ingress of Authentik routes only the eight path prefixes that an end user needs for login
 and enrolment:
@@ -303,7 +310,8 @@ This table shows what is public and what is not:
 | Surface | Public? | Notes |
 | --- | --- | --- |
 | The eight paths above | Yes, to anyone on the internet | Login, enrolment, and recovery run here. Authentik gates each flow itself (an enrolment or recovery link, a passkey). |
-| PS Service (`/` and everything else on the host) | Yes | Every call needs an Authentik-issued bearer token. `/health` and `/ready` need no token. |
+| The PS Service paths in the allowlist above | Yes | Every call needs an Authentik-issued bearer token. `/health` and `/ready` need no token. |
+| PS Service `/metrics` and the interactive API documentation | **No** | Not routed by the chart Ingress. |
 | The Authentik admin UI (`/auth/if/admin/`), the admin and core APIs, the invitation API, and `/auth/if/user/` | **No** | Not routed. PS Service answers the request, never Authentik. Verified on ingress-nginx, not on AKS. See [Verification status](#verification-status). |
 | The owner enrolment link and the owner-creation API calls | Link: public path. API: **no** | The link opens on the public `/auth/if/flow/` path. The script creates the owner and the link through a cluster-internal `kubectl port-forward`. |
 | PS Service to Authentik (`invite_user`) | No | PS Service calls the Authentik API on its in-cluster address (`http://policy-system-authentik-server/auth`). It builds the invitee's link on the public address only. |
@@ -829,7 +837,8 @@ before you rely on a claim for a real deployment.
 - **Production path: verified on `kind`, not on AKS.** The real `deploy-ps-prod.sh` and
   `values-prod.yaml` ran against `kind`. The run used `ingress-nginx` and a stand-in Azure CLI.
   It skipped the cert-manager and Let's Encrypt steps.
-  - **Verified:**
+  - **Verified** (observed on `kind` with an Ingress applied by the script; the chart renders the
+    Ingresses, which unit tests and render checks cover, and no kind run has observed the chart-rendered Ingresses):
     - The Ingress routes exactly the eight paths above.
     - The Ingress blocks the admin UI and the admin APIs.
     - The owner link on the public address enrols a passkey through the Ingress. No flow
@@ -837,6 +846,10 @@ before you rely on a claim for a real deployment.
     - A re-run leaves the owner untouched.
   - **Not verified:**
     - The AKS managed NGINX add-on.
+    - That an existing certificate and its TLS Secret are kept when the release takes over an
+      Ingress, and that a first install on an empty cluster converges within the script's
+      10 minute helm wait. Unit tests cover only the call order and the Ingress names, class,
+      host and Secret name.
     - Real Let's Encrypt issuance through this flow.
     - Real Azure resources.
 - **Direct Claude connector: partly verified.** The Claude Code CLI (2.1.236) logged in as the `ps-cli` client against a standalone Authentik, using the plugin-declared server. It also refreshed across sessions. The Desktop Code tab read the `PS_MCP_URL` setting from `settings.json` against a stub with no authentication (Desktop app 2.31226.1). A manually added custom connector in Claude Desktop Chat and Cowork logged in against a public deployment (GO). None of this was run through these scripts. Not verified: the plugin-declared `oauth.clientId` in Desktop, claude.ai, and the plugin on a live deployment until a result is recorded. See [Which Claude surfaces reach your deployment](#which-claude-surfaces-reach-your-deployment).

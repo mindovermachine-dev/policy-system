@@ -5,9 +5,9 @@ instance (no tenant app registrations), using a path-based issuer shape
 (`https://<hostname>/auth/application/o/ps-cli/`, sharing PS Service's own already-resolved
 hostname, not a second Authentik-only hostname).
 
-The no-op comparison covers exactly **5** leaf fields -- `llm.existingSecret`,
-`psService.auth.{issuer,audience,cliClientId,scopes}` -- matching `ensure_release`'s own shape
-(`release_values_json`).
+The no-op comparison covers the leaf fields `release_values_json` sets -- `llm.existingSecret`,
+`psService.auth.*`, the bootstrap owner, the Authentik URLs, `psService.publicUrl` and the
+`ingress.*` values -- matching `ensure_release`'s own shape.
 
 `psService.auth.audience`/`cliClientId` are both the fixed literal `ps-cli` (one OAuth2
 Provider, one Application, both named `ps-cli`, no separate API-app/CLI-app split). `scopes` is
@@ -118,8 +118,9 @@ def test_issuer_is_path_based_under_ps_services_own_hostname_never_a_second_host
 ) -> None:
     """The issuer is path-based, because one Azure Public IP has exactly one
     `dnsSettings.domainNameLabel`, which rules out a dual-hostname design. The issuer's hostname
-    must be the *exact same* hostname PS Service's own Ingress uses, never an external
-    IdP's host, and never a distinct `auth-*` label.
+    must be the *exact same* hostname as `psService.publicUrl` and `psService.authentik.publicUrl`
+    (the hostname the chart Ingress is rendered for), never an external IdP's host, and never a
+    distinct `auth-*` label.
     """
     _seed(deploy_ps_fixture)
 
@@ -131,11 +132,10 @@ def test_issuer_is_path_based_under_ps_services_own_hostname_never_a_second_host
     assert "login.microsoftonline.com" not in issuer
 
     issuer_hostname = issuer.removeprefix("https://").split("/", 1)[0]
-    ps_service_ingress = deploy_ps_fixture.read_kubectl_applied(
-        "Ingress", f"{HELM_RELEASE_NAME}-ps-service"
-    )
-    assert ps_service_ingress is not None, "PS Service Ingress was never applied"
-    assert f"host: {issuer_hostname}" in ps_service_ingress
+    assert _public_url(values) == f"https://{issuer_hostname}"
+    assert _authentik(values)["publicUrl"] == f"https://{issuer_hostname}/auth"
+    ingress = cast("dict[str, object]", values["ingress"])
+    assert ingress["enabled"] is True
 
 
 def test_scopes_includes_offline_access_so_ps_cli_ever_receives_a_refresh_token(
@@ -192,10 +192,10 @@ def test_rerun_with_unchanged_inputs_makes_no_helm_upgrade_call(
     assert second_calls == first_calls
 
 
-def test_rerun_only_compares_the_nine_script_set_fields_not_falkordb_or_llm_provider_from_values_prod(  # noqa: E501 - full test name, not abbreviated
+def test_rerun_only_compares_the_script_set_fields_not_falkordb_or_llm_provider_from_values_prod(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Seeds `helm get values` with the 9 fields a fresh run would itself produce, PLUS extra
+    """Seeds `helm get values` with the fields a fresh run would itself produce, PLUS extra
     fields that only ever come from `-f values-prod.yaml` and this script never sets itself
     (`falkordb.persistence.durableStorageClass`, `llm.provider`, `psService.service.type`) --
     proving the no-op comparison still reports "unchanged" (no new `helm upgrade` call) despite
@@ -225,6 +225,7 @@ def test_rerun_only_compares_the_nine_script_set_fields_not_falkordb_or_llm_prov
                 "publicUrl": _public_url(first_values),
                 "service": {"type": "ClusterIP"},
             },
+            "ingress": first_values["ingress"],
             "falkordb": {
                 "persistence": {"durableStorageClass": {"enabled": True}},
                 "browser": {"enabled": False},
@@ -236,7 +237,7 @@ def test_rerun_only_compares_the_nine_script_set_fields_not_falkordb_or_llm_prov
     deploy_ps_fixture.run_deploy("--yes", expect=0)
 
     # No NEW upgrade call beyond the one the first, real run already made -- the seeded release
-    # (re-stating the exact same 9 fields plus values-prod.yaml-only extras) must compare as
+    # (re-stating the exact same fields plus values-prod.yaml-only extras) must compare as
     # unchanged.
     assert len(_upgrade_calls(deploy_ps_fixture)) == upgrade_calls_after_first_run
 
@@ -371,7 +372,7 @@ def test_rerun_with_a_changed_owner_email_triggers_a_new_helm_upgrade_call(
 def test_a_changed_authentik_url_triggers_a_new_helm_upgrade_call(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """The comparison covers the two new URL fields, not only auth/owner (9 fields in all)."""
+    """The comparison covers the two new URL fields, not only auth/owner ."""
     _seed(deploy_ps_fixture)
     deploy_ps_fixture.run_deploy("--yes", expect=0)
     first_values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
