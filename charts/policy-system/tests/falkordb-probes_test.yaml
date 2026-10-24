@@ -1,0 +1,115 @@
+suite: falkordb probes
+templates:
+  - falkordb-deployment.yaml
+tests:
+  - it: renders startup, readiness and liveness probes on the falkordb container by default
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].startupProbe
+      - exists:
+          path: spec.template.spec.containers[0].readinessProbe
+      - exists:
+          path: spec.template.spec.containers[0].livenessProbe
+  - it: startup and readiness require a PONG reply
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.exec.command
+          value:
+            - sh
+            - -c
+            - test "$(redis-cli -p 6379 ping 2>&1)" = PONG
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.exec.command
+          value:
+            - sh
+            - -c
+            - test "$(redis-cli -p 6379 ping 2>&1)" = PONG
+  - it: liveness uses the same PONG check
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command
+          value:
+            - sh
+            - -c
+            - test "$(redis-cli -p 6379 ping 2>&1)" = PONG
+  - it: uses the documented default timings
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 90
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 15
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 5
+  - it: takes every timing from falkordb.probes values
+    set:
+      falkordb.probes.startup.timeoutSeconds: 2
+      falkordb.probes.startup.periodSeconds: 3
+      falkordb.probes.startup.failureThreshold: 4
+      falkordb.probes.readiness.timeoutSeconds: 6
+      falkordb.probes.readiness.periodSeconds: 7
+      falkordb.probes.readiness.failureThreshold: 8
+      falkordb.probes.liveness.timeoutSeconds: 9
+      falkordb.probes.liveness.periodSeconds: 11
+      falkordb.probes.liveness.failureThreshold: 12
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 4
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 6
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 7
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 8
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 9
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 11
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 12
+  - it: carries no credential in any probe
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].startupProbe.exec.command[2]
+          pattern: (-a |--pass|AUTH|secret|password)
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].readinessProbe.exec.command[2]
+          pattern: (-a |--pass|AUTH|secret|password)
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command[2]
+          pattern: (-a |--pass|AUTH|secret|password)
+      - notExists:
+          path: spec.template.spec.containers[0].env

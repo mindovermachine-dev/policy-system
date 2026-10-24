@@ -51,6 +51,39 @@ spec:
                   # duplicate password Secret.
                   name: {{ include "policy-system.authentikCredentialsSecretName" . }}
                   key: AUTHENTIK_POSTGRESQL__PASSWORD
+          # TCP (`-h`) is required: initdb runs a temporary server that listens on the
+          # unix socket only, so a socket probe would pass before the final server is up.
+          # No credential is used and there is deliberately no livenessProbe.
+          startupProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - 127.0.0.1
+                - -p
+                - "5432"
+                - -d
+                - {{ .Values.authentik.postgres.database | quote }}
+                - -U
+                - {{ .Values.authentik.postgres.user | quote }}
+            timeoutSeconds: {{ .Values.authentik.postgres.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.authentik.postgres.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.authentik.postgres.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - 127.0.0.1
+                - -p
+                - "5432"
+                - -d
+                - {{ .Values.authentik.postgres.database | quote }}
+                - -U
+                - {{ .Values.authentik.postgres.user | quote }}
+            timeoutSeconds: {{ .Values.authentik.postgres.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.authentik.postgres.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.authentik.postgres.probes.readiness.failureThreshold }}
           volumeMounts:
             - name: authentik-postgres-data
               mountPath: /var/lib/postgresql/data

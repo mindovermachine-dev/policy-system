@@ -23,6 +23,36 @@ spec:
           ports:
             - name: redis
               containerPort: 6379
+          # Every probe requires a PONG reply: `redis-cli ping` exits 0 on a LOADING or
+          # other error reply, so the reply is compared instead of the exit status.
+          # No credential is used (FalkorDB has no password in this chart).
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'test "$(redis-cli -p 6379 ping 2>&1)" = PONG'
+            timeoutSeconds: {{ .Values.falkordb.probes.startup.timeoutSeconds }}
+            periodSeconds: {{ .Values.falkordb.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.falkordb.probes.startup.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'test "$(redis-cli -p 6379 ping 2>&1)" = PONG'
+            timeoutSeconds: {{ .Values.falkordb.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.falkordb.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.falkordb.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'test "$(redis-cli -p 6379 ping 2>&1)" = PONG'
+            timeoutSeconds: {{ .Values.falkordb.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.falkordb.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.falkordb.probes.liveness.failureThreshold }}
           volumeMounts:
             - name: falkordb-data
               mountPath: /var/lib/falkordb/data

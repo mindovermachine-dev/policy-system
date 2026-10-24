@@ -88,9 +88,11 @@ Never use `latest`; tags are `vMAJOR.MINOR.PATCH`. To move to a new tag:
    `PS_TEST_FALKORDB_PORT=<port> uv run pytest ps-service/tests/query_engine/test_ro_query_rejects_write_live.py -m falkordb_live -p no:xdist -o addopts=""`.
 4. Run the smoke tests:
    `uv run pytest ps-service/tests/test_container_image.py -m container_image -p no:xdist -o addopts=""`.
-5. Run `helm unittest charts/policy-system` and
+5. Re-check that `redis-cli` (FalkorDB) and `pg_isready` (authentik Postgres) exist in
+   the new image: the chart probes call them.
+6. Run `helm unittest charts/policy-system` and
    `uv run pytest ps-service/tests/test_falkordb_image_pin.py`.
-6. Record the new tag and the evidence from steps 3 to 5 on the GitHub issue for the
+7. Record the new tag and the evidence from steps 3 to 6 on the GitHub issue for the
    bump (or in the wrapup commit message).
 
 `devx-cafe/gh-tt` must be installed as part of the devcontainer setup. Once the devcontainer is up you must run the following:

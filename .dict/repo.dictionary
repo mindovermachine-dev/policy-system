@@ -50,3 +50,4 @@ docstrings
 importlib
 passkeysigning
 postgres
+isready

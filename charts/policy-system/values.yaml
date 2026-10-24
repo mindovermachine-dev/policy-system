@@ -9,6 +9,27 @@ falkordb:
     repository: falkordb/falkordb
     # Pinned tag; the bump procedure is in CONTRIBUTING.md.
     tag: v4.22.1
+  # The startup probe holds readiness and liveness off until the first PONG, which bounds
+  # the time FalkorDB may take to load its RDB (90 x 10s = 15 min; raise
+  # startup.failureThreshold for large datasets). All three probes require a PONG reply,
+  # because `redis-cli ping` exits 0 on a LOADING or other error reply. Liveness runs only
+  # after startup succeeded, so it never restarts a server that is still loading; once
+  # running, any non-PONG answer or a hang restarts a wedged server (5 x 15s = 75s
+  # tolerance). A restart cannot lose data: the graph is rebuilt from the PS Postgres
+  # mutation log, and the volume only avoids a replay.
+  probes:
+    startup:
+      timeoutSeconds: 5
+      periodSeconds: 10
+      failureThreshold: 90
+    readiness:
+      timeoutSeconds: 5
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      timeoutSeconds: 5
+      periodSeconds: 15
+      failureThreshold: 5
   persistence:
     enabled: true
     storageClassName: ""
@@ -305,6 +326,21 @@ authentik:
       tag: "16-alpine"
     database: authentik
     user: authentik
+    # Startup and readiness use `pg_isready` over TCP (`-h 127.0.0.1`), because first-start
+    # initdb runs a temporary server that listens on the unix socket only; the pod is Ready
+    # only once the final server accepts connections. The startup window (60 x 5s = 5 min)
+    # covers first-start initdb plus crash recovery. There is no liveness probe on purpose:
+    # crash recovery can exceed any fixed window, so a liveness probe could restart the
+    # server into a loop.
+    probes:
+      startup:
+        timeoutSeconds: 5
+        periodSeconds: 5
+        failureThreshold: 60
+      readiness:
+        timeoutSeconds: 5
+        periodSeconds: 5
+        failureThreshold: 6
     persistence:
       size: 10Gi
       storageClassName: ""

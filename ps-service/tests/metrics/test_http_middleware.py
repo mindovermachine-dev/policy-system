@@ -97,7 +97,7 @@ def _scrape(handle: MetricsHandle) -> bytes:
 
 
 def test_templated_route_is_recorded_with_template_method_and_integer_status() -> None:
-    app, handle = _instrumented()
+    app, handle = _instrumented(_Clock(0.0, 123.0))
 
     TestClient(app).get("/items/123")
 
@@ -105,7 +105,10 @@ def test_templated_route_is_recorded_with_template_method_and_integer_status() -
     assert [(s.labels[_METHOD], s.labels[_ROUTE], s.labels[_STATUS], s.value) for s in series] == [
         ("GET", "/items/{item_id}", "200", 1.0)
     ]
-    assert "123" not in _scrape(handle).decode()
+    exposed_label_values = [
+        value for s in samples(_scrape(handle), _DURATION) for value in s.labels.values()
+    ]
+    assert not [value for value in exposed_label_values if "123" in value]
     handle.shutdown()
 
 
