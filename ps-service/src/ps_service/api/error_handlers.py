@@ -39,10 +39,7 @@ from ps_service.api.errors import (
     InternalSeedValidationError,
     InvalidAccessRoleError,
     InvalidAuditQueryFilterError,
-    MergeApprovalRequiresAuthenticatedCallerError,
-    NearMissMergeRefusedError,
     PendingApprovalInvalidOrExpiredError,
-    PendingApprovalNotFoundError,
     PendingReviewNotFoundError,
     PipelineStageError,
     RequestBodyTooLargeError,
@@ -127,15 +124,12 @@ _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     RestoreInstrumentIdAmbiguousError,
     RestoreInstrumentIdNotFoundError,
     PendingReviewNotFoundError,
-    NearMissMergeRefusedError,
     ReviewKindUnsupportedError,
     ExportInstrumentNotFoundError,
     ExportConfigIncompleteError,
     ExportUnresolvedNearMissesError,
     CuratedSourceUnavailableError,
-    MergeApprovalRequiresAuthenticatedCallerError,
     InternalIngestOwnerRequiredError,
-    PendingApprovalNotFoundError,
     PendingApprovalInvalidOrExpiredError,
     InvalidAccessRoleError,
     SelfGrantOrRevokeBlockedError,
@@ -278,7 +272,6 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
         "pending_review_not_found",
         status.HTTP_404_NOT_FOUND,
     ),
-    (NearMissMergeRefusedError, "near_miss_merge_refused", status.HTTP_409_CONFLICT),
     (ReviewKindUnsupportedError, "review_kind_unsupported", status.HTTP_409_CONFLICT),
     (
         ExportInstrumentNotFoundError,
@@ -296,19 +289,9 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
         status.HTTP_502_BAD_GATEWAY,
     ),
     (
-        MergeApprovalRequiresAuthenticatedCallerError,
-        "merge_approval_requires_authenticated_caller",
-        status.HTTP_401_UNAUTHORIZED,
-    ),
-    (
         InternalIngestOwnerRequiredError,
         "owner_required",
         status.HTTP_401_UNAUTHORIZED,
-    ),
-    (
-        PendingApprovalNotFoundError,
-        "pending_approval_not_found",
-        status.HTTP_404_NOT_FOUND,
     ),
     (
         PendingApprovalInvalidOrExpiredError,
@@ -512,15 +495,14 @@ def register_exception_handlers(app: FastAPI) -> None:
     Status map (error type, HTTP status):
 
     * 400: ``InvalidAccessRoleError``, ``InvalidAuditQueryFilterError``.
-    * 401: ``MergeApprovalRequiresAuthenticatedCallerError``; ``InternalIngestOwnerRequiredError``
-      when the orchestration is given no owner for a Policy-bearing seed.
+    * 401: ``InternalIngestOwnerRequiredError`` when the orchestration is given no owner for a
+      Policy-bearing seed.
     * 403: ``AccessDeniedError``, ``SelfGrantOrRevokeBlockedError``,
       ``SystemOwnerFloorViolationError``.
     * 404: ``CatalogIdentifierNotFoundError``, ``PendingReviewNotFoundError``,
-      ``ExportInstrumentNotFoundError``, ``PendingApprovalNotFoundError``,
-      ``PendingApprovalInvalidOrExpiredError``, ``RestoreInstrumentIdNotFoundError``.
-    * 409: ``NearMissMergeRefusedError`` (a near-miss merge the graph-cleanup rules refuse),
-      ``ReviewKindUnsupportedError`` (a stored near-miss review has a kind with no registered
+      ``ExportInstrumentNotFoundError``, ``PendingApprovalInvalidOrExpiredError``,
+      ``RestoreInstrumentIdNotFoundError``.
+    * 409: ``ReviewKindUnsupportedError`` (a stored near-miss review has a kind with no registered
       spec),
       ``ShortNameCollisionError``, ``CelexAlreadyIngestedError``,
       ``RestoreInstrumentIdAmbiguousError``, ``ExportUnresolvedNearMissesError`` (the export

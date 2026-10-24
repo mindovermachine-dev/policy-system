@@ -17,7 +17,6 @@ import pytest
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import FakeAccessRoleStore
 from curated_source._fakes import InMemoryRuntimeConfigStore
-from graph_cleanup._fakes import FakeApprovalStore, approval_row_count
 from ingestion_runs._fakes import InMemoryIngestionRunStore
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
@@ -49,7 +48,7 @@ from ps_service.mcp_interface.tool_core import (
     ACCESS_ROLE_MANAGEMENT_GATE,
     CLEANUP_GATE,
     COMPLIANCE_OFFICER_GATE,
-    NEAR_MISS_MERGE_GATE,
+    NEAR_MISS_KEEP_SEPARATE_GATE,
     OWN_APPROVAL_READ_GATE,
     PLAIN_READ_GATE,
     POLICY_AUTHOR_GATE,
@@ -69,7 +68,6 @@ from ps_service.mcp_interface.tool_gates import (
     gated_tool,
     lifecycle_role_enforcer,
     register_declared_tools,
-    run_body_gate,
 )
 from ps_service.query_engine import falkordb_client
 
@@ -91,13 +89,6 @@ def _audit_factory_returning(store: AuditStore) -> Callable[[ServiceConfig], Aud
         return store
 
     return _factory
-
-
-def _constructor_returning(value: object) -> Callable[[ServiceConfig], object]:
-    def _constructor(_config: ServiceConfig) -> object:
-        return value
-
-    return _constructor
 
 
 def test_the_fail_closed_environment_covers_every_factory_field() -> None:
@@ -176,6 +167,12 @@ _ROLE_GATE = ToolGate(
     kind=GateKind.ROLE,
     role=AccessRole.SYSTEM_ADMIN,
     bypass=BypassPolicy.SKIP,
+    unauthenticated_message="error: no caller",
+)
+_NON_LIFECYCLE_BODY_GATE = ToolGate(
+    kind=GateKind.BODY,
+    role=AccessRole.COMPLIANCE_OFFICER,
+    bypass=BypassPolicy.REFUSE,
     unauthenticated_message="error: no caller",
 )
 
@@ -736,17 +733,7 @@ def test_the_lifecycle_role_enforcer_refuses_a_gate_that_is_not_a_lifecycle_body
     with pytest.raises(ValueError, match="body gate"):
         lifecycle_role_enforcer(environment, "list-access-roles", PLAIN_READ_GATE)
     with pytest.raises(ValueError, match="lifecycle identity"):
-        lifecycle_role_enforcer(environment, "resolve-near-miss", NEAR_MISS_MERGE_GATE)
-
-
-def test_the_body_gate_runs_the_gate_it_is_given_without_a_registered_declaration() -> None:
-    touched.clear()
-    environment = fail_closed_environment(resolve_actor=_no_actor)
-
-    outcome = run_body_gate(environment, "a-tool-that-is-not-registered", NEAR_MISS_MERGE_GATE)
-
-    assert outcome == NEAR_MISS_MERGE_GATE.unauthenticated_message
-    assert touched == []
+        lifecycle_role_enforcer(environment, "a-body-gated-tool", _NON_LIFECYCLE_BODY_GATE)
 
 
 _GRAPH_CLEANUP_TOOLS = (
@@ -829,11 +816,17 @@ def test_a_graph_cleanup_call_on_a_fail_closed_server_opens_its_graph_through_th
     assert touched == ["graph_factory"]
 
 
-_NEAR_MISS_TOOLS = ("list-near-misses", "resolve-near-miss", "check-near-miss-approval")
+_NEAR_MISS_TOOLS = (
+    "list-near-misses",
+    "resolve-near-miss",
+    "merge-near-misses",
+    "check-near-miss-merges",
+)
 _NEAR_MISS_GATES = {
     "list-near-misses": PLAIN_READ_GATE,
-    "resolve-near-miss": NEAR_MISS_MERGE_GATE,
-    "check-near-miss-approval": OWN_APPROVAL_READ_GATE,
+    "resolve-near-miss": NEAR_MISS_KEEP_SEPARATE_GATE,
+    "merge-near-misses": CLEANUP_GATE,
+    "check-near-miss-merges": OWN_APPROVAL_READ_GATE,
 }
 
 
@@ -846,12 +839,6 @@ def test_the_near_miss_group_registers_its_tools_and_gates_on_a_built_server() -
     for name in _NEAR_MISS_TOOLS:
         assert "environment" not in tools[name].input_schema["properties"], name
     assert "ctx" not in tools["resolve-near-miss"].input_schema["properties"]
-
-
-def test_the_body_gate_requires_the_gate_to_be_passed() -> None:
-    parameter = inspect.signature(run_body_gate).parameters["gate"]
-
-    assert parameter.default is inspect.Parameter.empty
 
 
 def _officer_roles() -> FakeAccessRoleStore:
@@ -874,43 +861,6 @@ def _call_as_officer(server: MCPServer, tool: str, arguments: dict[str, object])
     return block.text
 
 
-def test_a_near_miss_merge_on_a_fail_closed_server_reaches_the_graph_through_the_environment() -> (
-    None
-):
-    configure()
-    approvals = FakeApprovalStore()
-    touched.clear()
-    server = build_test_server(
-        audit_store_factory=audit_store_factory(InMemoryAuditStore()),
-        role_store_factory=_role_factory_for(_officer_roles()),
-        pending_approval_store_factory=_constructor_returning(approvals),
-    )
-
-    text = _call_as_officer(
-        server, "resolve-near-miss", {"review_id": "review_aaa", "decision": "merge"}
-    )
-
-    assert text == "error: the policy graph database is not reachable"
-    assert touched == ["graph_factory"]
-    assert approval_row_count(approvals) == 0
-
-
-def test_a_near_miss_merge_cannot_create_an_approval_without_the_pending_approval_factory() -> None:
-    configure()
-    touched.clear()
-    server = build_test_server(
-        audit_store_factory=audit_store_factory(InMemoryAuditStore()),
-        role_store_factory=_role_factory_for(_officer_roles()),
-    )
-
-    text = _call_as_officer(
-        server, "resolve-near-miss", {"review_id": "review_aaa", "decision": "merge"}
-    )
-
-    assert text.startswith("error: ")
-    assert touched == ["pending_approval_store_factory"]
-
-
 @pytest.mark.parametrize(
     ("tool", "arguments", "expected_touched"),
     [
@@ -921,7 +871,7 @@ def test_a_near_miss_merge_cannot_create_an_approval_without_the_pending_approva
             ["graph_factory"],
         ),
         (
-            "check-near-miss-approval",
+            "check-near-miss-merges",
             {"pending_approval_id": "approval-1"},
             ["pending_approval_store_factory"],
         ),

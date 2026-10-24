@@ -309,6 +309,27 @@ def test_curated_mismatch_error_no_longer_exists() -> None:
     assert not hasattr(error_handlers_module, "ShortNameCuratedMismatchError")
 
 
+@pytest.mark.parametrize(
+    "removed",
+    [
+        "NearMissMergeRefusedError",
+        "MergeApprovalRequiresAuthenticatedCallerError",
+        "PendingApprovalNotFoundError",
+    ],
+)
+def test_the_errors_of_the_removed_merge_routes_no_longer_exist(removed: str) -> None:
+    import ps_service.api.errors as api_errors
+
+    assert not hasattr(api_errors, removed)
+    assert not hasattr(error_handlers_module, removed)
+
+
+def test_the_graph_cleanup_provider_of_the_removed_status_route_no_longer_exists() -> None:
+    import ps_service.api.dependencies as api_dependencies
+
+    assert not hasattr(api_dependencies, "provide_graph_cleanup_dependencies")
+
+
 def test_audit_trail_unavailable_maps_to_503_with_fixed_message() -> None:
     """A fail-closed opening-row failure is a 503, message verbatim."""
     exc = AuditTrailUnavailableError(

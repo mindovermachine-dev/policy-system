@@ -1,9 +1,4 @@
-"""Shared pieces of the passkey signing ceremony and the near-miss approval status shape.
-
-- `PendingApprovalStatus` is the status shape that `check-near-miss-approval` (MCP) and
-  `GET /near-misses/approvals/{pending_approval_id}` (REST) return; the near-miss review
-  orchestration (`check_near_miss_merge_approval`) fills it from a `merge-capabilities` cleanup
-  approval. Creating the approval is `graph_cleanup.service.create_capability_merge_approval`.
+"""Shared pieces of the passkey signing ceremony.
 
 Two package-internal helpers are shared with the companion-browser ceremony router
 (`passkey_signing.router`): `_require_pending_and_unexpired` is the single expiry/status guard
@@ -15,43 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from ps_service.api.errors import PendingApprovalInvalidOrExpiredError
 
 if TYPE_CHECKING:
-    from typing import Literal
-
     from ps_service.passkey_signing.models import PendingApprovalRow
-
-
-@dataclass(frozen=True, slots=True)
-class PendingApprovalStatus:
-    """What the near-miss merge status check returns for a caller's own approval.
-
-    Attributes:
-        pending_approval_id: Id of the approval row.
-        status: `"pending"` (awaiting a signature), `"signed"` (signed, outcome recorded or
-            being recorded) or `"expired"` (not signed before `expires_at`).
-        review_id: Id of the near-miss review being merged, or `None` if the stored arguments
-            lack it.
-        decision: The gated decision (`"merge"`), or `None` if the stored arguments lack it.
-        winner_id: Id of the surviving node after the merge; `None` until signed and merged.
-        loser_id: Id of the node merged away; `None` until signed and merged.
-        error: The stored outcome's safe error message when the signature was valid but the
-            action it authorised could not be completed. Without it, null `winner_id` and
-            `loser_id` could not be told apart from a failure; `None` otherwise.
-    """
-
-    pending_approval_id: str
-    status: Literal["pending", "expired", "signed"]
-    review_id: str | None
-    decision: str | None
-    winner_id: str | None
-    loser_id: str | None
-    error: str | None
 
 
 def _require_pending_and_unexpired(  # pyright: ignore[reportUnusedFunction] -- called cross-module from `passkey_signing.router`, never from within this file itself

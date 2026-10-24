@@ -1,36 +1,35 @@
-"""A near-miss merge request obeys the cleanup merge rules: Policy cases, survivor and preview.
+"""A one-review near-miss merge batch obeys the cleanup merge rules: Policies, survivor, preview.
 
-`run_request_near_miss_merge` turns a `PendingReview` into a `merge-capabilities` approval. The
-tests drive it over a `CleanupRig` (the real reader, planner and executor over an in-memory
-graph and gateway), sign the approval the way the router does, and look at the graph afterwards.
+`create_near_miss_merge_batch` turns a `PendingReview` into one signed-batch approval. The tests
+drive it over a `CleanupRig` (the real reader, planner and executor over an in-memory graph and
+gateway), sign the approval the way the router does, and look at the graph afterwards.
 Tests whose names say "characterization" observe behaviour the cleanup merge already had.
 """
 
 from __future__ import annotations
 
 import copy
-from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from company_merge._kinds import UNREGISTERED_KIND
 
 from graph_cleanup._fakes import ABSORBED, SURVIVOR, FakeApprovalStore, approval_row_count
 from graph_cleanup._merge_runs import CONFIG, OFFICER, roles
-from ps_service.api.errors import PendingReviewNotFoundError, ReviewKindUnsupportedError
-from ps_service.api.near_miss_review_orchestration import (
-    build_default_near_miss_review_dependencies,
-    run_request_near_miss_merge,
+from ps_service.graph_cleanup.errors import GraphCleanupValidationError
+from ps_service.graph_cleanup.models import CapabilityMergePreview
+from ps_service.graph_cleanup.near_miss_batch import create_near_miss_merge_batch
+from ps_service.graph_cleanup.near_miss_batch_execution import execute_near_miss_batch
+from ps_service.graph_cleanup.near_miss_batch_models import (
+    NearMissBatchAcknowledgmentRequiredError,
+    NearMissBatchApproval,
+    NearMissBatchRefusedError,
+    NearMissMergePreviewEntry,
 )
-from ps_service.graph_cleanup.errors import (
-    GraphCleanupAcknowledgmentRequiredError,
-    GraphCleanupValidationError,
-)
-from ps_service.graph_cleanup.executors import execute_capability_merge
-from ps_service.graph_cleanup.service import CapabilityMergeApproval
+from ps_service.logging import configure
 
 if TYPE_CHECKING:
-    from graph_cleanup._gateway_fakes import CleanupReadGraph, CleanupRig
+    from graph_cleanup._gateway_fakes import CleanupRig
     from ps_service.company_merge.reviewable_kinds import ReviewableKind
 
 _REVIEW = "review_aaa"
@@ -39,29 +38,25 @@ _NEW = "2024-01-01T00:00:00+00:00"
 _BASE_URL = "https://ps.example.com"
 
 
+@pytest.fixture(autouse=True)
+def logging_configured() -> None:
+    configure()
+
+
 def _request(
     rig: CleanupRig,
     store: FakeApprovalStore,
     *,
     acknowledge: bool = False,
-) -> CapabilityMergeApproval:
-    def _open(_config: object) -> CleanupReadGraph:
-        return rig.read
-
-    dependencies = replace(
-        build_default_near_miss_review_dependencies(), open_single_tenant_graph=_open
-    )
-    approval = run_request_near_miss_merge(
-        _REVIEW,
+) -> NearMissBatchApproval:
+    return create_near_miss_merge_batch(
+        rig.read,
+        review_ids=[_REVIEW],
+        acknowledged_review_ids=[_REVIEW] if acknowledge else [],
         actor=OFFICER,
-        acknowledge_governance_change=acknowledge,
         base_url=_BASE_URL,
-        config=CONFIG,
-        dependencies=dependencies,
         store=store,
     )
-    assert isinstance(approval, CapabilityMergeApproval)  # a Capability review
-    return approval
 
 
 def _world(
@@ -82,6 +77,15 @@ def _world(
     )
 
 
+def _capability_preview(entry: NearMissMergePreviewEntry) -> CapabilityMergePreview:
+    assert isinstance(entry.preview, CapabilityMergePreview)
+    return entry.preview
+
+
+def _merges(outcome: dict[str, object]) -> list[dict[str, object]]:
+    return cast("list[dict[str, object]]", outcome["merges"])
+
+
 def _snapshot(rig: CleanupRig) -> object:
     return copy.deepcopy(dict(rig.graph.nodes)), set(rig.graph.edges)
 
@@ -93,14 +97,14 @@ def _governing(rig: CleanupRig, capability_id: str) -> list[str]:
 
 
 def _sign_and_execute(
-    rig: CleanupRig, store: FakeApprovalStore, approval: CapabilityMergeApproval
+    rig: CleanupRig, store: FakeApprovalStore, approval: NearMissBatchApproval
 ) -> dict[str, object]:
     row = store.get_by_id(approval.pending_approval_id)
     assert row is not None
     assert store.mark_signed(row.id)
     signed = store.get_by_id(row.id)
     assert signed is not None
-    return execute_capability_merge(signed, CONFIG, rig.dependencies(roles()))
+    return execute_near_miss_batch(signed, CONFIG, rig.dependencies(roles()))
 
 
 def test_merging_two_governed_capabilities_leaves_the_winner_with_one_governing_policy(
@@ -136,10 +140,10 @@ def test_exactly_one_governed_capability_needs_the_acknowledgment_and_no_approva
     store = FakeApprovalStore()
     before = _snapshot(rig)
 
-    with pytest.raises(GraphCleanupAcknowledgmentRequiredError) as raised:
+    with pytest.raises(NearMissBatchAcknowledgmentRequiredError) as raised:
         _request(rig, store)
 
-    assert raised.value.preview.policy_case == 2
+    assert _capability_preview(raised.value.merges[0]).policy_case == 2
     assert approval_row_count(store) == 0
     assert _snapshot(rig) == before
 
@@ -154,8 +158,10 @@ def test_with_the_acknowledgment_the_winner_is_governed_by_the_one_policy_afterw
     approval = _request(rig, store, acknowledge=True)
     outcome = _sign_and_execute(rig, store, approval)
 
-    assert approval.preview.policy_case == 2
-    assert outcome == {"survivor_id": SURVIVOR, "absorbed_id": ABSORBED, "merged": True}
+    assert _capability_preview(approval.merges[0]).policy_case == 2
+    assert [(m["state"], m["winner_id"], m["loser_id"]) for m in _merges(outcome)] == [
+        ("merged", SURVIVOR, ABSORBED)
+    ]
     assert _governing(rig, SURVIVOR) == ["pol_1"]
     assert ("Capability", ABSORBED) not in rig.graph.nodes
     assert rig.graph.nodes[("MergedCapability", ABSORBED)]["merged_into"] == SURVIVOR
@@ -172,7 +178,7 @@ def test_characterization_both_governed_by_the_same_policy_needs_no_acknowledgme
     approval = _request(rig, store)
     _sign_and_execute(rig, store, approval)
 
-    assert approval.preview.policy_case == 3
+    assert _capability_preview(approval.merges[0]).policy_case == 3
     assert _governing(rig, SURVIVOR) == ["pol_1"]
     assert _governing(rig, ABSORBED) == []
 
@@ -201,12 +207,14 @@ def test_the_survivor_is_the_earlier_created_node_with_ties_going_to_the_incomin
 
     approval = _request(rig, store)
 
-    assert (approval.preview.survivor_id, approval.preview.absorbed_id) == (survivor, absorbed)
+    preview = approval.merges[0].preview
+    assert (preview.survivor_id, preview.absorbed_id) == (survivor, absorbed)
     row = store.get_by_id(approval.pending_approval_id)
     assert row is not None
-    assert row.normalized_args["survivor_id"] == survivor
-    assert row.normalized_args["absorbed_id"] == absorbed
-    assert row.normalized_args["review_id"] == _REVIEW
+    [signed] = cast("list[dict[str, object]]", row.normalized_args["merges"])
+    assert signed["survivor_id"] == survivor
+    assert signed["absorbed_id"] == absorbed
+    assert signed["review_id"] == _REVIEW
 
 
 def test_the_preview_names_the_pair_the_edges_the_policy_case_and_the_digest(
@@ -219,7 +227,7 @@ def test_the_preview_names_the_pair_the_edges_the_policy_case_and_the_digest(
 
     approval = _request(rig, store)
 
-    preview = approval.preview.model_dump(mode="json")
+    preview = approval.merges[0].preview.model_dump(mode="json")
     assert preview["survivor_id"] == SURVIVOR
     assert preview["absorbed_id"] == ABSORBED
     assert preview["policy_case"] == 1
@@ -241,7 +249,7 @@ def test_a_missing_review_is_not_found_and_creates_no_approval(cleanup_rig: Clea
     rig.seed_capability_merge_world()
     store = FakeApprovalStore()
 
-    with pytest.raises(PendingReviewNotFoundError, match="no unresolved PendingReview"):
+    with pytest.raises(NearMissBatchRefusedError, match="no unresolved near-miss review"):
         _request(rig, store)
 
     assert approval_row_count(store) == 0
@@ -256,7 +264,7 @@ def test_a_review_whose_node_was_absorbed_is_stale_and_creates_no_approval(
     rig.graph.seed_node(("MergedCapability",), ABSORBED, {"merged_into": SURVIVOR})
     store = FakeApprovalStore()
 
-    with pytest.raises(PendingReviewNotFoundError, match="stale"):
+    with pytest.raises(NearMissBatchRefusedError, match="stale"):
         _request(rig, store)
 
     assert approval_row_count(store) == 0
@@ -274,7 +282,7 @@ def test_a_review_of_a_kind_without_a_merge_is_refused_naming_the_kind(
     store = FakeApprovalStore()
     before = copy.deepcopy(rig.graph.nodes)
 
-    with pytest.raises(GraphCleanupValidationError, match=label):
+    with pytest.raises(NearMissBatchRefusedError, match=label):
         _request(rig, store)
 
     assert approval_row_count(store) == 0
@@ -291,7 +299,7 @@ def test_a_review_of_an_unregistered_kind_is_refused_naming_the_kind_and_creates
     )
     store = FakeApprovalStore()
 
-    with pytest.raises(ReviewKindUnsupportedError, match=UNREGISTERED_KIND):
+    with pytest.raises(NearMissBatchRefusedError, match=UNREGISTERED_KIND):
         _request(rig, store)
 
     assert approval_row_count(store) == 0

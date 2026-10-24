@@ -17,8 +17,8 @@ registers, with that parameter bound and hidden from the tool's published input 
 
 Public names: `GateKind`, `BypassPolicy`, `ToolGate`, `GateEnvironment`, the factory protocols,
 `ToolDeclaration`, `ToolGroupRegistrar`, `gated_tool`, `bind_environment`,
-`declaration_of`, `attach_declaration`, `register_declared_tools`, `run_body_gate`,
-`lifecycle_role_enforcer`.
+`declaration_of`, `attach_declaration`, `register_declared_tools`,
+`lifecycle_role_enforcer`, `install_strict_arguments`.
 """
 
 from __future__ import annotations
@@ -26,8 +26,11 @@ from __future__ import annotations
 import dataclasses
 import functools
 import inspect
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, cast
+
+from mcp.types import CallToolResult, TextContent
 
 from ps_service.api.errors import AccessDeniedError, AuthorizationStoreUnavailableError
 from ps_service.audit.actor import resolve_audit_actor
@@ -38,6 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
     from mcp.server import MCPServer
+    from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 
     from ps_service.authz.models import AccessRole
     from ps_service.authz.store import AccessRoleStore
@@ -264,33 +268,6 @@ def _check_gate(environment: GateEnvironment, name: str, gate: ToolGate) -> _Gat
     return _GateOutcome(None, actor)
 
 
-def run_body_gate(environment: GateEnvironment, name: str, gate: ToolGate) -> tuple[str, str] | str:
-    """Run the `BODY` gate of tool `name`, from inside the tool body.
-
-    For a tool whose role requirement applies to one branch only. It applies the same bypass
-    policy, request gate and denial wording as the wrapper does for a `ROLE` tool.
-
-    Args:
-        environment: The server-side collaborators.
-        name: The registered tool name, used as the operation of the audit row.
-        gate: The tool's `BODY` gate declaration.
-
-    Returns:
-        The admitted caller's verified `(sub, iss)`, or the `error: ...` string to return as is.
-
-    Raises:
-        ValueError: `gate` is not a `BODY` gate.
-    """
-    if gate.kind is not GateKind.BODY:
-        message = f"tool {name!r} has no body gate declaration"
-        raise ValueError(message)
-    outcome = _check_gate(environment, name, gate)
-    if outcome.message is not None:
-        return outcome.message
-    assert outcome.actor is not None  # noqa: S101  # a BODY gate never skips the bypass
-    return outcome.actor
-
-
 def lifecycle_role_enforcer(
     environment: GateEnvironment, name: str, gate: ToolGate
 ) -> Callable[[tuple[str, str]], None]:
@@ -433,6 +410,51 @@ def register_declared_tools(
         register(declaration.name, declaration.gate)(tool)
 
 
+def install_strict_arguments(server: MCPServer) -> None:
+    """Make every tool of `server` reject an argument its published input schema does not declare.
+
+    The MCP SDK drops unknown arguments silently, so a caller that still sends a parameter a tool
+    no longer has would run a different call than it meant. The check is server middleware: it
+    runs before the tool, answers with an error result naming the unknown arguments, and leaves
+    the published schemas untouched.
+
+    Args:
+        server: The server whose `tools/call` requests are checked.
+
+    Side Effects:
+        Appends one middleware to the server's middleware chain.
+    """
+
+    async def _strict(ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
+        params = ctx.params
+        if ctx.method == "tools/call" and params is not None:
+            arguments = params.get("arguments")
+            if isinstance(arguments, Mapping):
+                tools = {tool.name: tool for tool in await server.list_tools()}
+                tool = tools.get(str(params.get("name")))
+                if tool is not None:
+                    declared = set(tool.input_schema.get("properties", {}))
+                    unknown = sorted(
+                        str(name) for name in set(cast("Mapping[str, Any]", arguments)) - declared
+                    )
+                    if unknown:
+                        return CallToolResult(
+                            is_error=True,
+                            content=[
+                                TextContent(
+                                    type="text",
+                                    text=(
+                                        f"error: unknown argument(s) for {tool.name}: "
+                                        f"{', '.join(unknown)}"
+                                    ),
+                                )
+                            ],
+                        )
+        return await call_next(ctx)
+
+    server.middleware.append(_strict)
+
+
 def gated_tool(
     server: MCPServer,
     environment: GateEnvironment,
@@ -488,7 +510,7 @@ __all__ = [
     "bind_environment",
     "declaration_of",
     "gated_tool",
+    "install_strict_arguments",
     "lifecycle_role_enforcer",
     "register_declared_tools",
-    "run_body_gate",
 ]

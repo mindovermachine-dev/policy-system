@@ -8,17 +8,13 @@ returns `run_list_near_misses(...).model_dump()`; that function already builds
 the `PendingReviewListResponse` via `near_miss_review_orchestration`'s public
 `_to_pending_review_entry`, so no reconstruction is needed in `mcp_server.py`.
 
-`resolve-near-miss(review_id, decision)`: `decision`'s
-`Literal["keep-separate", "merge"]` type is itself the MCP-schema-level enum
-enforcement. It delegates in-process to `run_resolve_near_miss` via the same
-`_run_mcp_action` wrapper and returns `run_resolve_near_miss(...).model_dump()`;
-that function already builds the `ResolveReviewResponse` via
-`near_miss_review_orchestration`'s public `_to_resolve_response`. For
-`keep-separate`, `winner_id`/`loser_id` are `None`.
+`resolve-near-miss(review_id, decision)`: `decision` is `Literal["keep-separate"]`, so any other
+value is rejected by the tool's input schema, and an undeclared argument is rejected before the
+tool runs. It delegates in-process to `run_resolve_near_miss` via the same `_run_mcp_action` wrapper
+and returns `{"review_id", "decision"}`.
 
-`decision="merge"` is the Graph Cleanup Capability merge behind a signed passkey approval and a
-`ComplianceOfficer` gate; its tests are in `test_near_miss_merge_via_cleanup.py`. This file keeps
-`keep-separate`, the listing and the ownership rules of `check-near-miss-approval`.
+Merging near misses is the batch flow (`test_near_miss_batch_tools.py`). This file keeps
+`keep-separate`, the listing and the ownership rules of `check-near-miss-merges`.
 
 `_verified_actor()` (this file) binds a real `AccessToken` directly onto the
 MCP SDK's `mcp.server.auth.middleware.auth_context.auth_context_var`
@@ -92,11 +88,13 @@ from api.test_routes_near_misses import (
 )
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from company_merge._kinds import UNREGISTERED_KIND
+from mcp.client import Client
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface._environment import fail_closed_environment
 from mcp_interface.test_access_role_tools import (
     _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
     _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
@@ -412,7 +410,7 @@ def _call_resolve_near_miss(review_id: str, decision: str) -> CallToolResult:
 def test_keep_separate_decision_needs_no_role_and_writes_no_access_gate_row(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
-    """Only the merge decision is role-gated, so a keep-separate call never writes a gate row."""
+    """Keep-separate is open to any authenticated caller, so it never writes a gate row."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
@@ -428,13 +426,11 @@ def test_keep_separate_decision_needs_no_role_and_writes_no_access_gate_row(
     assert "near_miss.resolve" in {row.action for row in audit_store.rows}
 
 
-def test_keep_separate_resolves_with_winner_and_loser_left_none(
+def test_keep_separate_returns_only_the_review_id_and_the_decision(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines, audit_store: InMemoryAuditStore
 ) -> None:
-    """For keep-separate, the resolved review's
-    `winner_id`/`loser_id` stay `None` in the response for this decision,
-    plus the `mcp_interface` started/succeeded log pair, which carries no
-    caller identity.
+    """A keep-separate result carries the review id and the decision and nothing else, and the
+    call is logged as an `mcp_interface` started/succeeded pair that carries no caller identity.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -454,15 +450,7 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
 
     assert result.is_error is False
     body = json.loads(_text(result))
-    assert body == {
-        "review_id": "review_aaa",
-        "decision": "keep-separate",
-        "winner_id": None,
-        "loser_id": None,
-        "pending_approval_id": None,
-        "approval_url": None,
-        "expires_at": None,
-    }
+    assert body == {"review_id": "review_aaa", "decision": "keep-separate"}
     # Proof that the real `resolve_review` actually ran its documented
     # 2-query sequence for `review_aaa`/`keep-separate` -- asserted on the
     # real queries/params it issued against `graph`, not on a fake
@@ -492,10 +480,79 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
         assert "principal" not in line
 
 
-# --- `check-near-miss-approval` visibility ---
+async def _call_through_the_server(name: str, arguments: dict[str, object]) -> CallToolResult:
+    """Call a tool through an MCP client, so the server middleware chain runs."""
+    async with Client(_server()) as client:
+        return await client.call_tool(name, arguments)
 
 
-def test_check_approval_unknown_id_gets_generic_not_found(
+def test_resolve_near_miss_schema_offers_only_review_id_and_decision() -> None:
+    tools = {tool.name: tool for tool in asyncio.run(_server().list_tools())}
+
+    schema = tools["resolve-near-miss"].input_schema
+
+    assert set(schema["properties"]) == {"review_id", "decision"}
+    assert schema["properties"]["decision"]["const"] == "keep-separate"
+    assert sorted(schema["required"]) == ["decision", "review_id"]
+
+
+def test_resolve_near_miss_decision_merge_is_rejected_and_the_review_is_untouched(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
+    _use_scripted_graph(monkeypatch, graph)
+
+    result = asyncio.run(
+        _call_through_the_server(
+            "resolve-near-miss", {"review_id": "review_aaa", "decision": "merge"}
+        )
+    )
+
+    assert result.is_error is True
+    assert graph.calls == []
+    assert audit_store.rows == []
+
+
+def test_resolve_near_miss_with_the_removed_acknowledgment_argument_is_rejected_unrun(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]]])
+    _use_scripted_graph(monkeypatch, graph)
+
+    result = asyncio.run(
+        _call_through_the_server(
+            "resolve-near-miss",
+            {
+                "review_id": "review_aaa",
+                "decision": "keep-separate",
+                "acknowledge_governance_change": True,
+            },
+        )
+    )
+
+    assert result.is_error is True
+    assert "acknowledge_governance_change" in _text(result)
+    assert graph.calls == []
+    assert audit_store.rows == []
+
+
+def test_keep_separate_needs_authentication_but_no_role() -> None:
+    from ps_service.mcp_interface.mcp_server import build_server
+    from ps_service.mcp_interface.tool_gates import GateKind
+
+    built = build_server(fail_closed_environment())
+
+    assert built.gates["resolve-near-miss"].kind is GateKind.AUTHENTICATED_ONLY
+
+
+# --- `check-near-miss-merges` visibility ---
+
+
+def test_check_merges_unknown_id_gets_generic_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -507,9 +564,7 @@ def test_check_approval_unknown_id_gets_generic_not_found(
 
     with _verified_actor():
         result = asyncio.run(
-            _server().call_tool(
-                "check-near-miss-approval", {"pending_approval_id": "does-not-exist"}
-            )
+            _server().call_tool("check-near-miss-merges", {"pending_approval_id": "does-not-exist"})
         )
 
     assert isinstance(result, CallToolResult)
@@ -519,7 +574,7 @@ def test_check_approval_unknown_id_gets_generic_not_found(
     assert "no pending approval" in text
 
 
-def test_check_approval_unauthenticated_caller_gets_generic_not_found(
+def test_check_merges_unauthenticated_caller_gets_generic_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fail-closed on the read side: a caller
@@ -532,13 +587,18 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
     configure()
     store = _FakePendingApprovalStore()
     row, _code = store.create_pending_approval(
-        tool_name="merge-capabilities",
+        tool_name="merge-near-misses",
         normalized_args={
-            "survivor_id": "cap_a",
-            "absorbed_id": "cap_b",
-            "acknowledge_governance_change": False,
-            "state_digest": "d",
-            "review_id": "review_aaa",
+            "merges": [
+                {
+                    "review_id": "review_aaa",
+                    "kind": "Capability",
+                    "survivor_id": "cap_a",
+                    "absorbed_id": "cap_b",
+                    "state_digest": "d",
+                    "acknowledge_governance_change": False,
+                }
+            ]
         },
         actor_subject=_ACTOR_SUBJECT,
         actor_issuer=_ACTOR_ISSUER,
@@ -547,7 +607,7 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
     _override(monkeypatch, pending_approval_store_factory=_fake_store_factory(store))
 
     result = asyncio.run(
-        _server().call_tool("check-near-miss-approval", {"pending_approval_id": row.id})
+        _server().call_tool("check-near-miss-merges", {"pending_approval_id": row.id})
     )
 
     assert isinstance(result, CallToolResult)
@@ -557,7 +617,7 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
     assert "no pending approval" in text
 
 
-def test_check_approval_wrong_actor_gets_generic_not_found(
+def test_check_merges_wrong_actor_gets_generic_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ownership check: a different, but still real,
@@ -568,13 +628,18 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
     configure()
     store = _FakePendingApprovalStore()
     row, _code = store.create_pending_approval(
-        tool_name="merge-capabilities",
+        tool_name="merge-near-misses",
         normalized_args={
-            "survivor_id": "cap_a",
-            "absorbed_id": "cap_b",
-            "acknowledge_governance_change": False,
-            "state_digest": "d",
-            "review_id": "review_aaa",
+            "merges": [
+                {
+                    "review_id": "review_aaa",
+                    "kind": "Capability",
+                    "survivor_id": "cap_a",
+                    "absorbed_id": "cap_b",
+                    "state_digest": "d",
+                    "acknowledge_governance_change": False,
+                }
+            ]
         },
         actor_subject=_ACTOR_SUBJECT,
         actor_issuer=_ACTOR_ISSUER,
@@ -584,7 +649,7 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
 
     with _verified_actor(sub="someone-else", iss=_ACTOR_ISSUER):
         result = asyncio.run(
-            _server().call_tool("check-near-miss-approval", {"pending_approval_id": row.id})
+            _server().call_tool("check-near-miss-merges", {"pending_approval_id": row.id})
         )
 
     assert isinstance(result, CallToolResult)

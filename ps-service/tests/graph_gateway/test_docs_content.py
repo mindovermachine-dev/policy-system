@@ -660,7 +660,7 @@ def test_architecture_company_merge_section_says_its_writes_go_through_the_gatew
         "`keep-separate` submits one group that deletes the `PendingReview`",
         "read_review_merge_sides",
         "choose_survivor",
-        "Graph Cleanup `merge-capabilities` approval performs the merge",
+        "Graph Cleanup `merge-near-misses` approval performs the merges",
         "StalePendingReviewError",
         "record_opening_row_with_event_id",
         "CompanyMergePersistenceError",

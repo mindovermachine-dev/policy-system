@@ -1,21 +1,20 @@
 """A near-miss merge deletes the loser and marks it, so the loser id is redirected on re-ingest.
 
-Resolving a near miss with "merge" runs the graph-cleanup `merge-capabilities` merge: the loser
+Merging a near miss in a batch of one runs the graph-cleanup Capability merge: the loser
 node is deleted and a `MergedCapability {id, merged_into}` marker remains, its edges move to the
 survivor, and the `PendingReview` is deleted in the same write group. A later ingest or offline
 restore that carries the loser id again resolves it to the survivor through
 `company_merge.redirects.resolve_redirects`, mints nothing and files no new `PendingReview`, exactly
 as after any cleanup merge (`test_redirects.py`, `tests/restore/test_restore_redirects.py`).
 
-The real request (`run_request_near_miss_merge`), signing hand-off and executor
-(`execute_capability_merge`) run over the gateway rig; the resolver then reads the rig graph the
+The real batch request (`create_near_miss_merge_batch`), signing hand-off and batch executor run
+over the gateway rig; the resolver then reads the rig graph the
 merge group built.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from graph_cleanup._fakes import ABSORBED, SURVIVOR, FakeApprovalStore
@@ -24,19 +23,14 @@ from graph_cleanup._merge_runs import CONFIG, OFFICER, roles
 from graph_gateway._fakes import close_all_rigs
 
 from company_merge._marker_graph import MarkerGraph
-from ps_service.api.near_miss_review_orchestration import (
-    build_default_near_miss_review_dependencies,
-    run_request_near_miss_merge,
-)
 from ps_service.company_merge.models import BaselineGraph, BaselineNode
 from ps_service.company_merge.redirects import resolve_redirects
-from ps_service.graph_cleanup.executors import execute_capability_merge
+from ps_service.graph_cleanup.near_miss_batch import create_near_miss_merge_batch
+from ps_service.graph_cleanup.near_miss_batch_execution import execute_near_miss_batch
 from ps_service.logging import configure
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-    from graph_cleanup._gateway_fakes import CleanupReadGraph
 
 _REVIEW = "review_aaa"
 _BASE_URL = "https://ps.example.com"
@@ -66,25 +60,18 @@ def _merge_the_near_miss(rig: CleanupRig) -> dict[str, object]:
     )
     store = FakeApprovalStore()
 
-    def _open(_config: object) -> CleanupReadGraph:
-        return rig.read
-
-    dependencies = replace(
-        build_default_near_miss_review_dependencies(), open_single_tenant_graph=_open
-    )
-    approval = run_request_near_miss_merge(
-        _REVIEW,
+    approval = create_near_miss_merge_batch(
+        rig.read,
+        review_ids=[_REVIEW],
+        acknowledged_review_ids=[],
         actor=OFFICER,
-        acknowledge_governance_change=False,
         base_url=_BASE_URL,
-        config=CONFIG,
-        dependencies=dependencies,
         store=store,
     )
     assert store.mark_signed(approval.pending_approval_id)
     signed = store.get_by_id(approval.pending_approval_id)
     assert signed is not None
-    return execute_capability_merge(signed, CONFIG, rig.dependencies(roles()))
+    return execute_near_miss_batch(signed, CONFIG, rig.dependencies(roles()))
 
 
 def _loser_as_baseline() -> BaselineGraph:
@@ -107,7 +94,8 @@ def test_a_near_miss_merge_deletes_the_loser_leaves_a_marker_and_deletes_the_rev
 ) -> None:
     outcome = _merge_the_near_miss(rig)
 
-    assert outcome == {"survivor_id": SURVIVOR, "absorbed_id": ABSORBED, "merged": True}
+    [merge] = cast("list[dict[str, object]]", outcome["merges"])
+    assert (merge["state"], merge["winner_id"], merge["loser_id"]) == ("merged", SURVIVOR, ABSORBED)
     assert ("Capability", ABSORBED) not in rig.graph.nodes
     assert rig.graph.nodes[("MergedCapability", ABSORBED)] == {"merged_into": SURVIVOR}
     assert ("PendingReview", _REVIEW) not in rig.graph.nodes

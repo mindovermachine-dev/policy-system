@@ -350,10 +350,72 @@ _SHELL_HTML = """\
     return;
   }
 
+  function textElement(tag, text) {
+    var element = document.createElement(tag);
+    element.textContent = text;
+    return element;
+  }
+
+  function showLines(heading, lines) {
+    app.textContent = "";
+    app.appendChild(textElement("p", heading));
+    var list = document.createElement("ul");
+    lines.forEach(function (line) { list.appendChild(textElement("li", line)); });
+    app.appendChild(list);
+  }
+
+  function describeMerge(merge) {
+    var line = merge.kind + " " + merge.review_id + ": " +
+      merge.survivor_name + " (" + merge.survivor_id + ") absorbs " +
+      merge.absorbed_name + " (" + merge.absorbed_id + ")";
+    return merge.acknowledged ? line + " - governance change acknowledged" : line;
+  }
+
+  function isBatch(summary) {
+    var shown = summary.display_summary;
+    return Boolean(shown) && shown.kind === "near-miss-merge-batch" &&
+      Array.isArray(shown.merges);
+  }
+
+  // A batch is listed in full and only signed after an explicit click, so the
+  // passkey prompt always follows the set the approver has just read.
+  function confirmBatch(merges) {
+    return new Promise(function (resolve) {
+      showLines("You are approving these " + merges.length + " merge(s):",
+        merges.map(describeMerge));
+      var button = textElement("button", "Sign with passkey");
+      button.addEventListener("click", function () {
+        app.textContent = "";
+        app.appendChild(textElement("p", "Preparing your passkey\u2026"));
+        resolve();
+      });
+      app.appendChild(button);
+    });
+  }
+
+  function showBatchOutcome(result) {
+    var merges = result.merges;
+    var failed = merges.filter(function (merge) { return merge.state !== "merged"; });
+    var lines = merges.map(function (merge) {
+      var line = merge.review_id + ": " + merge.state;
+      return merge.error ? line + " - " + merge.error : line;
+    });
+    var heading = failed.length === 0
+      ? "Approved. You may close this window."
+      : "Signed, but " + failed.length + " of " + merges.length +
+        " merges were not carried out.";
+    showLines(heading, lines);
+  }
+
   postJson("/summary", { code: code }).then(function (summary) {
-    render("<p>Preparing your passkey&hellip;</p>");
-    var ceremony = summary.needs_enrollment ? runEnrollment().then(runSigning) : runSigning();
-    return ceremony.then(function (result) {
+    var confirmed = isBatch(summary)
+      ? confirmBatch(summary.display_summary.merges)
+      : Promise.resolve();
+    return confirmed.then(function () {
+      if (!isBatch(summary)) { render("<p>Preparing your passkey&hellip;</p>"); }
+      var ceremony = summary.needs_enrollment ? runEnrollment().then(runSigning) : runSigning();
+      return ceremony;
+    }).then(function (result) {
       // A signed response still carries an `error` when the signature was
       // valid but the action it authorised could not be completed; saying
       // "Approved" there would report a merge that never happened. The
@@ -362,6 +424,10 @@ _SHELL_HTML = """\
       if (result && result.error) {
         render("<p>Your approval was signed, but the action it authorised could not " +
           "be completed, and nothing was changed. Ask for a new approval.</p>");
+        return;
+      }
+      if (result && Array.isArray(result.merges)) {
+        showBatchOutcome(result);
         return;
       }
       render("<p>Approved. You may close this window.</p>");

@@ -27,7 +27,6 @@ from mcp_interface.test_access_gate_denial_matrix import (
 )
 from ps_service.api.dependencies import (
     AuthenticatedOnlyMarker,
-    BodyGateMarker,
     RoleGateDependency,
     authenticated_only,
 )
@@ -43,7 +42,7 @@ if TYPE_CHECKING:
     from ps_service.mcp_interface.tool_gates import ToolGate
 
 _SELF_AUDITED_TOOLS = {"grant-access-role", "revoke-access-role"}
-_BODY_TOOLS = {"resolve-near-miss", "approve-policy", "reject-policy"}
+_BODY_TOOLS = {"approve-policy", "reject-policy"}
 # `approve-policy` / `reject-policy` hand the policy-lifecycle service an injected enforcer; their
 # error tuples keep `AccessDeniedError` because that service raises it (after the Policy read).
 _INJECTED_ENFORCER_TOOLS = {"approve-policy", "reject-policy"}
@@ -64,9 +63,7 @@ def find_undeclared_routes(router: APIRouter) -> list[str]:
         declared = [
             depends.dependency
             for depends in route.dependencies
-            if isinstance(
-                depends.dependency, RoleGateDependency | AuthenticatedOnlyMarker | BodyGateMarker
-            )
+            if isinstance(depends.dependency, RoleGateDependency | AuthenticatedOnlyMarker)
         ]
         if not declared:
             undeclared.append(f"{','.join(sorted(route.methods or ()))} {route.path}")
@@ -80,7 +77,7 @@ def _gate_operations(router: APIRouter) -> list[tuple[str, str]]:
         assert isinstance(route, APIRoute)
         for depends in route.dependencies:
             dependency = depends.dependency
-            if isinstance(dependency, RoleGateDependency | BodyGateMarker):
+            if isinstance(dependency, RoleGateDependency):
                 methods = sorted(route.methods or set())
                 assert len(methods) == 1, route.path
                 pairs.append((f"{methods[0]} {route.path}", dependency.gate.operation))
@@ -123,7 +120,7 @@ def test_self_audited_declarations_are_exactly_grant_and_revoke() -> None:
     )
 
 
-def test_body_declarations_are_exactly_the_three_branch_gated_tools() -> None:
+def test_body_declarations_are_exactly_the_two_lifecycle_gated_tools() -> None:
     assert {n for n, g in TOOL_GATES.items() if g.kind is GateKind.BODY} == _BODY_TOOLS
 
 
@@ -141,7 +138,7 @@ def test_every_rest_route_declares_a_gate_or_is_an_exempt_path() -> None:
 
 def test_every_gated_rest_route_operation_equals_method_and_path() -> None:
     pairs = _gate_operations(build_api_router())
-    assert len(pairs) == 6
+    assert len(pairs) == 5
     for route_label, operation in pairs:
         assert operation == route_label
 

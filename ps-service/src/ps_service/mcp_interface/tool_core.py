@@ -72,7 +72,7 @@ __all__ = [
     "COMPONENT",
     "GRAPH_UNAVAILABLE_MESSAGE",
     "MCP_CALLER_LABEL",
-    "NEAR_MISS_MERGE_GATE",
+    "NEAR_MISS_KEEP_SEPARATE_GATE",
     "OWN_APPROVAL_READ_GATE",
     "PLAIN_READ_GATE",
     "POLICY_AUTHOR_GATE",
@@ -364,11 +364,9 @@ CLEANUP_GATE = ToolGate(
 )
 
 
-NEAR_MISS_MERGE_GATE = ToolGate(
-    kind=GateKind.BODY,
-    role=AccessRole.COMPLIANCE_OFFICER,
-    bypass=BypassPolicy.REFUSE,
-    unauthenticated_message=_CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
+NEAR_MISS_KEEP_SEPARATE_GATE = ToolGate(
+    kind=GateKind.AUTHENTICATED_ONLY,
+    reason="keep-separate deletes only the review record; any authenticated caller",
 )
 
 

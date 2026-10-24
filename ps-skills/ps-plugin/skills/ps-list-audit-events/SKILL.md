@@ -13,7 +13,7 @@ denied), policy lifecycle and supersede-fork actions, and (issue #195) the
 business operations `ingestion_run.submit` / `ingestion_run.complete`
 (regulation ingestion, sync, async and `check-regulations` re-ingests,
 distinguished by `details.trigger`), `instrument.restore`, `near_miss.resolve`
-(keep-separate; a near-miss merge writes `capability.merge`) and `user.invite`, and three
+(keep-separate; a near-miss merge writes `capability.merge` or `role.merge`) and `user.invite`, and three
 cross-cutting actions: `access.gate` (a verified caller denied by a role-gated tool or route; resource
 type `operation`, the operation name as the resource id, the required role in the details),
 `passkey.enroll` (a passkey enrolled for the approver bound to a pending approval; resource type

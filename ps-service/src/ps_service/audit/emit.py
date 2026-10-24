@@ -34,11 +34,13 @@ Conventions (the audit trail's row-shape contract):
   the real `new_obligations`, `new_capabilities` and `matched_capabilities` from the merge result;
   a failed run carries its `reason_code`. An unwritable opening row aborts the whole sweep;
   pairs already written stay.
-- Passkey-approved merge. A near-miss Capability merge is a graph-cleanup `merge-capabilities`
-  approval, so it writes a `capability.merge` row (not `near_miss.resolve`) when the approver
-  signs, with the approver as actor, the review id and before/after snapshots. If that row cannot
-  be written the merge does not run and the single-use approval is already consumed, so a new
-  approval is needed.
+- Passkey-approved near-miss merge batch. `merge-near-misses` is one approval for many merges, and
+  signing it writes one `capability.merge` or `role.merge` row per merge (not `near_miss.resolve`),
+  with the approver as actor, the review id and before/after snapshots, and a `failed` row for a
+  merge that did not happen. If a merge's row cannot be written that merge does not run and the
+  single-use approval is already consumed, so a new approval is needed; the other merges of the
+  batch are not affected. A batch whose signing was interrupted is settled by a later
+  `check-near-miss-merges`, which writes one `failed` row per merge that did not happen.
 - `access.gate`. A verified caller denied by a request gate (an MCP tool or a REST route) gets one
   best-effort row: outcome `rejected`, the denied principal as actor, resource type `operation`,
   the gated operation's name as `resource_id` and only the required role in the details. A denial

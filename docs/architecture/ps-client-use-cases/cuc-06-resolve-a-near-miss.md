@@ -6,7 +6,8 @@
 `ComplianceOfficer` grant) for merge
 **Goal:** A Company Merge dedup candidate (`PendingReview`, of a node kind that has a
 review spec; today Capability and Role) resolved by a human decision — the pair kept separate, or
-merged with the effect previewed, signed, audited, and reversible.
+merged with the effect previewed, signed, audited, and reversible. Merges are decided for a chosen
+set of reviews and signed under one passkey approval.
 **Realizes:** UC-1
 **Interaction class:** Review/resolve
 **v1:** yes
@@ -24,7 +25,7 @@ merged with the effect previewed, signed, audited, and reversible.
 ## Preconditions
 
 - Caller is authenticated. Listing is read-only; resolving writes. Merging a Capability
-  or Role pair needs the explicit `ComplianceOfficer` grant (SystemOwner and SystemAdmin do not
+  or Role pair (`merge-near-misses`) needs the explicit `ComplianceOfficer` grant (SystemOwner and SystemAdmin do not
   imply it, and the local-test bypass does not satisfy it); keep-separate needs only
   authentication.
 - At least one unresolved review exists (an empty list is stated plainly, never implied).
@@ -40,36 +41,43 @@ merged with the effect previewed, signed, audited, and reversible.
 2. **Open one.** Selecting a review renders a **comparison artifact**: the two entities
    side by side, and the effect of each decision previewed explicitly before anything is
    asked — keep-separate deletes only the review record and touches neither entity;
-   merge is available for kinds that have a merge executor (Capability and Role), the CUC-07
-   Capability merge: the loser is deleted behind a `MergedCapability`
-   marker naming the winner, its `REQUIRES`, `COVERS` and `MITIGATED_BY` edges
-   move to the winner, and the review record is deleted in the same write. The preview
-   names the winner (the Capability with the earlier `created_at`; a tie goes to the
-   incoming node), the edge counts and the Policy case. A **Role** review is two Roles of
-   one instrument and merges through the Role merge (`merge-roles`, same `ComplianceOfficer`
-   gate and passkey approval): the absorbed Role is deleted behind a `MergedRole` marker, its
-   Obligations move to the survivor, and `unmerge-entities` reverses it. A Role has no governing
-   Policy, so no governance acknowledgment applies. The controls live on the
-   artifact; chat advises, the click is the user's.
-3. **Keep separate.** No ceremony: the decision executes at once, is audited at the
+   merge is available for kinds that have a merge executor (Capability and Role). A
+   Capability merge is the CUC-07 Capability merge: the loser is deleted behind a
+   `MergedCapability` marker naming the winner, its `REQUIRES`, `COVERS` and `MITIGATED_BY`
+   edges move to the winner, and the review record is deleted in the same write. The
+   preview names the winner (the Capability with the earlier `created_at`; a tie goes to
+   the incoming node), the edge counts and the Policy case. A **Role** review is two Roles
+   of one instrument: the incoming Role survives, the absorbed Role is deleted behind a
+   `MergedRole` marker, its Obligations move to the survivor, and `unmerge-entities`
+   reverses it. A Role has no governing Policy, so no governance acknowledgment applies.
+   The controls live on the artifact; chat advises, the click is the user's.
+3. **Keep separate.** No ceremony: `resolve-near-miss` executes at once, is audited at the
    request, and the artifact shows the review closed with both entities untouched.
-4. **Merge.** The merge runs the full danger-zone shape: the decision returns the cleanup
-   merge preview and creates a one-time `merge-capabilities` approval — bound to exactly
-   this review, this pair, this state and the Policy acknowledgment, with an expiry — and
-   the passkey ceremony runs against PS Service's own WebAuthn relying party. No graph
-   write happens before the signature; the merge executes when the approver signs, with
-   the signer as the audited actor, who must still hold `ComplianceOfficer`. A
-   Capability keeps one governing Policy: when exactly one of the pair is governed the
-   officer must acknowledge the governance change before an approval exists, and when the
-   two are governed by different Policies the merge is refused with a pointer to
-   `release-capability-governance` (keep-separate stays available). The write is audited
-   as a `capability.merge` row with before/after snapshots, linked to the review id.
-   Declining or letting the approval expire changes nothing, and the artifact says so.
-5. **Outcome.** The artifact updates to the resolved state: winner and loser ids on a
-   merge, both-untouched on keep-separate. Every failure keeps its name, visibly:
+4. **Merge a chosen set.** The effect is stated first, then the reviewer names the set of
+   reviews to merge; the client never picks it, and it may mix Capability and Role reviews
+   in any number. `merge-near-misses` returns a preview with one entry per review and
+   creates one one-time approval — bound to exactly the chosen set, each review's pair,
+   state and Policy acknowledgment, with an expiry — and the passkey ceremony runs once
+   against PS Service's own WebAuthn relying party. No graph write happens before the
+   signature; the merges execute one after another when the approver signs, with the
+   signer as the audited actor, who must still hold `ComplianceOfficer`. A Capability keeps
+   one governing Policy: when exactly one of a pair is governed the officer must acknowledge
+   the governance change for that review, one review at a time, in
+   `acknowledged_review_ids` before any approval exists; when the two are governed by
+   different Policies the merge is refused naming the review and pointing at
+   `release-capability-governance` (keep-separate stays available). Each merge is audited
+   as its own `capability.merge` or `role.merge` row with before/after snapshots, linked to
+   its review id. Declining or letting the approval expire changes nothing, and the artifact
+   says so.
+5. **Outcome.** `check-near-miss-merges` reports the batch (`pending`, `expired` or
+   `signed`) and, once signed, one result per review: `merged` with its winner and loser
+   ids, `failed` with its reason (that merge changed nothing; the others are unaffected), or
+   `unsettled` — the outcome of that merge is not yet known, check again later, and it is
+   never shown as done or as failed. The artifact updates each review to its own state;
+   keep-separate shows both entities untouched. Every failure keeps its name, visibly:
    not-found/already-resolved (indistinguishable server-side, by design), **stale** (the
    review's entity was already consumed by a different merge — no write), audit trail
-   unavailable (the merge did not run *and* the one-time approval is consumed — a fresh
+   unavailable (that merge did not run *and* the one-time approval is consumed — a fresh
    approval must be requested), unreachable service or graph. Nothing is silently
    retried.
 6. **The queue.** The Inbox count reflects the resolution; the next unresolved review is
@@ -84,18 +92,18 @@ merged with the effect previewed, signed, audited, and reversible.
 
 ## Approvals & notifications
 
-- **Passkey ceremony on merge only** — the review/resolve instance of the lifecycle-only
-  ceremony rule; the signing summary binds to the exact pair and review state.
-  Keep-separate never triggers one.
+- **One passkey approval per merge batch** — the review/resolve instance of the
+  lifecycle-only ceremony rule; the signing summary lists every merge and binds to each
+  exact pair and review state. Keep-separate never triggers one.
 - **Reversible.** `unmerge-entities` (CUC-07) recreates the loser from the `capability.merge`
-  snapshot and removes its marker. It does not recreate the deleted review: the pair is not offered for review
+  or `role.merge` snapshot and removes its marker. It does not recreate the deleted review: the pair is not offered for review
   again unless a later ingest or restore detects it anew.
 - Resolving clears the review's Inbox item. No new notifications are emitted.
 
 ## Contracts touched
 
-- **H-1 Tool loop** — listing, resolution, and approval-status checks as client tool
-  calls; a pending approval is resumable from a later conversation.
+- **H-1 Tool loop** — listing, keep-separate, the batch merge and its status checks as
+  client tool calls; a pending approval is resumable from a later conversation.
 - **H-4 Permissions & approvals** — the effect-preview-then-acknowledge surface; the
   near-miss elicitation is the established precedent this contract generalizes.
 - **PSC-6 Conversation persistence** — the review session and its comparison artifacts
@@ -108,8 +116,9 @@ merged with the effect previewed, signed, audited, and reversible.
 
 ## Open points
 
-- **Gate decided**: a near-miss merge needs the explicit `ComplianceOfficer` grant to
-  create and to execute, like graph cleanup's sibling merges. Keep-separate stays open to
+- **Gate decided**: `merge-near-misses` needs the explicit `ComplianceOfficer` grant to
+  create and to execute, like graph cleanup's sibling merges; `check-near-miss-merges` shows
+  a batch only to its creator. Keep-separate stays open to
   any authenticated caller. Whether Q-12 assignment also narrows who sees a review is
   still open.
 - Staleness in an open comparison artifact: a review can go stale while on screen

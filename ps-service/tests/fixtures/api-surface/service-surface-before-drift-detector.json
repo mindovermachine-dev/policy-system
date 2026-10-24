@@ -313,7 +313,7 @@
         "required": ["pending_approval_id"],
         "type": "object"
       },
-      "name": "check-near-miss-approval"
+      "name": "check-near-miss-merges"
     },
     {
       "inputSchema": {
@@ -704,6 +704,35 @@
     {
       "inputSchema": {
         "properties": {
+          "acknowledged_review_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "review_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": ["review_ids"],
+        "type": "object"
+      },
+      "name": "merge-near-misses"
+    },
+    {
+      "inputSchema": {
+        "properties": {
           "absorbed_id": {
             "minLength": 1,
             "type": "string"
@@ -796,12 +825,8 @@
     {
       "inputSchema": {
         "properties": {
-          "acknowledge_governance_change": {
-            "default": false,
-            "type": "boolean"
-          },
           "decision": {
-            "enum": ["keep-separate", "merge"],
+            "const": "keep-separate",
             "type": "string"
           },
           "review_id": {
@@ -1294,61 +1319,6 @@
   "openapi": {
     "components": {
       "schemas": {
-        "CapabilityMergePreview": {
-          "additionalProperties": false,
-          "properties": {
-            "absorbed_id": {
-              "type": "string"
-            },
-            "absorbed_name": {
-              "type": "string"
-            },
-            "duplicate_edges_collapsed": {
-              "type": "integer"
-            },
-            "edges_to_move": {
-              "$ref": "#/components/schemas/EdgesToMove"
-            },
-            "governance": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/GovernanceChange"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "obligations_affected": {
-              "type": "integer"
-            },
-            "policy_case": {
-              "enum": [1, 2, 3],
-              "type": "integer"
-            },
-            "state_digest": {
-              "type": "string"
-            },
-            "survivor_id": {
-              "type": "string"
-            },
-            "survivor_name": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "survivor_id",
-            "survivor_name",
-            "absorbed_id",
-            "absorbed_name",
-            "policy_case",
-            "edges_to_move",
-            "duplicate_edges_collapsed",
-            "obligations_affected",
-            "state_digest"
-          ],
-          "type": "object"
-        },
         "CatalogIngestionRequest": {
           "additionalProperties": false,
           "properties": {
@@ -1444,31 +1414,6 @@
             }
           },
           "required": ["instruments"],
-          "type": "object"
-        },
-        "EdgesToMove": {
-          "additionalProperties": false,
-          "properties": {
-            "covers": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "mitigated_by": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "requires": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": ["requires", "covers", "mitigated_by"],
           "type": "object"
         },
         "ExportAcceptedResponse": {
@@ -1604,62 +1549,6 @@
           "required": ["stage", "status"],
           "type": "object"
         },
-        "GovernanceChange": {
-          "additionalProperties": false,
-          "properties": {
-            "acknowledgment_required": {
-              "type": "boolean"
-            },
-            "acknowledgment_text": {
-              "type": "string"
-            },
-            "governed_set_after": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "governed_set_before": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "governed_side": {
-              "enum": ["survivor", "absorbed", "both"],
-              "type": "string"
-            },
-            "obligations_coverage_changed": {
-              "type": "integer"
-            },
-            "policy": {
-              "$ref": "#/components/schemas/GoverningPolicy"
-            }
-          },
-          "required": [
-            "policy",
-            "governed_side",
-            "obligations_coverage_changed",
-            "governed_set_before",
-            "governed_set_after",
-            "acknowledgment_required",
-            "acknowledgment_text"
-          ],
-          "type": "object"
-        },
-        "GoverningPolicy": {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "status": {
-              "type": "string"
-            }
-          },
-          "required": ["id", "title", "status"],
-          "type": "object"
-        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -1781,99 +1670,6 @@
           "required": ["source", "content"],
           "type": "object"
         },
-        "ObligationDuplicatePair": {
-          "additionalProperties": false,
-          "properties": {
-            "absorbed_obligation_id": {
-              "type": "string"
-            },
-            "absorbed_text": {
-              "type": "string"
-            },
-            "basis": {
-              "enum": ["identical_text", "near_text"],
-              "type": "string"
-            },
-            "survivor_obligation_id": {
-              "type": "string"
-            },
-            "survivor_text": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "survivor_obligation_id",
-            "survivor_text",
-            "absorbed_obligation_id",
-            "absorbed_text",
-            "basis"
-          ],
-          "type": "object"
-        },
-        "PendingApprovalStatusResponse": {
-          "properties": {
-            "decision": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "error": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "loser_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "pending_approval_id": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "review_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "status": {
-              "enum": ["pending", "expired", "signed"],
-              "type": "string"
-            },
-            "winner_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": ["pending_approval_id", "status"],
-          "type": "object"
-        },
         "PendingReviewEntry": {
           "properties": {
             "id": {
@@ -1954,12 +1750,8 @@
         "ResolveReviewRequest": {
           "additionalProperties": false,
           "properties": {
-            "acknowledge_governance_change": {
-              "default": false,
-              "type": "boolean"
-            },
             "decision": {
-              "enum": ["keep-separate", "merge"],
+              "const": "keep-separate",
               "type": "string"
             }
           },
@@ -1968,95 +1760,12 @@
         },
         "ResolveReviewResponse": {
           "properties": {
-            "acknowledgment_required": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "approval_url": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "decision": {
               "type": "string"
-            },
-            "expires_at": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "loser_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "message": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "pending_approval_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "preview": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/CapabilityMergePreview"
-                },
-                {
-                  "$ref": "#/components/schemas/RoleMergePreview"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "review_id": {
               "minLength": 1,
               "type": "string"
-            },
-            "winner_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             }
           },
           "required": ["review_id", "decision"],
@@ -2194,52 +1903,6 @@
             }
           },
           "required": ["stage", "status"],
-          "type": "object"
-        },
-        "RoleMergePreview": {
-          "additionalProperties": false,
-          "properties": {
-            "absorbed_id": {
-              "type": "string"
-            },
-            "absorbed_name": {
-              "type": "string"
-            },
-            "duplicate_obligation_pairs": {
-              "default": [],
-              "items": {
-                "$ref": "#/components/schemas/ObligationDuplicatePair"
-              },
-              "type": "array"
-            },
-            "instrument_id": {
-              "type": "string"
-            },
-            "moved_obligation_ids": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "state_digest": {
-              "type": "string"
-            },
-            "survivor_id": {
-              "type": "string"
-            },
-            "survivor_name": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "survivor_id",
-            "survivor_name",
-            "absorbed_id",
-            "absorbed_name",
-            "instrument_id",
-            "moved_obligation_ids",
-            "state_digest"
-          ],
           "type": "object"
         },
         "StageOutcome": {
@@ -2790,44 +2453,6 @@
                 "application/json": {
                   "schema": {
                     "$ref": "#/components/schemas/PendingReviewListResponse"
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "/near-misses/approvals/{pending_approval_id}": {
-        "get": {
-          "operationId": "check_merge_pending_approval_near_misses_approvals__pending_approval_id__get",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "pending_approval_id",
-              "required": true,
-              "schema": {
-                "maxLength": 64,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9_-]{1,64}$",
-                "type": "string"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/PendingApprovalStatusResponse"
-                  }
-                }
-              }
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
                   }
                 }
               }

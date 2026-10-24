@@ -20,18 +20,14 @@ from ps_service.api.change_check_orchestration import (
 )
 from ps_service.api.dependencies import (
     authenticated_only,
-    body_gate,
-    enforce_access_role,
     get_principal,
     get_service_config,
     provide_audit_context,
     provide_change_check_dependencies,
     provide_curated_catalog_dependencies,
     provide_export_dependencies,
-    provide_graph_cleanup_dependencies,
     provide_graph_write_gateway,
     provide_near_miss_review_dependencies,
-    provide_pending_approval_store,
     provide_pipeline_dependencies,
     provide_restore_dependencies,
     provide_restore_from_catalog_dependencies,
@@ -42,9 +38,6 @@ from ps_service.api.dependencies import (
 from ps_service.api.errors import (
     CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
-    MergeApprovalRequiresAuthenticatedCallerError,
-    NearMissMergeRefusedError,
-    PendingApprovalNotFoundError,
 )
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.ingestion_orchestration import (
@@ -64,7 +57,6 @@ from ps_service.api.models import (
     IngestionRequest,
     InstrumentCheckOutcomeBody,
     PathIdentifier,
-    PendingApprovalStatusResponse,
     PendingReviewListResponse,
     ResolveReviewRequest,
     ResolveReviewResponse,
@@ -74,9 +66,7 @@ from ps_service.api.models import (
 )
 from ps_service.api.near_miss_review_orchestration import (
     NearMissReviewDependencies,
-    check_near_miss_merge_approval,
     run_list_near_misses,
-    run_request_near_miss_merge,
     run_resolve_near_miss,
 )
 from ps_service.api.restore_orchestration import (
@@ -100,30 +90,16 @@ from ps_service.curated_source.catalog_client import (
     CuratedCatalogDependencies,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
 from ps_service.curated_source.errors import CuratedSourceFetchError
-from ps_service.graph_cleanup.dependencies import (
-    GraphCleanupDependencies,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
-)
-from ps_service.graph_cleanup.errors import (
-    GraphCleanupAcknowledgmentRequiredError,
-    GraphCleanupValidationError,
-)
 from ps_service.graph_gateway.system_audit import (
     SystemAuditRecorder,  # noqa: TC001 -- FastAPI resolves `create_ingestion`'s annotations at runtime
 )
 from ps_service.ingestion.graph_submission import (
     GroupSubmitter,  # noqa: TC001 -- FastAPI resolves `create_ingestion`'s annotations at runtime
 )
-from ps_service.passkey_signing.store import (
-    PendingApprovalStore,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
-)
-from ps_service.passkey_signing.webauthn_rp import signable_link_host
 from ps_service.runtime_config import RuntimeConfigError
 
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
-
-_RESOLVE_OPERATION = "POST /near-misses/{review_id}/resolve"
-"""The name a merge denial on the resolve route is audited under: `<METHOD> <path template>`."""
 
 
 def _to_accepted_response(run_id: str, outcome: IngestionOutcome) -> IngestionAcceptedResponse:
@@ -611,231 +587,50 @@ async def list_near_misses(
     return run_list_near_misses(config=config, dependencies=dependencies)
 
 
-def _approval_base_url(request: Request) -> str:
-    """Return the ``{scheme}://{host}`` prefix for a pending approval's link.
-
-    Scheme and host come from the live request, never from configuration, so the link works under a
-    local bind, a NodePort and an ingress alike. A loopback IP literal host is rewritten to
-    ``localhost``, because a link on a bare loopback address cannot be signed in a browser.
-    """
-    return f"{request.url.scheme}://{signable_link_host(request.url.netloc)}"
-
-
-def _request_merge(
-    review_id: str,
-    request_body: ResolveReviewRequest,
-    http_request: Request,
-    config: ServiceConfig,
-    dependencies: NearMissReviewDependencies,
-    store: PendingApprovalStore,
-    principal: Principal | None,
-    audit: AuditContext,
-) -> ResolveReviewResponse:
-    """Run the merge branch of `resolve_near_miss`: caller checks, then the cleanup approval.
-
-    The caller must be verified (401 otherwise, nothing written) and hold `ComplianceOfficer` (403),
-    the same rule as the MCP tool. The `ComplianceOfficer` check lives here and not in a route-level
-    dependency because `keep-separate` stays open to any caller.
-    """
-    if principal is None:
-        raise MergeApprovalRequiresAuthenticatedCallerError(
-            "a signed passkey approval requires a real authenticated caller"
-        )
-    enforce_access_role(
-        principal,
-        config,
-        AccessRole.COMPLIANCE_OFFICER,
-        operation=_RESOLVE_OPERATION,
-        audit_store=audit.store,
-    )
-    try:
-        approval = run_request_near_miss_merge(
-            review_id,
-            actor=(principal.sub, principal.iss),
-            acknowledge_governance_change=request_body.acknowledge_governance_change,
-            base_url=_approval_base_url(http_request),
-            config=config,
-            dependencies=dependencies,
-            store=store,
-        )
-    except GraphCleanupAcknowledgmentRequiredError as exc:
-        return ResolveReviewResponse(
-            review_id=review_id,
-            decision="merge",
-            preview=exc.preview,
-            acknowledgment_required=True,
-            message=str(exc),
-        )
-    except GraphCleanupValidationError as exc:
-        raise NearMissMergeRefusedError(str(exc)) from exc
-    return ResolveReviewResponse(
-        review_id=review_id,
-        decision="merge",
-        pending_approval_id=approval.pending_approval_id,
-        approval_url=approval.approval_url,
-        expires_at=approval.expires_at,
-        preview=approval.preview,
-    )
-
-
 async def resolve_near_miss(
     review_id: PathIdentifier,
     request_body: ResolveReviewRequest,
-    http_request: Request,
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[
         NearMissReviewDependencies, Depends(provide_near_miss_review_dependencies)
     ],
-    store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
-    principal: Annotated[Principal | None, Depends(get_principal)],
     audit: Annotated[AuditContext, Depends(provide_audit_context)],
 ) -> ResolveReviewResponse:
-    """Resolve one near-miss review by keeping the entities separate or merging them.
+    """Resolve one near-miss review by keeping the entities separate.
 
-    ``POST /near-misses/{review_id}/resolve``.
-
-    ``decision="keep-separate"`` deletes only the review record, writing an audit row first. It is
-    open to any caller.
-
-    ``decision="merge"`` does not merge synchronously. It needs a verified caller who holds the
-    ``ComplianceOfficer`` role (no admin override), previews the merge and creates a pending passkey
-    approval of the review's kind (``merge-capabilities`` for a Capability review, ``merge-roles``
-    for a Role review), bound to the pair, the previewed state and the review id. Signing it merges
-    the two entities in one audited graph write and deletes the review. A Capability review's
-    survivor is the Capability with the earlier ``created_at``; a Role carries no ``created_at``,
-    so a Role review's survivor is the incoming Role. The absorbed one is deleted behind a
-    ``MergedCapability`` or ``MergedRole`` marker naming the survivor; a Capability's ``REQUIRES``,
-    ``COVERS`` and ``MITIGATED_BY`` edges, or a Role's Obligations, move to the survivor. A
-    Capability keeps at
-    most one governing Policy: when exactly one of the two is governed (``preview.policy_case``
-    2) the response carries ``acknowledgment_required`` and no approval until the request repeats
-    with ``acknowledge_governance_change=true``. Two Capabilities governed by different Policies are
-    refused (409) before any approval; release one with ``release-capability-governance`` first. A
-    Role has no governing Policy, so ``acknowledge_governance_change=true`` on a Role review is
-    refused (409). The response carries ``preview``, ``pending_approval_id``, ``approval_url`` and
-    ``expires_at``; ``winner_id`` and ``loser_id`` stay empty until
-    ``GET /near-misses/approvals/{id}`` reports them.
+    ``POST /near-misses/{review_id}/resolve``. Deletes only the review record, writing an audit row
+    first. Open to any authenticated caller. Merging near misses is done through the MCP
+    ``merge-near-misses`` tool.
 
     Args:
         review_id: The review to resolve (path parameter): 1 to 64 letters, digits, underscores or
-            hyphens. Any other value is rejected with 422 before the handler runs, so no role check,
-            graph read or audit row happens for it.
-        request_body: The decision, ``"keep-separate"`` or ``"merge"``, and for a merge the optional
-            ``acknowledge_governance_change``.
-        http_request: The raw request; supplies the scheme and host for the approval link (merge
-            only).
+            hyphens. Any other value is rejected with 422 before the handler runs, so no graph
+            read or audit row happens for it.
+        request_body: The decision, ``"keep-separate"``.
         config: The resolved service configuration (injected).
         dependencies: The near-miss review collaborators: graph opener and review reader/resolver
             (injected).
-        store: The pending-approval store the merge approval is persisted in (injected).
-        principal: The verified caller, or ``None`` when no verified identity exists (injected).
-            Required for ``merge``; becomes the approval's requester.
-        audit: The acting principal and audit store for the ``near_miss.resolve`` rows (injected;
-            used by ``keep-separate`` only).
+        audit: The acting principal and audit store for the ``near_miss.resolve`` row (injected).
 
     Returns:
-        A :class:`ResolveReviewResponse` naming the review and decision. For ``merge`` it also
-        carries the preview and either the pending approval id, link and expiry or
-        ``acknowledgment_required`` with its ``message``.
+        A :class:`ResolveReviewResponse` naming the review and the decision.
 
     Raises:
-        MergeApprovalRequiresAuthenticatedCallerError: ``decision="merge"`` and no verified caller
-            (401). Nothing is written.
-        AccessDeniedError: ``decision="merge"`` and the caller does not hold ``ComplianceOfficer``
-            (403). Nothing is written.
-        AuthorizationStoreUnavailableError: ``decision="merge"`` and the access-role store cannot be
-            reached (503).
         PendingReviewNotFoundError: The review does not exist or was already resolved, or one of
             its nodes no longer exists (404).
-        NearMissMergeRefusedError: ``merge`` of a review whose kind has no merge, of two
-            Capabilities governed by different Policies, or of a Role review with
-            ``acknowledge_governance_change=true`` (409). No approval was created.
         ReviewKindUnsupportedError: The review has a kind with no registered spec (409, naming the
-            kind). Nothing was audited, written or approved.
-        GraphWriteUnavailableError: ``keep-separate`` and the service has no Graph Write Gateway
-            (503); nothing was audited or resolved.
-        AuditTrailUnavailableError: ``keep-separate`` and the opening audit row could not be written
-            (503); nothing was resolved.
+            kind). Nothing was audited or written.
+        GraphWriteUnavailableError: The service has no Graph Write Gateway (503); nothing was
+            audited or resolved.
+        AuditTrailUnavailableError: The opening audit row could not be written (503); nothing was
+            resolved.
 
     Side Effects:
-        ``keep-separate``: writes a ``near_miss.resolve`` audit row and deletes the review record
-        through the Graph Write Gateway. ``merge``: reads the graph and inserts one pending-approval
-        row in the PS state database; the graph and audit trail are unchanged.
+        Writes a ``near_miss.resolve`` audit row and deletes the review record through the Graph
+        Write Gateway.
     """
-    if request_body.decision == "keep-separate":
-        return run_resolve_near_miss(
-            review_id,
-            request_body.decision,
-            config=config,
-            dependencies=dependencies,
-            audit=audit,
-        )
-    return _request_merge(
-        review_id, request_body, http_request, config, dependencies, store, principal, audit
-    )
-
-
-async def check_merge_pending_approval(
-    pending_approval_id: PathIdentifier,
-    config: Annotated[ServiceConfig, Depends(get_service_config)],
-    store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
-    cleanup_dependencies: Annotated[
-        GraphCleanupDependencies, Depends(provide_graph_cleanup_dependencies)
-    ],
-    principal: Annotated[Principal | None, Depends(get_principal)],
-) -> PendingApprovalStatusResponse:
-    """Report the status of a merge's pending approval (``GET /near-misses/approvals/{id}``).
-
-    Lets a caller resume after a merge was requested. The status is ``pending``, ``expired`` or
-    ``signed``. The approval is a graph-cleanup ``merge-capabilities`` approval that carries the
-    review id. An unknown id, any other kind of approval, an id that belongs to another caller and a
-    request with no verified caller are indistinguishable, so the response reveals nothing about
-    approvals the caller does not own.
-
-    Args:
-        pending_approval_id: The pending approval id returned by the merge request (path parameter):
-            1 to 64 letters, digits, underscores or hyphens. Any other value is rejected with 422
-            before the handler runs.
-        config: The resolved service configuration (injected); used when a signed approval whose
-            outcome was never recorded is settled against the graph.
-        store: The pending-approval store to read from (injected).
-        cleanup_dependencies: The graph-cleanup collaborators for that settlement (injected).
-        principal: The verified caller, or ``None`` when no verified identity exists (injected). The
-            approval must belong to this caller.
-
-    Returns:
-        A :class:`PendingApprovalStatusResponse` with the approval id, its status, the review and
-        decision it covers, and, once the signed merge ran, ``winner_id`` (the surviving
-        Capability) and ``loser_id`` (the absorbed one). ``error`` holds the failure detail when
-        the signed merge failed.
-
-    Raises:
-        PendingApprovalNotFoundError: The id is unknown, belongs to a different caller, is not a
-            near-miss merge approval, or there is no verified caller (404).
-
-    Side Effects:
-        Reads the pending-approval store. A signed approval whose outcome was never recorded and
-        that is well past its expiry is settled against the graph and the audit trail, as
-        ``check-cleanup-approval`` does; otherwise nothing is written.
-    """
-    actor = (principal.sub, principal.iss) if principal is not None else None
-    status = check_near_miss_merge_approval(
-        pending_approval_id=pending_approval_id,
-        actor=actor,
-        store=store,
-        config=config,
-        dependencies=cleanup_dependencies,
-    )
-    if status is None:
-        raise PendingApprovalNotFoundError(f"no pending approval with id {pending_approval_id!r}")
-    return PendingApprovalStatusResponse(
-        pending_approval_id=status.pending_approval_id,
-        status=status.status,
-        review_id=status.review_id,
-        decision=status.decision,
-        winner_id=status.winner_id,
-        loser_id=status.loser_id,
-        error=status.error,
+    return run_resolve_near_miss(
+        review_id, request_body.decision, config=config, dependencies=dependencies, audit=audit
     )
 
 
@@ -862,8 +657,8 @@ def build_api_router() -> APIRouter:
     A fresh router is returned on every call, so each application instance owns its own routes.
     Routes: ``GET /catalog``, ``POST /ingestions``, ``GET /ingestions/{run_id}``, ``POST
     /restorations``, ``POST /restorations/from-catalog``, ``POST /exports``, ``POST
-    /change-checks``, ``GET /near-misses``, ``POST /near-misses/{review_id}/resolve`` and ``GET
-    /near-misses/approvals/{pending_approval_id}``. The ingestion (either source), restore, export
+    /change-checks``, ``GET /near-misses`` and ``POST /near-misses/{review_id}/resolve``. The
+    ingestion (either source), restore, export
     and change-check routes require the ``ComplianceOfficer`` access role through a route-level
     dependency.
 
@@ -960,24 +755,7 @@ def build_api_router() -> APIRouter:
         methods=["POST"],
         status_code=status.HTTP_200_OK,
         dependencies=[
-            Depends(
-                body_gate(
-                    AccessRole.COMPLIANCE_OFFICER,
-                    operation=_RESOLVE_OPERATION,
-                )
-            )
-        ],
-    )
-    router.add_api_route(
-        "/near-misses/approvals/{pending_approval_id}",
-        check_merge_pending_approval,
-        methods=["GET"],
-        dependencies=[
-            Depends(
-                authenticated_only(
-                    "reads only an approval the caller created; the handler checks the creator"
-                )
-            )
+            Depends(authenticated_only("keep-separate deletes only the review record; any caller"))
         ],
     )
     return router

@@ -49,6 +49,7 @@ CLEANUP_TOOLS = frozenset(
         "release-capability-governance",
         "unmerge-entities",
         "check-cleanup-approval",
+        "merge-near-misses",
     }
 )
 CLEANUP_ACTIONS = (
@@ -103,7 +104,7 @@ def _roles() -> FakeAccessRoleStore:
     return store
 
 
-def test_exactly_the_eight_documented_tools_sit_behind_the_cleanup_gate() -> None:
+def test_exactly_the_documented_tools_sit_behind_the_cleanup_gate() -> None:
     gated = {
         name
         for name, gate in TOOL_GATES.items()
@@ -113,7 +114,7 @@ def test_exactly_the_eight_documented_tools_sit_behind_the_cleanup_gate() -> Non
     }
 
     assert gated == CLEANUP_TOOLS
-    assert len(gated) == 8
+    assert len(gated) == 9
 
 
 def test_the_authz_gate_sweep_covers_every_cleanup_tool() -> None:
@@ -146,6 +147,7 @@ def test_an_unreachable_graph_never_leaks_internals_from_any_tool(
         "release-capability-governance": {"capability_id": "cap_a"},
         "unmerge-entities": {"merged_id": "cap_b"},
         "check-cleanup-approval": {"pending_approval_id": "unknown"},
+        "merge-near-misses": {"review_ids": ["review_a"]},
     }[name]  # pyright: ignore[reportAssignmentType]  -- values are the per-tool argument dicts
 
     text = _call(name, args, sub=_OFFICER)

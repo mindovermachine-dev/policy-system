@@ -81,6 +81,7 @@ _ROLE_TOOLS: dict[str, tuple[dict[str, object], str]] = {
     "release-capability-governance": ({"capability_id": "cap_a"}, _CLEANUP_UNAUTHENTICATED),
     "unmerge-entities": ({"merged_id": "cap_b"}, _CLEANUP_UNAUTHENTICATED),
     "check-cleanup-approval": ({"pending_approval_id": "approval-1"}, _CLEANUP_UNAUTHENTICATED),
+    "merge-near-misses": ({"review_ids": ["review_a"]}, _CLEANUP_UNAUTHENTICATED),
 }
 _REFUSING_TOOLS = sorted(
     name for name, (_args, message) in _ROLE_TOOLS.items() if message != _DEFAULT_UNAUTHENTICATED

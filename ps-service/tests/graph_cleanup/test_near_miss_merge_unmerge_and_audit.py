@@ -1,6 +1,6 @@
 """A near-miss merge is audited like any cleanup merge and can be unmerged.
 
-The real near-miss request, signing hand-off and executor run over a `CleanupRig`; the audit tests
+The real batch request, signing hand-off and batch executor run over a `CleanupRig`; the audit tests
 read the `applied` row the executor recorded and the order of events around the gateway write. The
 unmerge test plans the unmerge from that same row (the audit trail is the source of the
 snapshots), signs and executes it, and looks at the graph afterwards.
@@ -18,7 +18,6 @@ and `verify_integrity`. It is deselected by default and unverified where no Post
 from __future__ import annotations
 
 import copy
-from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -28,20 +27,18 @@ from persistence.provisioned_postgres import migrate_state_database, provision_g
 
 from graph_cleanup._fakes import ABSORBED, SURVIVOR, FakeApprovalStore
 from graph_cleanup._merge_runs import CONFIG, OFFICER, roles
-from ps_service.api.near_miss_review_orchestration import (
-    build_default_near_miss_review_dependencies,
-    run_request_near_miss_merge,
-)
 from ps_service.audit import PsycopgAuditStore
 from ps_service.audit.models import AuditEventRow
 from ps_service.graph_cleanup.audit_actions import CapabilityMergeDetails
-from ps_service.graph_cleanup.executors import execute_capability_merge, execute_unmerge
+from ps_service.graph_cleanup.executors import execute_unmerge
+from ps_service.graph_cleanup.near_miss_batch import create_near_miss_merge_batch
+from ps_service.graph_cleanup.near_miss_batch_execution import execute_near_miss_batch
 from ps_service.graph_cleanup.service import create_unmerge_approval
 
 if TYPE_CHECKING:
     from persistence.provisioned_postgres import Provisioned
 
-    from graph_cleanup._gateway_fakes import CleanupReadGraph, CleanupRig
+    from graph_cleanup._gateway_fakes import CleanupRig
 
 _REVIEW = "review_aaa"
 _BASE_URL = "https://ps.example.com"
@@ -68,22 +65,15 @@ def _sign(store: FakeApprovalStore, approval_id: str):
 def _merge_the_near_miss(rig: CleanupRig) -> dict[str, object]:
     store = FakeApprovalStore()
 
-    def _open(_config: object) -> CleanupReadGraph:
-        return rig.read
-
-    dependencies = replace(
-        build_default_near_miss_review_dependencies(), open_single_tenant_graph=_open
-    )
-    approval = run_request_near_miss_merge(
-        _REVIEW,
+    approval = create_near_miss_merge_batch(
+        rig.read,
+        review_ids=[_REVIEW],
+        acknowledged_review_ids=[],
         actor=OFFICER,
-        acknowledge_governance_change=False,
         base_url=_BASE_URL,
-        config=CONFIG,
-        dependencies=dependencies,
         store=store,
     )
-    return execute_capability_merge(
+    return execute_near_miss_batch(
         _sign(store, approval.pending_approval_id), CONFIG, rig.dependencies(roles())
     )
 
@@ -100,7 +90,7 @@ def test_the_applied_row_precedes_the_write_and_names_the_actor_pair_review_and_
 
     outcome = _merge_the_near_miss(rig)
 
-    assert outcome["merged"] is True
+    assert outcome["merged_count"] == 1
     assert rig.order() == ["audit:applied", "log_append"]
     [recorded] = rig.audit.rows
     assert recorded.action == "capability.merge"

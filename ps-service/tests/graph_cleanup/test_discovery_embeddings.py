@@ -167,6 +167,11 @@ def test_graph_cleanup_never_imports_an_llm_or_embedding_router() -> None:
         "ps_service.company_merge.errors.CompanyMergeValidationError",
         "ps_service.company_merge.errors.CompanyMergePersistenceError",
         "ps_service.company_merge.pending_review.get_pending_review",
+        "ps_service.company_merge.pending_review.choose_survivor",
+        "ps_service.company_merge.pending_review.read_review_merge_sides",
+        "ps_service.company_merge.pending_review.ReviewMergeSides",
         "ps_service.company_merge.errors.UnknownReviewKindError",
+        "ps_service.company_merge.errors.StalePendingReviewError",
         "ps_service.company_merge.reviewable_kinds.CAPABILITY",
+        "ps_service.company_merge.reviewable_kinds.ROLE",
     }

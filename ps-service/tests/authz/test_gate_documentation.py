@@ -18,7 +18,6 @@ from ps_service.audit import emit
 from ps_service.mcp_interface import (
     access_audit_tools,
     cypher_tools,
-    near_miss_tools,
     policy_transition_tools,
 )
 
@@ -112,7 +111,6 @@ def test_list_audit_events_tool_docstring_lists_the_new_actions() -> None:
 @pytest.mark.parametrize(
     "tool",
     [
-        near_miss_tools.resolve_near_miss,
         policy_transition_tools.approve_policy,
         policy_transition_tools.reject_policy,
     ],

@@ -2,24 +2,13 @@
 
 A near miss is a pair of similar entities that Company Merge left separate and queued as a
 `PendingReview` for a human decision. This module serves the two operations behind the REST
-routes: listing the unresolved reviews, and resolving one as `keep-separate` or `merge`.
+routes and the MCP tools: listing the unresolved reviews, and resolving one as `keep-separate`.
+Merging near misses is a separate flow, `graph_cleanup.near_miss_batch`, which previews a chosen
+set and binds it to one passkey approval.
 
 It provides the injection seam :class:`NearMissReviewDependencies`, the production wiring
 :func:`build_default_near_miss_review_dependencies`, and the entry points
-:func:`run_list_near_misses`, :func:`run_resolve_near_miss`, :func:`run_request_near_miss_merge`
-and :func:`check_near_miss_merge_approval`.
-
-A near-miss merge is not a separate write. :func:`run_request_near_miss_merge` picks the survivor,
-builds the graph-cleanup preview for the pair and creates that approval with the review id signed
-into it; the registered cleanup executor then runs the merge when the approval is signed and
-deletes the `PendingReview` in the same write group. A Capability review uses `merge-capabilities`
-(`REQUIRES`/`COVERS`/`MITIGATED_BY` edges moved, the absorbed Capability deleted and a
-`MergedCapability` marker left, the one-Policy rule enforced, a `capability.merge` audit row with
-snapshots). A Role review uses `merge-roles` (the absorbed Role's Obligations move to the survivor,
-the absorbed Role is replaced by a `MergedRole` marker, a `role.merge` audit row with snapshots);
-a Role has no governing Policy, so the governance acknowledgment does not apply to it. This module
-is the glue between the two components, because `ps_service.company_merge` must not import
-`ps_service.graph_cleanup`.
+:func:`run_list_near_misses` and :func:`run_resolve_near_miss`.
 
 The production wiring imports `ps_service.company_merge` function-locally, so importing
 `ps_service.main` never loads Company Merge at module load. Only the graph opener is
@@ -29,14 +18,13 @@ replace the FalkorDB boundary and never the business rules above it.
 
 Lower-layer outcomes are translated into API errors here, because `ps_service.company_merge`
 never imports `ps_service.api`: `pending_review.resolve_review` returning `None` (unknown or
-already resolved review) and `StalePendingReviewError` (a merge request whose incoming or existing
-node no longer exists) both become :class:`PendingReviewNotFoundError`, before any write.
+already resolved review) becomes :class:`PendingReviewNotFoundError`, before any write.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 import redis.exceptions
 
@@ -58,25 +46,10 @@ from ps_service.audit import (
 )
 from ps_service.company_merge.errors import (
     CompanyMergePersistenceError,
-    StalePendingReviewError,
     UnknownReviewKindError,
-)
-from ps_service.company_merge.pending_review import choose_survivor, read_review_merge_sides
-from ps_service.company_merge.reviewable_kinds import CAPABILITY, ROLE
-from ps_service.graph_cleanup.errors import (
-    GraphCleanupPersistenceError,
-    GraphCleanupValidationError,
-)
-from ps_service.graph_cleanup.executors import TOOL_MERGE_CAPABILITIES, TOOL_MERGE_ROLES
-from ps_service.graph_cleanup.models import CapabilityMergePreview
-from ps_service.graph_cleanup.service import (
-    check_cleanup_approval,
-    create_capability_merge_approval,
-    create_role_merge_approval,
 )
 from ps_service.logging import emit_log_entry
 from ps_service.logging.errors import LoggingLifecycleError
-from ps_service.passkey_signing.service import PendingApprovalStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -87,19 +60,11 @@ if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.graph_submission import GraphWriteTarget
     from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
-    from ps_service.company_merge.pending_review import ReviewMergeSides
     from ps_service.config import ServiceConfig
-    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
-    from ps_service.graph_cleanup.service import CapabilityMergeApproval, RoleMergeApproval
     from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
-    from ps_service.passkey_signing.store import PendingApprovalStore
 
 _COMPONENT = "near_miss_review"
-_STALE_REVIEW_MESSAGE: Final = (
-    "pending review {review_id!r} references a node that no longer exists "
-    "(already resolved by a prior merge); this review is now stale"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,12 +135,7 @@ def run_list_near_misses(
 
 def _to_resolve_response(outcome: ResolveOutcome) -> ResolveReviewResponse:
     """Map a `ResolveOutcome` to the success body of the resolve route."""
-    return ResolveReviewResponse(
-        review_id=outcome.review_id,
-        decision=outcome.decision,
-        winner_id=outcome.winner_id,
-        loser_id=outcome.loser_id,
-    )
+    return ResolveReviewResponse(review_id=outcome.review_id, decision=outcome.decision)
 
 
 def _failure_reason(exc: Exception) -> NearMissResolveReason:
@@ -227,10 +187,8 @@ def run_resolve_near_miss(
 ) -> ResolveReviewResponse:
     """Resolve one `PendingReview` by keeping the pair separate.
 
-    Deletes only the `PendingReview` record. A Capability merge is not decided here:
-    :func:`run_request_near_miss_merge` creates the graph-cleanup `merge-capabilities` approval and
-    the cleanup executor writes the merge (edges moved, the absorbed Capability deleted behind a
-    `MergedCapability` marker, one Policy rule) when it is signed.
+    Deletes only the `PendingReview` record. A merge is not decided here: it is requested through
+    `merge-near-misses` and carried out when its approval is signed.
 
     Args:
         review_id: The `PendingReview` id to resolve (the route's path parameter).
@@ -418,251 +376,4 @@ def build_default_near_miss_review_dependencies(
         list_pending_reviews=list_pending_reviews,
         resolve_review=resolve_review,
         get_pending_review=get_pending_review,
-    )
-
-
-_ROLE_ACKNOWLEDGMENT_MESSAGE: Final = (
-    "a Role merge has no governing Policy; acknowledge_governance_change does not apply"
-)
-
-
-@dataclass(frozen=True, slots=True)
-class _MergeRequest:
-    """What both kinds of near-miss merge request need to create their approval.
-
-    Attributes:
-        graph: Read handle on the single-tenant graph.
-        sides: The review's two sides, as read under its own kind.
-        acknowledge_governance_change: The caller's acknowledgment flag.
-        actor: Verified `(subject, issuer)` of the requesting Compliance Officer.
-        base_url: Origin used to build the approval link.
-        store: Pending-approval store that receives the approval row.
-    """
-
-    graph: GraphHandle
-    sides: ReviewMergeSides
-    acknowledge_governance_change: bool
-    actor: tuple[str, str]
-    base_url: str
-    store: PendingApprovalStore
-
-
-def _request_role_merge(request: _MergeRequest) -> RoleMergeApproval:
-    """Create the `merge-roles` approval for a Role review.
-
-    A Role has no governing Policy, so an acknowledgment of a governance change is refused rather
-    than ignored. The survivor is the incoming Role: a Role node carries no `created_at`, so
-    `choose_survivor` always decides for the node whose arrival raised the near miss.
-
-    Args:
-        request: The review's sides and the caller's request context.
-
-    Returns:
-        The Role merge preview with the approval id, signing URL and expiry.
-
-    Raises:
-        GraphCleanupValidationError: `acknowledge_governance_change` is true, or the Role merge
-            refuses the pair or the review.
-        GraphCleanupPersistenceError: The graph could not be read.
-    """
-    if request.acknowledge_governance_change:
-        raise GraphCleanupValidationError(_ROLE_ACKNOWLEDGMENT_MESSAGE)
-    survivor_id, absorbed_id = choose_survivor(request.sides)
-    return create_role_merge_approval(
-        request.graph,
-        survivor_id=survivor_id,
-        absorbed_id=absorbed_id,
-        review_id=request.sides.review_id,
-        actor=request.actor,
-        base_url=request.base_url,
-        store=request.store,
-    )
-
-
-def _request_capability_merge(request: _MergeRequest) -> CapabilityMergeApproval:
-    """Create the `merge-capabilities` approval for a Capability review.
-
-    The survivor is the Capability with the earlier `created_at` (a missing one counts earliest, a
-    tie goes to the incoming node).
-
-    Args:
-        request: The review's sides and the caller's request context.
-
-    Returns:
-        The Capability merge preview with the approval id, signing URL and expiry.
-
-    Raises:
-        GraphCleanupAcknowledgmentRequiredError: Case 2 without the acknowledgment.
-        GraphCleanupValidationError: The cleanup merge refuses the pair.
-        GraphCleanupPersistenceError: The graph could not be read.
-    """
-    survivor_id, absorbed_id = choose_survivor(request.sides)
-    return create_capability_merge_approval(
-        request.graph,
-        survivor_id=survivor_id,
-        absorbed_id=absorbed_id,
-        acknowledge_governance_change=request.acknowledge_governance_change,
-        review_id=request.sides.review_id,
-        actor=request.actor,
-        base_url=request.base_url,
-        store=request.store,
-    )
-
-
-def run_request_near_miss_merge(
-    review_id: str,
-    *,
-    actor: tuple[str, str],
-    acknowledge_governance_change: bool,
-    base_url: str,
-    config: ServiceConfig,
-    dependencies: NearMissReviewDependencies,
-    store: PendingApprovalStore,
-) -> CapabilityMergeApproval | RoleMergeApproval:
-    """Preview merging a near-miss pair and create the graph-cleanup merge approval for its kind.
-
-    A Capability review gets a `merge-capabilities` approval; the survivor is the Capability with
-    the earlier `created_at` (a missing one counts earliest, a tie goes to the incoming node). A
-    Role review gets a `merge-roles` approval; a Role carries no `created_at`, so the survivor is
-    the incoming Role. The approval is bound to the pair and the state digest, with the review id
-    signed into it; signing runs the cleanup executor, which merges and deletes the `PendingReview`
-    in one write group. Nothing is written to the graph here.
-
-    Args:
-        review_id: Id of the near-miss review, as listed by `list-near-misses`.
-        actor: Verified `(subject, issuer)` of the requesting Compliance Officer; the approval is
-            bound to them. The caller has already checked the `ComplianceOfficer` grant.
-        acknowledge_governance_change: True when the officer accepts the governance change of a
-            case-2 Capability merge (exactly one Capability governed). Refused for a Role review,
-            which has no governing Policy.
-        base_url: Origin used to build the approval link, without a trailing slash.
-        config: The resolved service configuration, used to open the graph.
-        dependencies: The near-miss review dependency bundle that supplies the graph opener.
-        store: Pending-approval store that receives the approval row.
-
-    Returns:
-        The cleanup merge preview with the approval id, signing URL and expiry: a
-        `CapabilityMergeApproval` for a Capability review, a `RoleMergeApproval` for a Role review.
-
-    Raises:
-        PendingReviewNotFoundError: `review_id` does not exist or was already resolved, or one of
-            its nodes no longer exists (stale review, own message).
-        ReviewKindUnsupportedError: The review has a kind with no registered spec (HTTP 409,
-            naming the kind).
-        GraphCleanupValidationError: The review is of a registered kind that has no merge (the
-            message names the kind), `acknowledge_governance_change` was set for a Role review, or
-            the cleanup merge refuses the pair (Capability: different governing Policies, a side
-            that is not active).
-        GraphCleanupAcknowledgmentRequiredError: Case 2 Capability merge without the
-            acknowledgment; carries the preview and no approval exists.
-        GraphCleanupPersistenceError: The graph could not be read.
-
-    Side Effects:
-        Reads the graph and inserts one pending-approval row on success; emits one log entry.
-    """
-    graph = dependencies.open_single_tenant_graph(config)
-    try:
-        sides = read_review_merge_sides(graph, review_id)
-    except StalePendingReviewError as exc:
-        raise PendingReviewNotFoundError(_STALE_REVIEW_MESSAGE.format(review_id=review_id)) from exc
-    except UnknownReviewKindError as exc:
-        raise ReviewKindUnsupportedError(str(exc)) from exc
-    except redis.exceptions.RedisError as exc:
-        raise GraphCleanupPersistenceError("the policy graph could not be read") from exc
-    if sides is None:
-        raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
-    merge_request = _MergeRequest(
-        graph=graph,
-        sides=sides,
-        acknowledge_governance_change=acknowledge_governance_change,
-        actor=actor,
-        base_url=base_url,
-        store=store,
-    )
-    if sides.kind == ROLE.label:
-        approval: CapabilityMergeApproval | RoleMergeApproval = _request_role_merge(merge_request)
-    elif sides.kind == CAPABILITY.label:
-        approval = _request_capability_merge(merge_request)
-    else:
-        raise GraphCleanupValidationError(
-            f"a {sides.kind} near miss cannot be merged; keep it separate"
-        )
-    extra: dict[str, object] = {
-        "kind": sides.kind,
-        "approval_id": approval.pending_approval_id,
-        "survivor_id": approval.preview.survivor_id,
-        "absorbed_id": approval.preview.absorbed_id,
-    }
-    if isinstance(approval.preview, CapabilityMergePreview):
-        extra["policy_case"] = approval.preview.policy_case
-    emit_log_entry(
-        component=_COMPONENT,
-        action="request_near_miss_merge",
-        entity_id=review_id,
-        outcome="succeeded",
-        extra=extra,
-    )
-    return approval
-
-
-def check_near_miss_merge_approval(
-    *,
-    pending_approval_id: str,
-    actor: tuple[str, str] | None,
-    store: PendingApprovalStore,
-    config: ServiceConfig,
-    dependencies: GraphCleanupDependencies,
-) -> PendingApprovalStatus | None:
-    """Report a near-miss merge approval, mapping the cleanup approval's fields to winner/loser.
-
-    A near-miss merge approval is a `merge-capabilities` or `merge-roles` cleanup approval that
-    carries a review id. Any other approval, an unknown id, another caller's approval and a
-    missing actor all return None, indistinguishably.
-
-    Args:
-        pending_approval_id: Id returned when the merge was requested.
-        actor: The caller's verified `(subject, issuer)`, or None when there is none.
-        store: Pending-approval store.
-        config: Service configuration, used when an orphaned signed approval is reconciled.
-        dependencies: Graph-cleanup dependencies for that reconciliation.
-
-    Returns:
-        The status: `winner_id` (the survivor) and `loser_id` (the absorbed node) once the
-        signed merge has run, the executor's safe `error` text when it did not, otherwise None for
-        all three; None when no such approval is visible to the caller.
-
-    Raises:
-        GraphCleanupPersistenceError: Reconciliation could not read the graph.
-        AuditPostgresUnavailableError: Reconciliation could not record its audit row.
-        AuditPersistenceError: As above, for any other audit write failure.
-
-    Side Effects:
-        As `check_cleanup_approval`: a signed approval whose outcome was never recorded may be
-        reconciled against the graph.
-    """
-    status = check_cleanup_approval(
-        pending_approval_id=pending_approval_id,
-        actor=actor,
-        store=store,
-        config=config,
-        dependencies=dependencies,
-    )
-    if (
-        status is None
-        or status.tool_name not in (TOOL_MERGE_CAPABILITIES, TOOL_MERGE_ROLES)
-        or status.review_id is None
-    ):
-        return None
-    outcome = status.outcome or {}
-    winner = outcome.get("survivor_id")
-    loser = outcome.get("absorbed_id")
-    error = outcome.get("error")
-    return PendingApprovalStatus(
-        pending_approval_id=status.pending_approval_id,
-        status=status.status,
-        review_id=status.review_id,
-        decision="merge",
-        winner_id=winner if isinstance(winner, str) else None,
-        loser_id=loser if isinstance(loser, str) else None,
-        error=error if isinstance(error, str) else None,
     )

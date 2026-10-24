@@ -77,16 +77,3 @@ def test_unauthenticated_merge_resolution_gets_the_same_401_for_a_malformed_revi
     assert valid.status_code == 401
     assert malformed.status_code == valid.status_code
     assert malformed.json() == valid.json()
-
-
-def test_unauthenticated_approval_status_read_gets_the_same_401_for_a_malformed_id(
-    mock_oidc_provider: MockOidcProvider,
-) -> None:
-    client = _unauthenticated_client(mock_oidc_provider)
-
-    valid = client.get("/near-misses/approvals/0b9d7f40-3c1e-4a58-9d2e-6f1b7c8a9e10")
-    malformed = client.get("/near-misses/approvals/approval.1")
-
-    assert valid.status_code == 401
-    assert malformed.status_code == valid.status_code
-    assert malformed.json() == valid.json()

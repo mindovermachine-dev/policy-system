@@ -18,7 +18,7 @@ from ps_service.mcp_interface.mcp_server import TOOL_GATES
 from ps_service.mcp_interface.tool_core import (
     CLEANUP_GATE,
     COMPLIANCE_OFFICER_GATE,
-    NEAR_MISS_MERGE_GATE,
+    NEAR_MISS_KEEP_SEPARATE_GATE,
     OWN_APPROVAL_READ_GATE,
     PLAIN_READ_GATE,
 )
@@ -36,8 +36,9 @@ _EXPECTED_GATES: dict[str, ToolGate] = {
     "list-near-misses": PLAIN_READ_GATE,
     "get-domain-concepts": PLAIN_READ_GATE,
     "run-cypher": PLAIN_READ_GATE,
-    "resolve-near-miss": NEAR_MISS_MERGE_GATE,
-    "check-near-miss-approval": OWN_APPROVAL_READ_GATE,
+    "resolve-near-miss": NEAR_MISS_KEEP_SEPARATE_GATE,
+    "merge-near-misses": CLEANUP_GATE,
+    "check-near-miss-merges": OWN_APPROVAL_READ_GATE,
     "unmerge-entities": CLEANUP_GATE,
 }
 

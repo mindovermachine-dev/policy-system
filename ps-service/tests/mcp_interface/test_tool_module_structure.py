@@ -57,8 +57,9 @@ _EXPECTED_TOOLS = frozenset(
         "merge-capabilities",
         "merge-obligations",
         "merge-roles",
-        "check-near-miss-approval",
+        "check-near-miss-merges",
         "list-near-misses",
+        "merge-near-misses",
         "resolve-near-miss",
         "propose-policy",
         "reject-policy",
@@ -409,7 +410,8 @@ _EXPECTED_TOOL_ORDER = [
     "check-instrument-ingestion-status",
     "list-near-misses",
     "resolve-near-miss",
-    "check-near-miss-approval",
+    "merge-near-misses",
+    "check-near-miss-merges",
     "set-catalog-source",
     "reset-catalog-source",
     "get-catalog-source",
@@ -511,3 +513,16 @@ def test_tools_list_presents_tools_in_the_pre_split_order() -> None:
     server = importlib.import_module(f"{_PACKAGE}.mcp_server").server
 
     assert [tool.name for tool in asyncio.run(server.list_tools())] == _EXPECTED_TOOL_ORDER
+
+
+def test_the_tool_list_has_the_four_near_miss_tools() -> None:
+    from ps_service.mcp_interface import mcp_server
+
+    listed = {tool.name for tool in asyncio.run(mcp_server.server.list_tools())}
+
+    assert {name for name in listed if "near-miss" in name} == {
+        "list-near-misses",
+        "resolve-near-miss",
+        "merge-near-misses",
+        "check-near-miss-merges",
+    }

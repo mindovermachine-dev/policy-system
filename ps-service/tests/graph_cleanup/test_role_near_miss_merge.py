@@ -1,9 +1,9 @@
-"""Resolving a `Role` near miss with `merge` goes through the Role merge approval.
+"""Merging a `Role` near miss as a batch of one goes through the Role merge executor.
 
-`run_request_near_miss_merge` reads the review's two sides under its own kind, picks the survivor,
-and creates the graph-cleanup `merge-roles` approval with the review id signed into it. The tests
-drive it over a `CleanupRig` (the real reader, planner and executor over an in-memory graph and
-gateway), sign the approval the way the router does, and look at the graph afterwards.
+`create_near_miss_merge_batch` reads the review's two sides under its own kind, picks the survivor,
+and creates one approval with the review id signed into it. The tests drive it over a `CleanupRig`
+(the real reader, planner and executor over an in-memory graph and gateway), sign the approval the
+way the router does, and look at the graph afterwards.
 
 A Role node carries no `created_at`, so the survivor of a Role review is always the incoming Role
 (the node whose arrival raised the near miss); one test pins that rule.
@@ -12,9 +12,8 @@ A Role node carries no `created_at`, so the survivor of a Role review is always 
 from __future__ import annotations
 
 import copy
-from dataclasses import replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import FakeAccessRoleStore
@@ -26,24 +25,22 @@ from graph_cleanup._fakes import (
     approval_row_count,
 )
 from graph_cleanup._merge_runs import CONFIG, OFFICER, OWNER, roles
-from ps_service.api.errors import PendingReviewNotFoundError
-from ps_service.api.near_miss_review_orchestration import (
-    build_default_near_miss_review_dependencies,
-    check_near_miss_merge_approval,
-    run_request_near_miss_merge,
-)
 from ps_service.audit.models import AuditEventRow
-from ps_service.graph_cleanup.errors import GraphCleanupValidationError
-from ps_service.graph_cleanup.executors import (
-    TOOL_MERGE_ROLES,
-    execute_role_merge,
-    execute_unmerge,
-)
+from ps_service.graph_cleanup.executors import execute_unmerge
 from ps_service.graph_cleanup.models import RoleMergePreview
-from ps_service.graph_cleanup.service import RoleMergeApproval, create_unmerge_approval
+from ps_service.graph_cleanup.near_miss_batch import create_near_miss_merge_batch
+from ps_service.graph_cleanup.near_miss_batch_execution import execute_near_miss_batch
+from ps_service.graph_cleanup.near_miss_batch_models import (
+    TOOL_MERGE_NEAR_MISSES,
+    NearMissBatchApproval,
+    NearMissBatchRefusedError,
+)
+from ps_service.graph_cleanup.near_miss_batch_status import check_near_miss_merge_batch
+from ps_service.graph_cleanup.service import create_unmerge_approval
+from ps_service.logging import configure
 
 if TYPE_CHECKING:
-    from graph_cleanup._gateway_fakes import CleanupReadGraph, CleanupRig
+    from graph_cleanup._gateway_fakes import CleanupRig
     from ps_service.passkey_signing.models import PendingApprovalRow
 
 _REVIEW = "review_role_aaa"
@@ -58,26 +55,22 @@ def _world(
     rig.seed_near_miss_review(_REVIEW, incoming_id=incoming, existing_id=existing, kind="Role")
 
 
+@pytest.fixture(autouse=True)
+def logging_configured() -> None:
+    configure()
+
+
 def _request(
     rig: CleanupRig, store: FakeApprovalStore, *, acknowledge: bool = False
-) -> RoleMergeApproval:
-    def _open(_config: object) -> CleanupReadGraph:
-        return rig.read
-
-    dependencies = replace(
-        build_default_near_miss_review_dependencies(), open_single_tenant_graph=_open
-    )
-    approval = run_request_near_miss_merge(
-        _REVIEW,
+) -> NearMissBatchApproval:
+    return create_near_miss_merge_batch(
+        rig.read,
+        review_ids=[_REVIEW],
+        acknowledged_review_ids=[_REVIEW] if acknowledge else [],
         actor=OFFICER,
-        acknowledge_governance_change=acknowledge,
         base_url=_BASE_URL,
-        config=CONFIG,
-        dependencies=dependencies,
         store=store,
     )
-    assert isinstance(approval, RoleMergeApproval)
-    return approval
 
 
 def _sign(store: FakeApprovalStore, approval_id: str) -> PendingApprovalRow:
@@ -91,6 +84,10 @@ def _graph_state(rig: CleanupRig) -> tuple[object, object]:
     return copy.deepcopy(rig.graph.nodes), copy.deepcopy(rig.graph.edges)
 
 
+def _merges(outcome: dict[str, object]) -> list[dict[str, object]]:
+    return cast("list[dict[str, object]]", outcome["merges"])
+
+
 def _has_sources(rig: CleanupRig, obligation_id: str) -> list[str]:
     return [key[2] for key in rig.graph.edges if key[0] == "HAS" and key[4] == obligation_id]
 
@@ -98,7 +95,7 @@ def _has_sources(rig: CleanupRig, obligation_id: str) -> list[str]:
 # -- the request ---------------------------------------------------------------------------------
 
 
-def test_a_role_review_yields_a_role_merge_approval_with_the_review_signed_in(
+def test_a_role_review_yields_a_batch_approval_with_the_review_signed_in(
     cleanup_rig: CleanupRig,
 ) -> None:
     rig = cleanup_rig
@@ -108,15 +105,15 @@ def test_a_role_review_yields_a_role_merge_approval_with_the_review_signed_in(
 
     approval = _request(rig, store)
 
-    assert isinstance(approval.preview, RoleMergePreview)
-    assert (approval.preview.survivor_id, approval.preview.absorbed_id) == (
-        ROLE_SURVIVOR,
-        ROLE_ABSORBED,
-    )
+    preview = approval.merges[0].preview
+    assert isinstance(preview, RoleMergePreview)
+    assert (preview.survivor_id, preview.absorbed_id) == (ROLE_SURVIVOR, ROLE_ABSORBED)
     row = store.get_by_id(approval.pending_approval_id)
     assert row is not None
-    assert row.tool_name == TOOL_MERGE_ROLES
-    assert row.normalized_args["review_id"] == _REVIEW
+    assert row.tool_name == TOOL_MERGE_NEAR_MISSES
+    [signed] = cast("list[dict[str, object]]", row.normalized_args["merges"])
+    assert signed["review_id"] == _REVIEW
+    assert signed["kind"] == "Role"
     assert approval_row_count(store) == 1
     assert _graph_state(rig) == before
 
@@ -129,10 +126,8 @@ def test_the_incoming_role_survives_because_a_role_has_no_created_at(
 
     approval = _request(rig, FakeApprovalStore())
 
-    assert (approval.preview.survivor_id, approval.preview.absorbed_id) == (
-        ROLE_ABSORBED,
-        ROLE_SURVIVOR,
-    )
+    preview = approval.merges[0].preview
+    assert (preview.survivor_id, preview.absorbed_id) == (ROLE_ABSORBED, ROLE_SURVIVOR)
 
 
 def test_acknowledging_a_governance_change_is_refused_for_a_role_with_no_approval(
@@ -143,7 +138,7 @@ def test_acknowledging_a_governance_change_is_refused_for_a_role_with_no_approva
     store = FakeApprovalStore()
     before = _graph_state(rig)
 
-    with pytest.raises(GraphCleanupValidationError, match="acknowledge_governance_change"):
+    with pytest.raises(NearMissBatchRefusedError, match="acknowledgment"):
         _request(rig, store, acknowledge=True)
 
     assert approval_row_count(store) == 0
@@ -158,7 +153,7 @@ def test_a_role_review_whose_side_was_already_absorbed_is_stale_and_creates_no_a
     del rig.graph.nodes[("Role", ROLE_ABSORBED)]  # a Role merge absorbed it since the listing
     store = FakeApprovalStore()
 
-    with pytest.raises(PendingReviewNotFoundError, match="now stale"):
+    with pytest.raises(NearMissBatchRefusedError, match="stale"):
         _request(rig, store)
 
     assert approval_row_count(store) == 0
@@ -176,9 +171,11 @@ def test_signing_moves_the_losers_obligations_leaves_a_marker_and_deletes_the_re
     approval = _request(rig, store)
     row = _sign(store, approval.pending_approval_id)
 
-    outcome = execute_role_merge(row, CONFIG, rig.dependencies(roles()))
+    outcome = execute_near_miss_batch(row, CONFIG, rig.dependencies(roles()))
 
-    assert outcome == {"survivor_id": ROLE_SURVIVOR, "absorbed_id": ROLE_ABSORBED, "merged": True}
+    assert [(m["state"], m["winner_id"], m["loser_id"]) for m in _merges(outcome)] == [
+        ("merged", ROLE_SURVIVOR, ROLE_ABSORBED)
+    ]
     for obligation_id in ("obl_msa_moved_1", "obl_msa_moved_2"):
         assert _has_sources(rig, obligation_id) == [ROLE_SURVIVOR]
     assert ("Role", ROLE_ABSORBED) not in rig.graph.nodes
@@ -192,7 +189,7 @@ def test_the_merge_of_a_role_review_can_still_be_unmerged(cleanup_rig: CleanupRi
     _world(rig)
     store = FakeApprovalStore()
     approval = _request(rig, store)
-    execute_role_merge(
+    execute_near_miss_batch(
         _sign(store, approval.pending_approval_id), CONFIG, rig.dependencies(roles())
     )
     [applied] = rig.audit.rows
@@ -240,9 +237,11 @@ def test_an_approver_who_lost_the_compliance_officer_grant_is_refused_and_the_re
     revoked.bootstrap_first_owner(OWNER)  # the officer's grant is gone
     before = _graph_state(rig)
 
-    outcome = execute_role_merge(row, CONFIG, rig.dependencies(revoked))
+    outcome = execute_near_miss_batch(row, CONFIG, rig.dependencies(revoked))
 
-    assert "no longer holds" in str(outcome["error"])
+    [entry] = _merges(outcome)
+    assert entry["state"] == "failed"
+    assert "no longer holds" in str(entry["error"])
     assert _graph_state(rig) == before
     assert ("PendingReview", _REVIEW) in rig.graph.nodes
     assert rig.logged_groups == []
@@ -250,7 +249,7 @@ def test_an_approver_who_lost_the_compliance_officer_grant_is_refused_and_the_re
     assert (recorded.action, recorded.outcome) == ("role.merge", "failed")
 
 
-# -- the approval status of a Role near-miss merge -----------------------------------------------
+# -- the status of a Role near-miss merge batch --------------------------------------------------
 
 
 def test_the_status_of_a_signed_role_near_miss_merge_reports_winner_and_loser(
@@ -261,10 +260,10 @@ def test_the_status_of_a_signed_role_near_miss_merge_reports_winner_and_loser(
     store = FakeApprovalStore()
     approval = _request(rig, store)
     row = _sign(store, approval.pending_approval_id)
-    outcome = execute_role_merge(row, CONFIG, rig.dependencies(roles()))
+    outcome = execute_near_miss_batch(row, CONFIG, rig.dependencies(roles()))
     store.set_outcome(approval.pending_approval_id, outcome)
 
-    status = check_near_miss_merge_approval(
+    status = check_near_miss_merge_batch(
         pending_approval_id=approval.pending_approval_id,
         actor=OFFICER,
         store=store,
@@ -273,9 +272,10 @@ def test_the_status_of_a_signed_role_near_miss_merge_reports_winner_and_loser(
     )
 
     assert status is not None
-    assert status.review_id == _REVIEW
-    assert status.decision == "merge"
-    assert (status.winner_id, status.loser_id) == (ROLE_SURVIVOR, ROLE_ABSORBED)
+    assert status.status == "signed"
+    [entry] = status.merges
+    assert (entry.review_id, entry.kind, entry.state) == (_REVIEW, "Role", "merged")
+    assert (entry.winner_id, entry.loser_id) == (ROLE_SURVIVOR, ROLE_ABSORBED)
 
 
 def test_the_status_of_a_pending_role_near_miss_merge_is_visible_to_its_requester(
@@ -286,7 +286,7 @@ def test_the_status_of_a_pending_role_near_miss_merge_is_visible_to_its_requeste
     store = FakeApprovalStore()
     approval = _request(rig, store)
 
-    status = check_near_miss_merge_approval(
+    status = check_near_miss_merge_batch(
         pending_approval_id=approval.pending_approval_id,
         actor=OFFICER,
         store=store,
@@ -295,5 +295,4 @@ def test_the_status_of_a_pending_role_near_miss_merge_is_visible_to_its_requeste
     )
 
     assert status is not None
-    assert (status.status, status.review_id) == ("pending", _REVIEW)
-    assert (status.winner_id, status.loser_id) == (None, None)
+    assert (status.status, status.merges) == ("pending", ())

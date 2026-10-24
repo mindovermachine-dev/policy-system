@@ -28,7 +28,6 @@ _RETIRED_BY_CURRENT_NAME = {
     "check-regulations": _joined("check", "regulations"),
     "list-near-misses": _joined("near", "misses", "list"),
     "resolve-near-miss": _joined("near", "misses", "resolve"),
-    "check-near-miss-approval": _joined("near", "misses", "check", "approval"),
     "restore-instrument": _joined("restore", "instrument"),
     "check-instrument-ingestion-status": _joined("check", "instrument", "ingestion", "status"),
     "get-domain-concepts": _joined("domain", "concepts"),
@@ -64,3 +63,19 @@ def test_calling_a_retired_name_is_an_unknown_tool_with_no_dispatch(
 
     assert touched == [], current
     assert audit_store.rows == [], current
+
+
+_REMOVED_STATUS_TOOL = _joined("check", "near", "miss", "approval", separator="-")
+
+
+def test_the_removed_status_tool_is_an_unknown_tool_with_no_dispatch() -> None:
+    touched.clear()
+    audit_store = InMemoryAuditStore()
+    server = build_test_server(audit_store_factory=audit_store_factory(audit_store))
+
+    assert _REMOVED_STATUS_TOOL not in _listed_tool_names()
+    with pytest.raises(ToolError, match=f"Unknown tool: {_REMOVED_STATUS_TOOL}"):
+        asyncio.run(server.call_tool(_REMOVED_STATUS_TOOL, {"pending_approval_id": "x"}))
+
+    assert touched == []
+    assert audit_store.rows == []

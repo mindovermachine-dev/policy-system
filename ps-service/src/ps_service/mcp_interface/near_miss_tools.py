@@ -1,15 +1,16 @@
-"""Near-miss review tools of the PS MCP server: list, resolve and check a near-miss approval.
+"""Near-miss review tools of the PS MCP server: list, resolve, and merge many under one approval.
 
-Registers `list-near-misses`, `resolve-near-miss` and `check-near-miss-approval`;
-`register_near_miss_tools` registers them on a server built by `mcp_server.build_server`. Each tool
-opens its graph and builds its stores through the `GateEnvironment` it is bound to. This module
-imports only `tool_core` and `tool_gates` (never another tool group).
+Registers `list-near-misses`, `resolve-near-miss`, `merge-near-misses` and
+`check-near-miss-merges`; `register_near_miss_tools` registers them on a server built by
+`mcp_server.build_server`. Each tool opens its graph and builds its stores through the
+`GateEnvironment` it is bound to. This module imports only `tool_core` and `tool_gates` (never
+another tool group).
 
 Business Rules:
-    - `keep-separate` needs no role beyond the plain-read gate; the `merge` decision is role-gated
-      in the tool body and writes one `access.gate` audit row when denied.
-    - A merge decision on a review creates a passkey-signed pending approval bound to the verified
-      `(sub, iss)` of the caller; with no verified bearer token it fails closed.
+    - `resolve-near-miss` only keeps a pair separate and needs no role beyond authentication.
+    - `merge-near-misses` needs an explicit `ComplianceOfficer` grant on a real session and creates
+      one approval that binds every chosen merge; `check-near-miss-merges` shows only the
+      creator's own batch.
 """
 
 from __future__ import annotations
@@ -24,9 +25,7 @@ from pydantic import Field
 from ps_service.api.errors import PendingReviewNotFoundError, ReviewKindUnsupportedError
 from ps_service.api.near_miss_review_orchestration import (
     build_default_near_miss_review_dependencies,
-    check_near_miss_merge_approval,
     run_list_near_misses,
-    run_request_near_miss_merge,
     run_resolve_near_miss,
 )
 from ps_service.audit.errors import (
@@ -36,23 +35,31 @@ from ps_service.audit.errors import (
 )
 from ps_service.config import load_config
 from ps_service.graph_cleanup.errors import (
-    GraphCleanupAcknowledgmentRequiredError,
     GraphCleanupPersistenceError,
     GraphCleanupValidationError,
 )
+from ps_service.graph_cleanup.near_miss_batch import create_near_miss_merge_batch
+from ps_service.graph_cleanup.near_miss_batch_models import (
+    NearMissBatchAcknowledgmentRequiredError,
+)
+from ps_service.graph_cleanup.near_miss_batch_status import check_near_miss_merge_batch
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import (
     CLEANUP_APPROVAL_UNSETTLED_MESSAGE as _CLEANUP_APPROVAL_UNSETTLED_MESSAGE,
 )
+from ps_service.mcp_interface.tool_core import CLEANUP_GATE as _CLEANUP_GATE
 from ps_service.mcp_interface.tool_core import (
     GRAPH_UNAVAILABLE_MESSAGE as _GRAPH_UNAVAILABLE_MESSAGE,
 )
-from ps_service.mcp_interface.tool_core import NEAR_MISS_MERGE_GATE as _NEAR_MISS_MERGE_GATE
+from ps_service.mcp_interface.tool_core import (
+    NEAR_MISS_KEEP_SEPARATE_GATE as _NEAR_MISS_KEEP_SEPARATE_GATE,
+)
 from ps_service.mcp_interface.tool_core import OWN_APPROVAL_READ_GATE as _OWN_APPROVAL_READ_GATE
 from ps_service.mcp_interface.tool_core import PLAIN_READ_GATE as _PLAIN_READ_GATE
 from ps_service.mcp_interface.tool_core import audit_context as _audit_context
 from ps_service.mcp_interface.tool_core import cleanup_dependencies as _cleanup_dependencies
 from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
+from ps_service.mcp_interface.tool_core import gated_actor as _gated_actor
 from ps_service.mcp_interface.tool_core import resolve_authz_actor as _resolve_authz_actor
 from ps_service.mcp_interface.tool_core import resolve_base_url as _resolve_base_url
 from ps_service.mcp_interface.tool_core import run_mcp_action as _run_mcp_action
@@ -60,17 +67,12 @@ from ps_service.mcp_interface.tool_core import (
     sanitize_cleanup_graph_open as _sanitize_cleanup_graph_open,
 )
 from ps_service.mcp_interface.tool_core import sanitize_graph_open as _sanitize_graph_open
-from ps_service.mcp_interface.tool_gates import (
-    GateEnvironment,
-    register_declared_tools,
-    run_body_gate,
-)
+from ps_service.mcp_interface.tool_gates import GateEnvironment, register_declared_tools
 
 if TYPE_CHECKING:
     from mcp.server import MCPServer
 
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
-    from ps_service.config import ServiceConfig
     from ps_service.mcp_interface.tool_gates import ToolGate
 
 
@@ -163,164 +165,41 @@ def list_near_misses(  # `environment` is injected by the server and hidden from
     return _run_mcp_action("list-near-misses", _body)
 
 
-def _resolve_merge_pending_approval(
-    environment: GateEnvironment,
-    review_id: str,
-    ctx: Context,
-    config: ServiceConfig,
-    *,
-    acknowledge: bool,
-) -> dict[str, object] | str:
-    """Handle `resolve-near-miss` with `decision="merge"` by requesting a cleanup merge approval.
-
-    Split out of the tool body to keep its branch count manageable; no other tool uses it.
-
-    Args:
-        environment: The collaborators the tool is bound to.
-        review_id: Id of the near-miss pending review to merge.
-        ctx: MCP request context, used to derive the approval link's base URL.
-        config: Resolved service configuration.
-        acknowledge: True when the caller accepts the governance change of a case-2 merge.
-
-    Returns:
-        `{"preview", "pending_approval_id", "approval_url", "expires_at"}`; for a Capability case 2
-        without the acknowledgment `{"preview", "acknowledgment_required": True, "message"}` and no
-        approval; or an `error: ` string when the caller is not an authenticated Compliance
-        Officer, the review does not exist or is stale or is of a kind with no merge, a Role review
-        carries the governance acknowledgment, the pair is governed by different Policies, or the
-        graph is unreachable.
-
-    Raises:
-        Exception: Any other error propagates to `_run_mcp_action`.
-
-    Side Effects:
-        Inserts one pending-approval row on success. The merge itself runs only after a human signs.
-        Nothing is written to the graph.
-    """
-    actor = run_body_gate(environment, "resolve-near-miss", _NEAR_MISS_MERGE_GATE)
-    if isinstance(actor, str):
-        return actor
-    try:
-        approval = run_request_near_miss_merge(
-            review_id,
-            actor=actor,
-            acknowledge_governance_change=acknowledge,
-            base_url=_resolve_base_url(ctx),
-            config=config,
-            dependencies=_review_dependencies(environment),
-            store=environment.pending_approval_store_factory(config),
-        )
-    except GraphCleanupAcknowledgmentRequiredError as exc:
-        return {
-            "preview": exc.preview.model_dump(mode="json"),
-            "acknowledgment_required": True,
-            "message": str(exc),
-        }
-    except (
-        PendingReviewNotFoundError,
-        ReviewKindUnsupportedError,
-        GraphCleanupValidationError,
-    ) as exc:
-        return f"error: {exc}"
-    except McpGraphUnavailableError, GraphCleanupPersistenceError:
-        return _GRAPH_UNAVAILABLE_MESSAGE
-    return {
-        "preview": approval.preview.model_dump(mode="json"),
-        "pending_approval_id": approval.pending_approval_id,
-        "approval_url": approval.approval_url,
-        "expires_at": approval.expires_at,
-    }
-
-
-# The merge-only fields of `ResolveReviewResponse`; a keep-separate result never carries them.
-_MERGE_ONLY_RESOLVE_FIELDS = {"preview", "acknowledgment_required", "message"}
-
-
-@_gated_tool("resolve-near-miss", _NEAR_MISS_MERGE_GATE)
+@_gated_tool("resolve-near-miss", _NEAR_MISS_KEEP_SEPARATE_GATE)
 def resolve_near_miss(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     review_id: Annotated[str, Field(min_length=1)],
-    decision: Literal["keep-separate", "merge"],
-    ctx: Context,
-    *,
-    acknowledge_governance_change: bool = False,
+    decision: Literal["keep-separate"],
 ) -> dict[str, object] | str:
-    """Resolve one near-miss pending review by keeping the two entities separate or merging them.
+    """Resolve one near-miss pending review by keeping the two entities separate.
 
-    `decision="keep-separate"` deletes only the `PendingReview` record and leaves both entities
-    untouched. `decision="merge"` merges the two entities through the graph-cleanup approval of the
-    review's kind (`merge-capabilities` for a Capability review, `merge-roles` for a Role review)
-    and requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
-    override, never available under the local-test bypass). This call never edits the graph: it
-    picks the survivor (a Capability: the one with the earlier `created_at`, a missing one counts
-    earliest and a tie goes to the incoming node; a Role carries no `created_at`, so the incoming
-    Role survives), returns the merge preview and creates a pending passkey approval bound to that
-    pair and state, with the review id signed into it. The merge runs only when the officer opens
-    `approval_url` in a browser and signs with a passkey; use `check-near-miss-approval` to
-    learn whether that happened.
-
-    On execution the absorbed entity is deleted and a marker (`MergedCapability` or `MergedRole`)
-    naming the survivor remains, so a later ingest or restore resolves to the survivor and raises
-    no new near miss. A Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the
-    survivor; a Role's Obligations move to the surviving Role. The change is one all-or-nothing
-    graph write, audited first (`capability.merge` or `role.merge`, linked to the review id and
-    reversible with `unmerge-entities`), that also deletes the `PendingReview`. A Capability keeps
-    at most one governing Policy: when exactly one of the two is governed the preview names the
-    Policy (`policy_case` 2) and the first call, without `acknowledge_governance_change`, returns
-    `acknowledgment_required` and creates no approval; repeat it with the flag set once the officer
-    has accepted the change. Two Capabilities governed by different Policies are refused before any
-    approval, with an error naming `release-capability-governance`. A Role has no governing Policy,
-    so `acknowledge_governance_change=true` on a Role review is refused. Needs no LLM Interface.
+    Deletes only the `PendingReview` record and leaves both entities untouched. Any authenticated
+    caller may use it. Merging near misses is `merge-near-misses`. An argument this tool does not
+    declare is rejected before it runs. Needs no LLM Interface.
 
     Args:
         review_id: Id of the pending review, from `list-near-misses`; at least 1 character.
-        decision: `"keep-separate"` or `"merge"`; any other value is rejected before the tool runs.
-        ctx: Supplied by the MCP runtime, not by the caller.
-        acknowledge_governance_change: `true` to accept the governance change of a case-2
-            Capability merge; default `false`. It has no effect on `keep-separate` or on the other
-            Capability merge cases, and a Role review refuses `true`.
+        decision: Only `"keep-separate"`; any other value is rejected before the tool runs.
 
     Returns:
-        For `keep-separate`: `{"review_id", "decision", "winner_id": None, "loser_id": None,
-        "pending_approval_id": None, "approval_url": None, "expires_at": None}`. For `merge`:
-        `{"preview": {"survivor_id", "survivor_name", "absorbed_id", "absorbed_name", "policy_case",
-        "edges_to_move": {"requires", "covers", "mitigated_by"}, "duplicate_edges_collapsed",
-        "obligations_affected", "state_digest", "governance"}, "pending_approval_id",
-        "approval_url", "expires_at"}` for a Capability review (a Role review's preview is the Role
-        merge preview), where `approval_url` is the link a human opens to sign. For a case-2
-        Capability merge without the acknowledgment: `{"preview", "acknowledgment_required": true,
-        "message"}`.
+        `{"review_id", "decision"}`.
 
     Errors (returned as a string beginning `error: `, never raised):
         - `review_id` does not exist, was already resolved, or no longer matches two live
           nodes of its kind (stale).
         - The review has a kind with no registered spec; the error names the kind and nothing is
           audited or changed.
-        - (`merge` only) The caller is not an authenticated Compliance Officer.
-        - (`merge` only) The review is of a kind that has no merge (the error names it), the two
-          Capabilities are governed by different Policies, or `acknowledge_governance_change` was
-          set for a Role review.
-        - (`keep-separate` only) The audit trail cannot record the resolve; the review is left
-          untouched.
+        - The audit trail cannot record the resolve; the review is left untouched.
         - The policy graph database cannot be reached.
         - Any other unexpected failure (a fixed generic message).
 
     Side Effects:
-        `keep-separate` writes a `near_miss.resolve` audit row, then deletes the `PendingReview`
-        record. `merge` inserts one pending-approval record and writes nothing to the graph; the
-        merge is audited when its approval is signed.
-        A `merge` caller refused by the role gate gets the unchanged `error: ` string and one
-        best-effort `access.gate` audit row for this operation; no row is written for a caller
-        with no verified identity.
+        Writes a `near_miss.resolve` audit row, then deletes the `PendingReview` record.
     """
     config = load_config()
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        if decision == "merge":
-            return _resolve_merge_pending_approval(
-                environment, review_id, ctx, config, acknowledge=acknowledge_governance_change
-            )
         audit = _audit_context(config, actor, environment=environment)
         if isinstance(audit, str):
             return audit
@@ -340,57 +219,151 @@ def resolve_near_miss(  # noqa: D417  # `environment` is injected by the server 
             return f"error: {exc}"
         except McpGraphUnavailableError:
             return _GRAPH_UNAVAILABLE_MESSAGE
-        return result.model_dump(exclude=_MERGE_ONLY_RESOLVE_FIELDS)
+        return {"review_id": result.review_id, "decision": result.decision}
 
     return _run_mcp_action("resolve-near-miss", _body)
 
 
-@_gated_tool("check-near-miss-approval", _OWN_APPROVAL_READ_GATE)
-def check_near_miss_approval(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+@_gated_tool("merge-near-misses", _CLEANUP_GATE)
+def merge_near_misses(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
-    pending_approval_id: Annotated[str, Field(min_length=1)],
+    review_ids: list[str],
+    ctx: Context,
+    acknowledged_review_ids: list[str] | None = None,
 ) -> dict[str, object] | str:
-    """Check whether a near-miss merge's pending approval has been signed and what it did.
+    """Preview merging a hand-picked set of near-miss reviews and request one passkey approval.
 
-    `resolve-near-miss` with `decision="merge"` never waits for a human to complete the WebAuthn
-    signing ceremony, so this is the separate, poll-again-later way to learn whether it has
-    happened. The approval is a graph-cleanup `merge-capabilities` approval that carries the review
-    id; any other approval is reported as not found. Ownership check: only the caller who created
-    the approval may check it. A caller with no real authenticated session, or whose identity
-    differs from the approval's, gets the same generic not-found error as for a wrong id, so a
-    caller cannot learn whether an id belongs to someone else.
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override; never available under the local-test bypass). This call never edits the graph: it
+    returns one preview entry per review and creates one pending passkey approval that binds every
+    merge (review id, survivor, absorbed node, state digest, acknowledgment). The merges run only
+    when the officer opens `approval_url` in a browser and signs with a passkey; use
+    `check-near-miss-merges` to learn what happened to each one.
+
+    Capability and Role reviews may be mixed. The survivor of each pair is picked by the same rule
+    as a single merge: a Capability with the earlier `created_at` (a missing one counts earliest
+    and a tie goes to the incoming node); a Role carries no `created_at`, so the incoming Role
+    survives. There is no limit on the number of reviews.
 
     Args:
-        pending_approval_id: The `pending_approval_id` returned by `resolve-near-miss`; at least 1
-            character.
+        review_ids: Ids of the reviews to merge, from `list-near-misses`, in the order chosen; at
+            least one, no duplicates.
+        ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
+        acknowledged_review_ids: Ids of the selected reviews whose governance change the officer
+            accepts; default none.
 
     Returns:
-        `{"pending_approval_id", "status", "review_id", "decision", "winner_id", "loser_id",
-        "error"}`. `status` is `"pending"`, `"expired"` (the signing window elapsed unsigned;
-        derived live, never stored) or `"signed"`. `winner_id` (the surviving Capability) and
-        `loser_id` (the absorbed one, deleted behind a `MergedCapability` marker) are populated
-        once the signed merge has run, and `error` when the signed approval could not be carried
-        out; otherwise they are `None`.
+        `{"merges": [{"review_id", "kind", "acknowledged", "survivor_id", "survivor_name",
+        "absorbed_id", "absorbed_name", "state_digest", ...}], "pending_approval_id",
+        "approval_url", "expires_at"}`, one `merges` entry per review in the order given. A
+        Capability entry also has `policy_case`, `edges_to_move`, `duplicate_edges_collapsed`,
+        `obligations_affected` and `governance`; a Role entry has `instrument_id` and
+        `moved_obligation_ids`. When a Capability merge changes what a Policy governs and its review
+        id is not in `acknowledged_review_ids`, no approval is created and the result is instead
+        `{"acknowledgment_required": true, "reviews": [{"review_id", "policy": {"id", "title",
+        "status"}}], "message", "merges": [...]}`; repeat the call with those review ids in
+        `acknowledged_review_ids`.
 
-    Errors (returned as a string beginning `error: `, never raised):
-        - No such pending approval is visible to this caller.
-        - The approval status could not be settled right now (the graph or audit trail is
-          unreachable).
+    Errors (returned as a string beginning `error: `, never raised; no approval is created on any
+    error):
+        - The caller is not an authenticated Compliance Officer.
+        - Two selected reviews share a node, a Capability pair is governed by two different
+          Policies (use `release-capability-governance`) or has a non-active side; the error names
+          each such review.
+        - An acknowledged review id is not selected, is a Role review or changes no governance.
+        - A selected review does not exist, is already resolved or stale, or is of a kind with no
+          merge; the error names every such review with its state.
+        - The policy graph database cannot be reached.
         - Any other unexpected failure (a fixed generic message).
 
     Side Effects:
-        A signed approval whose outcome was never recorded is settled against the graph once it is
-        more than five minutes past its expiry, as `check-cleanup-approval` does. Otherwise the call
-        is read-only and logged.
+        Reads the policy graph and creates one pending approval row with an expiry and writes one
+        log entry; the graph is not changed.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
     """
     config = load_config()
 
     def _body() -> dict[str, object] | str:
-        actor = _resolve_signing_actor()
+        actor = _gated_actor(config)
+        dependencies = _cleanup_dependencies(environment)
         try:
-            status = check_near_miss_merge_approval(
-                pending_approval_id=pending_approval_id,
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            approval = create_near_miss_merge_batch(
+                graph,
+                review_ids=review_ids,
+                acknowledged_review_ids=acknowledged_review_ids or [],
                 actor=actor,
+                base_url=_resolve_base_url(ctx),
+                store=environment.pending_approval_store_factory(config),
+            )
+        except NearMissBatchAcknowledgmentRequiredError as exc:
+            return {
+                "acknowledgment_required": True,
+                "reviews": [needed.wire_form() for needed in exc.reviews],
+                "message": str(exc),
+                "merges": [entry.wire_form() for entry in exc.merges],
+            }
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {
+            "merges": [entry.wire_form() for entry in approval.merges],
+            "pending_approval_id": approval.pending_approval_id,
+            "approval_url": approval.approval_url,
+            "expires_at": approval.expires_at,
+        }
+
+    return _run_mcp_action("merge-near-misses", _body)
+
+
+@_gated_tool("check-near-miss-merges", _OWN_APPROVAL_READ_GATE)
+def check_near_miss_merges(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
+    pending_approval_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
+    """Check whether a near-miss merge batch has been signed and what happened to each merge.
+
+    `merge-near-misses` never waits for a human to complete the WebAuthn signing ceremony, so this
+    is the separate, poll-again-later way to learn whether it has happened. Ownership check: only
+    the caller who created the approval may check it. A caller with no real authenticated session,
+    whose identity differs from the approval's, or who passes an id that is not a batch approval
+    gets the same generic not-found error as for a wrong id.
+
+    Args:
+        pending_approval_id: The `pending_approval_id` returned by `merge-near-misses`; at least 1
+            character.
+
+    Returns:
+        `{"pending_approval_id", "status", "merges"}`. `status` is `"pending"`, `"expired"` (the
+        signing window elapsed unsigned; derived live, never stored) or `"signed"`. `merges` is
+        empty until signed, then has one entry per review id with `review_id`, `kind`, `state`
+        (`merged`, `failed` or `unsettled`), `winner_id` and `loser_id` (set once merged) and
+        `error` (set when that merge was not carried out). `unsettled` means the outcome of that
+        merge is not yet known (the signing was interrupted and has not been settled yet); check
+        again later, and do not treat it as merged or as failed.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - No such pending approval is visible to this caller.
+        - The status of a signed batch could not be settled right now (graph or audit trail
+          unreachable); try again shortly.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Logged. When a signed batch's outcome was never stored and it is more than five minutes
+        past its expiry, each merge is settled against the graph and the audit trail: one
+        `failed` audit row per merge that did not happen, and the settled outcome is stored. No
+        merge is ever run again by this call.
+    """
+    config = load_config()
+
+    def _body() -> dict[str, object] | str:
+        try:
+            status = check_near_miss_merge_batch(
+                pending_approval_id=pending_approval_id,
+                actor=_resolve_signing_actor(),
                 store=environment.pending_approval_store_factory(config),
                 config=config,
                 dependencies=_sanitize_cleanup_graph_open(_cleanup_dependencies(environment)),
@@ -407,14 +380,10 @@ def check_near_miss_approval(  # noqa: D417  # `environment` is injected by the 
         return {
             "pending_approval_id": status.pending_approval_id,
             "status": status.status,
-            "review_id": status.review_id,
-            "decision": status.decision,
-            "winner_id": status.winner_id,
-            "loser_id": status.loser_id,
-            "error": status.error,
+            "merges": [merge.model_dump() for merge in status.merges],
         }
 
-    return _run_mcp_action("check-near-miss-approval", _body)
+    return _run_mcp_action("check-near-miss-merges", _body)
 
 
 def register_near_miss_tools(
@@ -434,5 +403,10 @@ def register_near_miss_tools(
         server,
         environment,
         gates,
-        (list_near_misses, resolve_near_miss, check_near_miss_approval),
+        (
+            list_near_misses,
+            resolve_near_miss,
+            merge_near_misses,
+            check_near_miss_merges,
+        ),
     )

@@ -106,6 +106,9 @@ __all__ = [
     "create_unmerge_approval",
     "find_capability_merge_candidates",
     "find_duplicate_obligations",
+    "graph_has_caught_up",
+    "interrupted_audit_row",
+    "live_status",
     "preview_capability_merge",
     "preview_obligation_merge",
     "preview_release_governance",
@@ -830,7 +833,11 @@ def _signed_review_id(row: PendingApprovalRow) -> str | None:
     return None
 
 
-def _live_status(row: PendingApprovalRow) -> Literal["pending", "expired", "signed"]:
+def live_status(row: PendingApprovalRow) -> Literal["pending", "expired", "signed"]:
+    """The approval status: `signed`, else `expired` past `expires_at`, else `pending`.
+
+    Derived on every read, never stored.
+    """
     if row.status == "signed":
         return "signed"
     return "expired" if datetime.now(UTC) > row.expires_at else "pending"
@@ -942,7 +949,7 @@ _ORPHAN_ROWS: dict[tuple[str, str], Callable[[PendingApprovalRow], _OrphanRow]] 
 }
 
 
-def _interrupted_audit_row(row: PendingApprovalRow) -> _OrphanRow:
+def interrupted_audit_row(row: PendingApprovalRow) -> _OrphanRow:
     """Action, resource type, resource id and details of the `failed` row for an orphan.
 
     An unmerge whose kind is not recognised is treated as a Capability unmerge.
@@ -954,7 +961,7 @@ def _interrupted_audit_row(row: PendingApprovalRow) -> _OrphanRow:
     return _ORPHAN_ROWS.get((row.tool_name, kind), _capability_merge_orphan_row)(row)
 
 
-def _graph_has_caught_up(
+def graph_has_caught_up(
     row: PendingApprovalRow, *, config: ServiceConfig, dependencies: GraphCleanupDependencies
 ) -> bool:
     """Whether the single-tenant graph holds everything committed to its log; log a deferral if not.
@@ -1000,13 +1007,13 @@ def _reconcile_orphan(
     verifier = resolve_effect_verifier(row.tool_name)
     if verifier is None:
         return None
-    if not _graph_has_caught_up(row, config=config, dependencies=dependencies):
+    if not graph_has_caught_up(row, config=config, dependencies=dependencies):
         return None
     graph = dependencies.open_single_tenant_graph(config)
     if verifier(row, graph):
         outcome: dict[str, object] = {"reconciled": "applied"}
     else:
-        action, resource_type, resource_id, details = _interrupted_audit_row(row)
+        action, resource_type, resource_id, details = interrupted_audit_row(row)
         dependencies.audit_store(config).record_standalone(
             actor_subject=row.actor_subject,
             actor_issuer=row.actor_issuer,
@@ -1080,7 +1087,7 @@ def check_cleanup_approval(
     return CleanupApprovalStatus(
         pending_approval_id=row.id,
         tool_name=row.tool_name,
-        status=_live_status(row),
+        status=live_status(row),
         outcome=outcome,
         review_id=_signed_review_id(row),
     )

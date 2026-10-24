@@ -47,6 +47,7 @@ _TOOLS: list[tuple[str, dict[str, object]]] = [
     ("release-capability-governance", {"capability_id": "cap_a"}),
     ("unmerge-entities", {"merged_id": "cap_b"}),
     ("check-cleanup-approval", {"pending_approval_id": "approval-1"}),
+    ("merge-near-misses", {"review_ids": ["review_a"]}),
 ]
 
 _OWNER = "existing-system-owner"

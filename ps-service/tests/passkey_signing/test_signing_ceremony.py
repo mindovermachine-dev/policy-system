@@ -272,8 +272,7 @@ def _independent_sign_challenge(row: PendingApprovalRow) -> bytes:
 def test_valid_signature_executes_the_merge_and_reports_it() -> None:
     """A full signing ceremony, driven
     entirely through the REST surface, actually executes the merge and
-    reports it back through both the signing response and the resumable
-    status check.
+    reports it back through the signing response and the stored outcome.
     """
     pending_store = FakePendingApprovalStore()
     credential_store = FakeSigningCredentialStore()
@@ -317,18 +316,13 @@ def test_valid_signature_executes_the_merge_and_reports_it() -> None:
     }
     assert recorded_calls == [_MergeCall(_REVIEW_ID, "merge")]
 
-    # The resumable status check reads the same `merge-capabilities` row through the shared
-    # near-miss mapper: survivor and absorbed come back as winner and loser.
-    status_response = client.get(f"/near-misses/approvals/{row.id}")
-    assert status_response.status_code == 200
-    assert status_response.json() == {
-        "pending_approval_id": row.id,
-        "status": "signed",
-        "review_id": _REVIEW_ID,
-        "decision": "merge",
-        "winner_id": _WINNER_ID,
-        "loser_id": _LOSER_ID,
-        "error": None,
+    # The outcome is stored on the approval row, where a later status read finds it.
+    signed_row = pending_store.get_by_id(row.id)
+    assert signed_row is not None
+    assert signed_row.outcome == {
+        "survivor_id": _WINNER_ID,
+        "absorbed_id": _LOSER_ID,
+        "merged": True,
     }
 
     # The authenticator's reported sign_count was persisted.

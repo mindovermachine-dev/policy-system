@@ -43,6 +43,7 @@ from ps_service.mcp_interface.policy_draft_tools import register_policy_draft_to
 from ps_service.mcp_interface.policy_transition_tools import register_policy_transition_tools
 from ps_service.mcp_interface.production_environment import build_production_environment
 from ps_service.mcp_interface.tool_core import BuiltServer, create_server
+from ps_service.mcp_interface.tool_gates import install_strict_arguments
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -95,6 +96,7 @@ def build_server(
     for _, register in groups:
         if register is not None:
             register(built_server, environment, gates)
+    install_strict_arguments(built_server)
     return BuiltServer(server=built_server, gates=gates)
 
 

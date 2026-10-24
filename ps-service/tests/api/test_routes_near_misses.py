@@ -1,23 +1,11 @@
-"""HTTP tests for `GET /near-misses`, `POST /near-misses/{review_id}/resolve`, and
-`GET /near-misses/approvals/{pending_approval_id}`.
+"""HTTP tests for `GET /near-misses` and `POST /near-misses/{review_id}/resolve`.
 
 Mirrors `test_routes_restorations.py`'s style: `TestClient` +
 `app.dependency_overrides` supplying a fake `NearMissReviewDependencies`
 bundle, so request handling is exercised without a real graph.
 
-Signed passkey approval before near-miss merges:
-`decision="merge"` does not execute the merge synchronously -- it requires
-a real, verified `Principal` (fails closed with 401 otherwise, before any
-Postgres/FalkorDB write) and returns a pending approval instead of
-`winner_id`/`loser_id`. `_principal()`/`app.dependency_overrides[get_principal]`
-is how these tests supply that verified identity -- a plain FastAPI
-dependency override, unlike the MCP side's `auth_context_var` contextvar
-trick (`test_near_miss_tools.py`), since `get_principal` is already designed
-to be overridden this way for every other authenticated-route test in this
-suite. `test_routes_near_miss_merge.py` covers the merge branch (it returns a
-pending approval, not winner/loser); a stale-reference scenario is an
-execution-time concern, since this route's merge branch never calls
-`resolve_review` (mirrors `test_near_miss_tools.py`).
+The resolve route only keeps a pair separate: any other decision, or a field it does not declare,
+is a 422, and no route reports a merge approval.
 
 `_FakePendingApprovalStore` is a local, private copy of
 `tests/passkey_signing/_fakes.py`'s own `FakePendingApprovalStore` --
@@ -356,10 +344,8 @@ def _client_for_resolve(
 
 
 def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
-    """`decision="keep-separate"` succeeds and echoes the resolved review id.
-
-    Regression guard: unaffected by the merge-branch change --
-    still one synchronous round trip, no principal required.
+    """`decision="keep-separate"` succeeds and echoes the resolved review id and the decision,
+    in one synchronous round trip with no principal required.
     """
     recorded_calls: list[tuple[str, str]] = []
 
@@ -379,13 +365,7 @@ def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["review_id"] == "review_aaa"
-    assert body["decision"] == "keep-separate"
-    assert body["winner_id"] is None
-    assert body["loser_id"] is None
-    assert body["pending_approval_id"] is None
-    assert body["approval_url"] is None
-    assert body["expires_at"] is None
+    assert body == {"review_id": "review_aaa", "decision": "keep-separate"}
     assert recorded_calls == [("review_aaa", "keep-separate")]
 
 
@@ -507,7 +487,7 @@ def test_post_resolve_unknown_id_returns_404_pending_review_not_found() -> None:
 
 
 def test_post_resolve_rejects_unknown_decision_with_422() -> None:
-    """Pydantic's `Literal["keep-separate", "merge"]` rejects any other value.
+    """Pydantic's `Literal["keep-separate"]` rejects any other value.
 
     `resolve_review` is never called: the default `_unexpected_resolve_review`
     stub would raise `AssertionError` if it were, and this test passes --
@@ -524,9 +504,45 @@ def test_post_resolve_rejects_unknown_decision_with_422() -> None:
     assert response.status_code == 422
 
 
-def test_post_resolve_keep_separate_needs_no_compliance_officer_role() -> None:
-    """Only the merge branch is role-gated. No access-role store is configured in this test, so
-    any role lookup on the keep-separate path would fail the request instead of resolving it.
+def test_a_merge_decision_is_a_422() -> None:
+    dependencies, _ = _fake_dependencies(())
+    app = create_app(_app_config())
+    app.dependency_overrides[provide_near_miss_review_dependencies] = lambda: dependencies
+    app.dependency_overrides[get_principal] = _principal
+
+    response = TestClient(app).post("/near-misses/review_aaa/resolve", json={"decision": "merge"})
+
+    assert response.status_code == 422
+
+
+def test_the_acknowledgment_field_is_a_422() -> None:
+    dependencies, _ = _fake_dependencies(())
+    app = create_app(_app_config())
+    app.dependency_overrides[provide_near_miss_review_dependencies] = lambda: dependencies
+    app.dependency_overrides[get_principal] = _principal
+
+    response = TestClient(app).post(
+        "/near-misses/review_aaa/resolve",
+        json={"decision": "keep-separate", "acknowledge_governance_change": True},
+    )
+
+    assert response.status_code == 422
+
+
+def test_the_approval_status_path_is_no_longer_routed() -> None:
+    app = create_app(_app_config())
+    app.dependency_overrides[get_principal] = _principal
+
+    response = TestClient(app).get(f"/near-misses/approvals/{uuid.uuid4()}")
+
+    assert response.status_code in (404, 405)
+    assert "error" not in response.json()
+    assert not [p for p in app.openapi()["paths"] if p.startswith("/near-misses/approvals")]
+
+
+def test_keep_separate_is_open_to_any_authenticated_caller() -> None:
+    """No access-role store is configured in this test, so any role lookup on the keep-separate
+    path would fail the request instead of resolving it.
     """
     client = _client_for_resolve(
         _outcome_resolve, records=(_record("review_aaa"),), principal=_principal()
@@ -663,22 +679,6 @@ def test_resolve_rejects_a_malformed_review_id_with_the_generic_422_and_calls_no
     assert audit.rows == []
 
 
-@pytest.mark.parametrize("pending_approval_id", _MALFORMED_IDS)
-def test_approval_status_rejects_a_malformed_id_with_the_generic_422_and_reads_no_store(
-    pending_approval_id: str,
-) -> None:
-    store = _RecordingPendingApprovalStore()
-    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
-    expected_body = _generic_validation_body(client)
-
-    response = client.get(f"/near-misses/approvals/{pending_approval_id}")
-
-    assert response.status_code == 422
-    assert response.json() == expected_body
-    assert unquote(pending_approval_id) not in response.text
-    assert store.looked_up == []
-
-
 def test_review_id_from_the_real_generator_satisfies_the_path_pattern() -> None:
     pairs = tuple(
         NearMissPair(
@@ -726,17 +726,6 @@ def test_resolving_a_review_with_a_generated_id_returns_the_resolved_review() ->
     assert response.status_code == 200
     assert response.json()["review_id"] == primitive.id
     assert response.json()["decision"] == "keep-separate"
-
-
-def test_an_approval_id_in_the_stored_uuid_text_form_reaches_the_status_lookup() -> None:
-    approval_id = str(uuid.uuid4())
-    store = _RecordingPendingApprovalStore()
-    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
-
-    response = client.get(f"/near-misses/approvals/{approval_id}")
-
-    assert response.status_code == 404
-    assert store.looked_up == [approval_id]
 
 
 def test_the_pending_approval_column_generates_ids_that_satisfy_the_path_pattern() -> None:

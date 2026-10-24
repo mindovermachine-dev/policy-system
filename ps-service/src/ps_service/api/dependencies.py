@@ -67,7 +67,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from ps_service.authz.models import AccessRole
-    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
     from ps_service.ingestion.graph_submission import GroupSubmitter
 
 # The fixed message `AccessDeniedError` always carries; it leaks no internal detail. It repeats
@@ -146,9 +145,8 @@ def enforce_access_role(
 ) -> None:
     """Require that a verified caller holds `role` (or a role above it), auditing a denial.
 
-    The one check behind both the route-level `require_access_role` dependency and a route that
-    gates only one branch of its body (`POST /near-misses/{id}/resolve`, merge only). It runs the
-    same request gate (`ps_service.authz.request_gate.enforce_role_gate`) as the gated MCP tools.
+    The one check behind the route-level `require_access_role` dependency. It runs the same request
+    gate (`ps_service.authz.request_gate.enforce_role_gate`) as the gated MCP tools.
 
     Args:
         principal: The verified caller, or `None` when no verified identity exists.
@@ -261,24 +259,6 @@ class AuthenticatedOnlyMarker:
         """Do nothing: authentication already happened in the middleware."""
 
 
-class BodyGateMarker:
-    """A no-op route dependency declaring that the handler role-gates one branch itself.
-
-    The handler runs `enforce_access_role` for the gated branch, under `gate.operation`. The marker
-    lets the structural test list the route and its operation name.
-
-    Attributes:
-        gate: The operation name and minimum role the handler enforces for that branch.
-    """
-
-    def __init__(self, gate: RoleGate) -> None:
-        """Store the declared gate."""
-        self.gate = gate
-
-    def __call__(self) -> None:
-        """Do nothing: the handler enforces the gate for its gated branch."""
-
-
 def authenticated_only(reason: str) -> AuthenticatedOnlyMarker:
     """Declare a route open to any authenticated caller, stating why.
 
@@ -295,19 +275,6 @@ def authenticated_only(reason: str) -> AuthenticatedOnlyMarker:
         message = "an authenticated-only route must state a reason"
         raise ValueError(message)
     return AuthenticatedOnlyMarker(reason)
-
-
-def body_gate(role: AccessRole, *, operation: str) -> BodyGateMarker:
-    """Declare a route whose handler role-gates one branch of its body.
-
-    Args:
-        role: The minimum `AccessRole` that branch requires.
-        operation: The name that branch is audited under, `"<METHOD> <path template>"`.
-
-    Returns:
-        A `BodyGateMarker` to pass to `Depends`.
-    """
-    return BodyGateMarker(RoleGate(operation=operation, minimum=role))
 
 
 async def provide_run_id(request: Request) -> AsyncIterator[str]:
@@ -347,25 +314,6 @@ def provide_pipeline_dependencies() -> PipelineDependencies:
         None; no connection is opened while building the bundle.
     """
     return build_default_pipeline_dependencies()
-
-
-def provide_graph_cleanup_dependencies() -> GraphCleanupDependencies:
-    """Return the production graph-cleanup collaborators for the near-miss approval status route.
-
-    A plain provider so tests can replace it through `app.dependency_overrides`. The graph-cleanup
-    import is function-local, so importing `ps_service.main` does not load that component.
-
-    Returns:
-        The production :class:`GraphCleanupDependencies` bundle.
-
-    Side Effects:
-        None; no connection is opened while building the bundle.
-    """
-    from ps_service.graph_cleanup.dependencies import (  # noqa: PLC0415 -- function-local keeps ps_service.main off graph_cleanup at import
-        build_default_graph_cleanup_dependencies,
-    )
-
-    return build_default_graph_cleanup_dependencies()
 
 
 def provide_graph_write_gateway(request: Request) -> GroupSubmitter | None:

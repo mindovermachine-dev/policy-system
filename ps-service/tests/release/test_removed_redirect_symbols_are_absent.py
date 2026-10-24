@@ -31,6 +31,11 @@ _STATUS_VALUE = re.compile(
 )
 # The public cleanup result key `{"merged": true}` (like `released`), not a status value.
 _RESULT_KEY = re.compile(r"""["']merged["']\s*:\s*(True|true)""")
+# The per-merge result state of a near-miss batch (`merged`, `failed`, `unsettled`) and the read of
+# the cleanup result key above; neither is a node status.
+_RESULT_STATE = re.compile(
+    r"""state\s*(=|==|===|!==)\s*["']merged["']|Literal\["merged"|\.get\(["']merged["']\)"""
+)
 # Dated findings report listing the label and edge set as derived then; it is not maintained.
 _DATED_REPORT = _REPO / "docs" / "audits" / "data-persistence-audit.md"
 
@@ -54,7 +59,7 @@ def _offending(line: str, path: Path) -> bool:
         return True
     if path == _DATED_REPORT or not _STATUS_VALUE.search(line):
         return False
-    return not _RESULT_KEY.search(line)
+    return not (_RESULT_KEY.search(line) or _RESULT_STATE.search(line))
 
 
 def test_no_removed_symbol_or_status_value_remains() -> None:
@@ -77,3 +82,6 @@ def test_the_gate_flags_a_removed_symbol_and_a_merged_status_value() -> None:
     assert _offending("x = read_merge_redirects(graph)", sample)
     assert _offending("WHERE coalesce(c.status, 'active') <> 'merged'", sample)
     assert not _offending('return {"survivor_id": a, "merged": True}', sample)
+    assert not _offending('state="merged", winner_id=survivor', sample)
+    assert not _offending('return merge.state !== "merged";', sample)
+    assert not _offending('if outcome.get("merged") is True:', sample)
