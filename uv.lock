@@ -1429,7 +1429,7 @@ wheels = [
 
 [[package]]
 name = "ps-cli"
-version = "11.0.0"
+version = "11.0.1"
 source = { editable = "ps-cli" }
 dependencies = [
     { name = "httpx" },
@@ -1458,7 +1458,7 @@ dev = [{ name = "ps-test-support", editable = "ps-test-support" }]
 
 [[package]]
 name = "ps-service"
-version = "11.0.0"
+version = "11.0.1"
 source = { editable = "ps-service" }
 dependencies = [
     { name = "defusedxml" },
