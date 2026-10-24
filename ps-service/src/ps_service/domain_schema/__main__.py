@@ -4,7 +4,7 @@ Commands: `check` regenerates every artifact in memory and exits 1 on drift (2 w
 is missing); `write-docs` regenerates the marked regions of the domain-concepts document and its
 packaged copy; `print-intake` prints the generated intake JSON Schema to stdout (it never writes
 files); `measure` prints the character count of the packaged domain-concepts document
-and of the slim schema the `domain_concepts` tool serves.
+and of the slim schema the `get-domain-concepts` tool serves.
 """
 
 from __future__ import annotations

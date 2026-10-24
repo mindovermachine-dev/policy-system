@@ -19,7 +19,7 @@ candidate discovery through a merge, a release or an unmerge to a recorded outco
 have a governing policy it must be the **same** policy), merging two Obligations under the
 **same Role** (`merge-obligations`), merging two Roles defined by the **same instrument**
 (`merge-roles`), releasing a Capability from a **draft** governing policy
-(`release-capability-governance`), reversing a Capability, Obligation or Role merge from its audit snapshot (`unmerge`),
+(`release-capability-governance`), reversing a Capability, Obligation or Role merge from its audit snapshot (`unmerge-entities`),
 and `check-cleanup-approval` for any of them.
 Discovery is read-only: it changes nothing and creates no approval.
 
@@ -262,7 +262,7 @@ other pair before creating an approval. The flow is candidate -> preview -> conf
 result; never skip a step.
 
 1. **Candidate.** There is no Role discovery tool: the pair comes from the Compliance Officer,
-   or from a read-only `cypher` query over the instrument's Roles (call `domain_concepts` first
+   or from a read-only `run-cypher` query over the instrument's Roles (call `get-domain-concepts` first
    and ground the query in the labels it lists; never write to the graph). A similar name is a
    suggestion, never a verdict. Ask which Role **survives** and which is **absorbed**. The
    absorbed Role is **deleted** and leaves a `MergedRole` marker, so say so plainly. Never choose
@@ -316,7 +316,7 @@ When the user wants to release a Capability from its draft governing policy (or 
 
 ### Unmerging a merge
 
-When the user wants to reverse a Capability, Obligation or Role merge, read `references/unmerge.md` and follow it. It covers the locate -> preview -> confirm -> passkey -> result flow for `unmerge`, its conflicts and its named states.
+When the user wants to reverse a Capability, Obligation or Role merge, read `references/unmerge.md` and follow it. It covers the locate -> preview -> confirm -> passkey -> result flow for `unmerge-entities`, its conflicts and its named states.
 
 ## On-demand references
 
@@ -331,7 +331,7 @@ Read these only when the condition holds; each one is bound by the Guardrails be
 
 - The skill reaches PS Service exclusively through the `ps-mcp` connector —
   never a direct graph connection, a repo-local script or a spawned binary.
-- Discovery, `merge-capabilities`, `merge-obligations`, `merge-roles`, `release-capability-governance` and `unmerge`
+- Discovery, `merge-capabilities`, `merge-obligations`, `merge-roles`, `release-capability-governance` and `unmerge-entities`
   never edit the graph themselves: a change happens only when the Compliance Officer signs the passkey
   approval. Do not
   offer Cypher or any other route to merge or delete nodes.

@@ -8,7 +8,7 @@ the baseline nodes of the review's own kind finds exactly the instrument's revie
 the regulatory spine. Every registered reviewable kind is covered: the gate asks the registry which
 labels can carry a review, so a new kind blocks export without a change here.
 
-"Unresolved" is the predicate `near_misses_list` uses, because this gate reads the reviews
+"Unresolved" is the predicate `list-near-misses` uses, because this gate reads the reviews
 through `list_pending_reviews`: both referenced nodes exist under the review's kind (an absorbed
 node is deleted, so a review naming one is not unresolved). The gate issues no Cypher of its own
 for reviews, so the predicate has one definition and cannot drift. A review whose kind has no

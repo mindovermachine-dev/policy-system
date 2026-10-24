@@ -26,15 +26,15 @@ request, not shown by default.
 
 1. If the user hasn't provided a question, ask for one before doing
    anything else.
-2. Fetch the domain concepts by calling the `domain_concepts` MCP tool on
+2. Fetch the domain concepts by calling the `get-domain-concepts` MCP tool on
    the PS Service connector — it returns the graph schema (node labels,
    properties, edges with direction and cardinality), the only source of
    truth for entities, relationships, and vocabulary. Call the tool, not
    the resource: some hosts expose MCP tools but not resources. Fetch the
    `psdomain://concepts` resource only if you need its prose
    explanations. `ps-mcp` is the only recognised connector name; one
-   exposing `cypher` but no
-   `domain_concepts` is not a PS Service connector either — report it as
+   exposing `run-cypher` but no
+   `get-domain-concepts` is not a PS Service connector either — report it as
    unreachable (error-state table, Process step 2; full test: see
    Guardrails). Always refetch this turn — never reuse a prior turn's or
    session's copy, and never assume the schema is unchanged. If the call
@@ -106,7 +106,7 @@ request, not shown by default.
    "category" when that is the natural word for the user's own concept —
    "category" stands in for the classification layer (PracticeArea,
    RiskPath) specifically. A word is forbidden schema vocabulary if and
-   only if it appears in the fetched `domain_concepts` tool output as a
+   only if it appears in the fetched `get-domain-concepts` tool output as a
    literal node label, edge type, or property name — not based on how the
    sentence happens to capitalize it. The gate never uses a label, edge
    type, or property name that meets that test, and never uses Cypher.
@@ -129,14 +129,14 @@ request, not shown by default.
 2. **Retrieve and construct.** Immediately print: "Querying the knowledge
    graph and verifying the answer — this may take a moment." Print
    "Retrieving data from the graph…" and write ad hoc Cypher — genuinely
-   freehand, never templated — via the `cypher` MCP tool on the connector
+   freehand, never templated — via the `run-cypher` MCP tool on the connector
    selected at On Load, never a subprocess or spawned binary. More than
    one query is fine; no result goes unreported. A fuzzy-matched name
    resolving to more than one real node is never silently picked — report
    each connected candidate separately and flag it via the Caveat line.
 
-   Every non-success result from the `cypher` tool call (this also covers
-   the On Load `domain_concepts` call) must be distinguished into one of
+   Every non-success result from the `run-cypher` tool call (this also covers
+   the On Load `get-domain-concepts` call) must be distinguished into one of
    these named states — never collapsed into a generic "no answer":
 
    | Result shape                                                            | Named state                                                  | Notes                                                                                                                                                                                              |
@@ -183,10 +183,10 @@ request, not shown by default.
 - Never silently substitute a different entity/edge than the user's
   language implies, or let scope drift without re-confirming; never
   retrieve before intent is confirmed (step 1).
-- Freehand, read-only retrieval only, via the `cypher` MCP tool on a
-  connector whose `domain_concepts` tool answered at On Load (`ps-mcp`)
+- Freehand, read-only retrieval only, via the `run-cypher` MCP tool on a
+  connector whose `get-domain-concepts` tool answered at On Load (`ps-mcp`)
   — never `ps query template`/`ps query catalog`, a different connector
-  name, or one offering `cypher` without `domain_concepts`. A rejected
+  name, or one offering `run-cypher` without `get-domain-concepts`. A rejected
   query (per the error-state table) stops the skill; never resubmitted
   as read-only.
 - No rubric-gated fitness function or independent verification loop

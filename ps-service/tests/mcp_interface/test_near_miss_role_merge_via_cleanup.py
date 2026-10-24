@@ -1,10 +1,10 @@
-"""`near_misses_resolve(merge)` on a `Role` review is an entry point to the `merge-roles` approval.
+"""`resolve-near-miss(merge)` on a `Role` review is an entry point to the `merge-roles` approval.
 
 Over a `CleanupRig` (real reader, planner, executor and gateway rig; only the stores and the
 signing ceremony are doubles) these tests drive the MCP tools as the near-miss reviewer would: the
 `ComplianceOfficer` gate shared with Capability reviews, the Role preview plus approval link, the
 refused governance acknowledgment, the signed `review_id`, a signer who lost the grant, and
-`near_misses_check_approval` reporting the winner and the loser.
+`check-near-miss-approval` reporting the winner and the loser.
 """
 
 from __future__ import annotations
@@ -84,10 +84,10 @@ class _Env:
         args: dict[str, object] = {"review_id": _REVIEW, "decision": "merge"}
         if acknowledge is not None:
             args["acknowledge_governance_change"] = acknowledge
-        return call_tool("near_misses_resolve", args, who)
+        return call_tool("resolve-near-miss", args, who)
 
     def check(self, approval_id: str, *, who: tuple[str, str] = OFFICER) -> str:
-        return call_tool("near_misses_check_approval", {"pending_approval_id": approval_id}, who)
+        return call_tool("check-near-miss-approval", {"pending_approval_id": approval_id}, who)
 
     def sign_and_execute(
         self, approval_id: str, *, access_roles: AccessRoleStore | None = None
@@ -150,7 +150,7 @@ def test_no_real_session_gets_an_error_and_no_approval_even_under_the_local_test
     before = environment.snapshot()
 
     text = asyncio.run(
-        _server().call_tool("near_misses_resolve", {"review_id": _REVIEW, "decision": "merge"})
+        _server().call_tool("resolve-near-miss", {"review_id": _REVIEW, "decision": "merge"})
     )
 
     assert _UNAUTHENTICATED in str(text)

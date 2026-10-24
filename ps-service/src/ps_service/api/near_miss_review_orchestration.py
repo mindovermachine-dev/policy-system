@@ -529,7 +529,7 @@ def run_request_near_miss_merge(
     in one write group. Nothing is written to the graph here.
 
     Args:
-        review_id: Id of the near-miss review, as listed by `near_misses_list`.
+        review_id: Id of the near-miss review, as listed by `list-near-misses`.
         actor: Verified `(subject, issuer)` of the requesting Compliance Officer; the approval is
             bound to them. The caller has already checked the `ComplianceOfficer` grant.
         acknowledge_governance_change: True when the officer accepts the governance change of a

@@ -313,7 +313,7 @@ What the repo actually provides against the pane contract (C-2, D-3, D-7), from
 - **A typed domain-schema registry** (`ps_service.domain_schema`): per-node `Property`
   with type/presence/write-ownership flags. The draft tools' patchable-field allowlists are
   *derived* from it (`patchable_fields("Policy")`), and the rubric-paired content fields
-  (`scope_in`, `normative_commitments`, …) are real schema properties. The `domain_concepts`
+  (`scope_in`, `normative_commitments`, …) are real schema properties. The `get-domain-concepts`
   MCP tool serves a slim rendered form (text, not structured data).
 - **A schema-derived, field-level write path**: `update-policy-draft` /
   `update-standard-draft` / `update-control-draft` PATCH individual content fields on a
@@ -325,7 +325,7 @@ What the repo actually provides against the pane contract (C-2, D-3, D-7), from
 | Gap | Detail |
 |-----|--------|
 | G-1 **No server-side scoring at all** | Nothing in `ps_service` scores; the `ps-author-policy` *skill* (the model) scores against markdown rubrics shipped in the plugin. Scorecards are explicitly future work ("once scorecards exist as persisted records", scoring-model.md §6). **This contradicts section 2's premise that "the server-side rubric score is an objective verifier" — today the verifier is the client model itself.** |
-| G-2 **Read path is skeleton-only** | `get-policy`'s `PolicyView` returns id/title/status/version/owner plus the Standard/Control tree skeleton — none of the content fields. A client cannot render document sections from the lifecycle read surface; today's skill works around it via raw `cypher`. |
+| G-2 **Read path is skeleton-only** | `get-policy`'s `PolicyView` returns id/title/status/version/owner plus the Standard/Control tree skeleton — none of the content fields. A client cannot render document sections from the lifecycle read surface; today's skill works around it via raw `run-cypher`. |
 | G-3 **Rubrics are not served** | Rubric definitions (criteria, weights, guidance, threshold) live only as plugin markdown. C-2's goal — new document types without client changes — needs rubric-as-data served per document type. |
 | G-4 **No artifact-type capability flags** | Nothing declares per type whether an artifact is editable/scored (D-3). Trivial to add once G-3's surface exists. |
 

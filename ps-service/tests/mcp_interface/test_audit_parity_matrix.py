@@ -4,7 +4,7 @@ The same operation over MCP, REST or a passkey approval records the same rows (a
 actor and the run id). Per-operation parity is pinned next to each operation
 (`test_ingestion_parity`, `test_restore_parity`, `test_near_miss_parity`,
 `test_merge_audit`); this file adds the one operation whose two transports are only reachable
-from here (the `check_regulations` sweep, over the real MCP tool AND the real REST route) and the
+from here (the `check-regulations` sweep, over the real MCP tool AND the real REST route) and the
 structural guarantees that make a silently unaudited transport impossible.
 """
 
@@ -115,7 +115,7 @@ def test_mcp_and_rest_sweeps_record_the_same_rows(monkeypatch: pytest.MonkeyPatc
         "build_default_change_check_dependencies",
         lambda: fake_mcp.dependencies,
     )
-    asyncio.run(_server().call_tool("check_regulations", {}))
+    asyncio.run(_server().call_tool("check-regulations", {}))
 
     install_compliance_officer_grant(monkeypatch, granted=True)
     rest_store = RestAuditStore()
@@ -214,7 +214,7 @@ def test_mcp_and_rest_denials_record_the_same_row_shape(monkeypatch: pytest.Monk
     _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
     configure()
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
-        asyncio.run(_server().call_tool("check_regulations", {}))
+        asyncio.run(_server().call_tool("check-regulations", {}))
 
     (rest_row,) = rest_store.rows
     (mcp_row,) = mcp_store.rows
@@ -225,6 +225,6 @@ def test_mcp_and_rest_denials_record_the_same_row_shape(monkeypatch: pytest.Monk
         mcp_row.details,
     )
     assert (mcp_row.resource_id, rest_row.resource_id) == (
-        "check_regulations",
+        "check-regulations",
         "POST /change-checks",
     )

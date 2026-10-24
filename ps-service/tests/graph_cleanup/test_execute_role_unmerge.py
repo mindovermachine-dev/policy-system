@@ -1,4 +1,4 @@
-"""Executor for `unmerge` of a Role merge, happy path.
+"""Executor for `unmerge-entities` of a Role merge, happy path.
 
 The world is what the REAL `role.merge` executor left in the rig's graph and audit history. The
 unmerge records its `applied` `role.unmerge` row, then recreates the Role, its `DEFINES` edge and

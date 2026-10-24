@@ -50,9 +50,9 @@ tree`'s `"s.id, s.title, s.status, c.id"` branch -- needed because
 the four policy transition functions, per `service.py:1377`'s own
 docstring -- `find_existing_policy`'s `"RETURN p.id, p.title"` branch, and
 the plain write fallback). The branch-detection file's `read_policy_tree_for_fork` branch and
-freehand-`cypher`-queue branch are intentionally omitted: this slice's
+freehand-`run-cypher`-queue branch are intentionally omitted: this slice's
 scenarios are all fresh-branch, content-CRUD-only, and never call the
-`cypher` tool. Module-local, no cross-file import -- matches this
+`run-cypher` tool. Module-local, no cross-file import -- matches this
 directory's established convention (every test file's fakes are its own).
 """
 

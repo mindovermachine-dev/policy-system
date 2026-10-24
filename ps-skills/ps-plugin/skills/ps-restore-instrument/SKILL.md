@@ -39,7 +39,7 @@ Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
 the connector the Policy System Plugin declares, pointing at a hosted PS
 Service. Claude lists it as `plugin:ps-plugin:ps-mcp`. Any other name is not
 a PS Service connector. A connector that is present
-under the right name but does not expose a `restore_instrument` tool is
+under the right name but does not expose a `restore-instrument` tool is
 **not** a PS Service connector either, whatever it is named — report it as
 unreachable (see the error-state table under Process) rather than
 proceeding against it. From here on, "the PS Service connector" means the `ps-mcp` connector.
@@ -68,7 +68,7 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    restore, and confirm they want to proceed. If they don't already know
    the exact id, call `ps-get-catalog-listing` first and let them pick from
    the returned listing.
-2. **Call the tool.** Invoke `restore_instrument` with `instrument_id` on
+2. **Call the tool.** Invoke `restore-instrument` with `instrument_id` on
    the PS Service connector selected at On Load.
 3. **Report the result**, distinguishing every non-success outcome into one
    of the following named states — never collapsed into a generic
@@ -120,7 +120,7 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
   connector — `ps-mcp` — never
   a direct graph connection, a repo-local script, or a spawned external
   binary. This tool never reads a local curated-content checkout.
-- Never call `restore_instrument` without the user having named which
+- Never call `restore-instrument` without the user having named which
   `instrument_id` to restore and confirmed they want to proceed.
 - Never collapse the named error states into each other or into a generic
   message.

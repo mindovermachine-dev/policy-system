@@ -24,7 +24,7 @@ The invoking skill must supply, verbatim: the approved question text, the
 entities/edges it routes through, the constructed answer, and the
 retrieved data/query the answer was built from. The domain concepts
 already fetched at the invoking skill's own On Load step (via
-`domain_concepts`) remain valid — **do not refetch them for this step.**
+`get-domain-concepts`) remain valid — **do not refetch them for this step.**
 Never invoke this against an answer the user hasn't already seen as a
 first-pass construction — falsification turns that first pass into a
 verified answer (or surfaces a contradiction).
@@ -57,10 +57,10 @@ State which cap applies, and why, before running attempt 1.
    (edge direction, broader scope, an excluded filter, a sibling entity)
    — repeating the same weak angle in different words doesn't count as a
    new attempt ("confirmation theater").
-2. **Execute each query** via the `cypher` MCP tool on the same PS
+2. **Execute each query** via the `run-cypher` MCP tool on the same PS
    Service connector (`ps-mcp`) the invoking skill's retrieval already
    used — never a subprocess, script, or similarly-named connector
-   lacking `domain_concepts`. Apply the invoking skill's named
+   lacking `get-domain-concepts`. Apply the invoking skill's named
    error-state distinctions to any non-success result here too — a
    failed-to-execute attempt is not evidence either way.
 3. **Judge each attempt** against the answer's actual claim: **Landed** —

@@ -99,3 +99,16 @@ def test_openapi_publishes_the_run_id_pattern(client: TestClient) -> None:
 
     assert parameter["in"] == "path"
     assert parameter["schema"]["pattern"] == IDENTIFIER_PATTERN
+
+
+def test_openapi_names_the_progress_model_for_the_ingestion_read(
+    client: TestClient,
+) -> None:
+    """The read's response schema is ``IngestionProgressResponse``, carrying only run and stage."""
+    spec = cast("dict[str, Any]", cast("Any", client.app).openapi())
+    operation = spec["paths"]["/ingestions/{run_id}"]["get"]
+    response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+
+    assert response_schema == {"$ref": "#/components/schemas/IngestionProgressResponse"}
+    properties = spec["components"]["schemas"]["IngestionProgressResponse"]["properties"]
+    assert set(properties) == {"run_id", "stage"}

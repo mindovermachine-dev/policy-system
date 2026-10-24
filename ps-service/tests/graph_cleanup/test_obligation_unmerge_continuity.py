@@ -1,6 +1,6 @@
 """The obligation-unmerge flow end to end: preview, signature, executor, gateway group.
 
-One continuity test per flow. Everything real runs: the `unmerge` MCP tool creates the
+One continuity test per flow. Everything real runs: the `unmerge-entities` MCP tool creates the
 approval, the signing router verifies the passkey assertion and runs the registered executor, the
 executor writes ONE gateway group, `check-cleanup-approval` reports the outcome and
 `list-audit-events` returns the `applied` row. Only the graph (the gateway rig's in-memory log and
@@ -52,7 +52,7 @@ def test_preview_sign_execute_one_group_and_the_audit_row_it_is_linked_to(
     officer = (ACTOR_SUBJECT, ACTOR_ISSUER)
 
     # 1. The MCP tool previews and creates the approval; nothing is written yet.
-    created = json.loads(call_tool("unmerge", {"merged_id": OBL_ABSORBED}, officer))
+    created = json.loads(call_tool("unmerge-entities", {"merged_id": OBL_ABSORBED}, officer))
     assert created["preview"]["kind"] == "obligation"
     assert created["preview"]["survivor_id"] == OBL_SURVIVOR
     assert world.rig.logged_groups == []
@@ -111,7 +111,7 @@ def test_preview_sign_execute_one_group_and_the_audit_row_it_is_linked_to(
     status = json.loads(
         call_tool("check-cleanup-approval", {"pending_approval_id": row.id}, officer)
     )
-    assert status["tool_name"] == "unmerge"
+    assert status["tool_name"] == "unmerge-entities"
     assert status["status"] == "signed"
     assert status["outcome"] == {
         "merged_id": OBL_ABSORBED,

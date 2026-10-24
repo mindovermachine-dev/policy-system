@@ -1,13 +1,13 @@
 """Typed `details` model of the `query.cypher` audit action.
 
 Registers the model with `ps_service.audit.models.register_audit_action` at import time and
-registers the `query` audit resource type. The `cypher` MCP tool is the emitter, so the action
+registers the `query` audit resource type. The `run-cypher` MCP tool is the emitter, so the action
 lives here and not in `ps_service.query_engine`: the engine and the other in-process callers of
 `execute_cypher_query` (for example the ingestion-status check) write no row, and the engine does
 not depend on the audit package. `ps_service.mcp_interface` imports this module, so the action is
 registered before the tool writes its row.
 
-One row is written per `cypher` tool call, with the outcome in the `outcome` column
+One row is written per `run-cypher` tool call, with the outcome in the `outcome` column
 (`applied`, `rejected` or `failed`). The details never carry the query text or a database error
 text: only the row count, the truncation flag and an enumerated reason code.
 

@@ -11,13 +11,13 @@ Read the shared, insert-only `audit_events` trail PS Service's `ps.service.audit
 component maintains — every access-role bootstrap/grant/revoke (applied or
 denied), policy lifecycle and supersede-fork actions, and (issue #195) the
 business operations `ingestion_run.submit` / `ingestion_run.complete`
-(regulation ingestion, sync, async and `check_regulations` re-ingests,
+(regulation ingestion, sync, async and `check-regulations` re-ingests,
 distinguished by `details.trigger`), `instrument.restore`, `near_miss.resolve`
 (keep-separate; a near-miss merge writes `capability.merge`) and `user.invite`, and three
 cross-cutting actions: `access.gate` (a verified caller denied by a role-gated tool or route; resource
 type `operation`, the operation name as the resource id, the required role in the details),
 `passkey.enroll` (a passkey enrolled for the approver bound to a pending approval; resource type
-`pending_approval`) and `query.cypher` (one row per `cypher` tool call with its outcome, row count and
+`pending_approval`) and `query.cypher` (one row per `run-cypher` tool call with its outcome, row count and
 an enumerated reason code, never the query text; resource type `query`), with more joining over time as each feature adopts the
 same store (issue #147). The trail does not hold authentication outcomes (the identity provider
 records those) or passkey rejections, and a denial of a caller with no verified identity writes no row.

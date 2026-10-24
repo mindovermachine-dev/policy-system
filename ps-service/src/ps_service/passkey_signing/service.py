@@ -1,6 +1,6 @@
 """Shared pieces of the passkey signing ceremony and the near-miss approval status shape.
 
-- `PendingApprovalStatus` is the status shape that `near_misses_check_approval` (MCP) and
+- `PendingApprovalStatus` is the status shape that `check-near-miss-approval` (MCP) and
   `GET /near-misses/approvals/{pending_approval_id}` (REST) return; the near-miss review
   orchestration (`check_near_miss_merge_approval`) fills it from a `merge-capabilities` cleanup
   approval. Creating the approval is `graph_cleanup.service.create_capability_merge_approval`.

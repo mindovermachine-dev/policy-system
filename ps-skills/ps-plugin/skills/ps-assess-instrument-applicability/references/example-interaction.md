@@ -42,7 +42,7 @@ Read on demand from `SKILL.md`'s Process when unsure of the expected shape of an
 > one batched call before presenting anything)_
 >
 > ```text
-> check_instrument_ingestion_status(celex_ids=["32015L2366", "32016R0679", "32023R1114"])
+> check-instrument-ingestion-status(celex_ids=["32015L2366", "32016R0679", "32023R1114"])
 > → {"statuses": {"32015L2366": "ingested", "32016R0679": "not_yet_ingested", "32023R1114": "unknown"}}
 > ```
 >

@@ -196,7 +196,7 @@ def test_resource_returns_the_real_packaged_document_byte_for_byte() -> None:
 
 
 def _tool_text() -> str:
-    outcome = asyncio.run(build_test_server().call_tool("domain_concepts", {}))
+    outcome = asyncio.run(build_test_server().call_tool("get-domain-concepts", {}))
     assert isinstance(outcome, CallToolResult)
     [text] = [c.text for c in outcome.content if isinstance(c, TextContent)]
     return text

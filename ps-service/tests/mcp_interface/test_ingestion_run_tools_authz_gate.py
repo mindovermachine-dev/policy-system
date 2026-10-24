@@ -1,9 +1,9 @@
-"""ComplianceOfficer gate on `start_ingestion` and `get_ingestion_status` .
+"""ComplianceOfficer gate on `start-ingestion` and `get-ingestion-status` .
 
-A caller below `ComplianceOfficer` is denied by `start_ingestion` before any
+A caller below `ComplianceOfficer` is denied by `start-ingestion` before any
 `ingestion_runs` row, run slot or pipeline stage exists. The same denial applies to
-`get_ingestion_status`, whether or not the run id exists, before any store read. Each denial
-text is compared against what `ingest_regulation` returns for the same caller.
+`get-ingestion-status`, whether or not the run id exists, before any store read. Each denial
+text is compared against what `ingest-regulation` returns for the same caller.
 
 Local copies of `test_ingest_regulation_authz_gate.py`'s `_verified_actor` /
 `_fake_store_factory` / `_seeded_store` helpers (that file is a deliberately self-contained
@@ -57,7 +57,7 @@ _NON_ADMIN_SUBJECT = "authenticated-user-only-caller"
 _SYSTEM_ADMIN_SUBJECT = "system-admin-without-grant"
 _COMPLIANCE_OFFICER_SUBJECT = "granted-compliance-officer"
 _CALLER_ISSUER = "https://issuer.example.com/"
-_NEW_TOOLS = ("start_ingestion", "get_ingestion_status")
+_NEW_TOOLS = ("start-ingestion", "get-ingestion-status")
 _ACCESS_DENIED_MESSAGE = "error: You do not have the required access role for this action."
 _AUTHENTICATED_CALLER_MESSAGE = "error: this action requires a real authenticated caller"
 _SEEDED_RUN_ID = str(uuid.uuid4())
@@ -93,7 +93,7 @@ def _seeded_store() -> FakeAccessRoleStore:
 
 
 def _arguments(tool: str) -> dict[str, str]:
-    if tool == "get_ingestion_status":
+    if tool == "get-ingestion-status":
         return {"run_id": _SEEDED_RUN_ID}
     return {"celex": _CELEX, "short_name": _SHORT_NAME}
 
@@ -132,7 +132,7 @@ def _assert_no_run_was_started(runs: InMemoryIngestionRunStore) -> None:
     assert dispatch.in_flight_run_count() == 0
 
 
-@pytest.mark.parametrize("tool", [*_NEW_TOOLS, "ingest_regulation"])
+@pytest.mark.parametrize("tool", [*_NEW_TOOLS, "ingest-regulation"])
 @pytest.mark.parametrize("role", [None, AccessRole.SYSTEM_ADMIN])
 def test_callers_below_compliance_officer_get_the_same_denial_as_ingest_regulation(
     tool: str,
@@ -159,7 +159,7 @@ def test_callers_below_compliance_officer_get_the_same_denial_as_ingest_regulati
     assert runs.get_run_calls == 0
 
 
-@pytest.mark.parametrize("tool", [*_NEW_TOOLS, "ingest_regulation"])
+@pytest.mark.parametrize("tool", [*_NEW_TOOLS, "ingest-regulation"])
 def test_an_access_store_outage_fails_closed_for_every_tool(
     tool: str, runs: InMemoryIngestionRunStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,7 +172,7 @@ def test_an_access_store_outage_fails_closed_for_every_tool(
     assert runs.get_run_calls == 0
 
 
-@pytest.mark.parametrize("tool", [*_NEW_TOOLS, "ingest_regulation"])
+@pytest.mark.parametrize("tool", [*_NEW_TOOLS, "ingest-regulation"])
 def test_no_token_with_the_bypass_off_requires_a_real_authenticated_caller(
     tool: str, runs: InMemoryIngestionRunStore
 ) -> None:
@@ -190,8 +190,8 @@ def test_status_denial_is_identical_for_an_unseen_and_an_existing_run_id(
     unseen = str(uuid.uuid4())
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
-        existing_denial = _call("get_ingestion_status")
-        unseen_denial = asyncio.run(_server().call_tool("get_ingestion_status", {"run_id": unseen}))
+        existing_denial = _call("get-ingestion-status")
+        unseen_denial = asyncio.run(_server().call_tool("get-ingestion-status", {"run_id": unseen}))
 
     assert isinstance(unseen_denial, CallToolResult)
     block = unseen_denial.content[0]
@@ -218,7 +218,7 @@ def test_a_granted_compliance_officer_reaches_the_tool_body(
 
     assert isinstance(result, CallToolResult)
     payload = body(result)
-    if tool == "start_ingestion":
+    if tool == "start-ingestion":
         assert payload["status"] == "running"
         run_id = str(payload["run_id"])
         wait_for_run(run_id)

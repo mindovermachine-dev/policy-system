@@ -1201,7 +1201,7 @@ def test_operations_guide_503_row_names_the_amendment_check_and_exports() -> Non
 
     for needle in (
         "Regulatory Change Monitor",
-        "`check_regulations`",
+        "`check-regulations`",
         "`POST /change-checks`",
         "`finalize`",
         "link-only",
@@ -1353,7 +1353,7 @@ def test_operations_guide_503_row_names_restore_and_a_blocked_swap_has_its_own_r
     for needle in (
         "`POST /restorations`",
         "`POST /restorations/from-catalog`",
-        "`restore_instrument`",
+        "`restore-instrument`",
     ):
         assert needle in row, needle
     for needle in ("restart `ps-service`", "ascending graph-name order", "different states"):

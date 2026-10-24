@@ -7,7 +7,7 @@ re-exports that `server`. Transport (and real per-user auth) both
 belong to the sibling `http_transport.py` module, so neither may leak back
 into these modules. They inspect `ast.Call` / `ast.keyword` / `ast.Constant`
 nodes and MUST NOT substring-scan the source: a bare scan false-fails on
-the `cypher` docstring's `CREATE/MERGE/...` clause list (F-03, Residual
+the `run-cypher` docstring's `CREATE/MERGE/...` clause list (F-03, Residual
 risk 6).
 
 These guards describe the tool-surface modules' own source only (`tool_core.py`, the

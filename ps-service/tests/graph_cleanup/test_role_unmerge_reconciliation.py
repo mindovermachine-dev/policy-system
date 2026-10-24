@@ -1,4 +1,4 @@
-"""A signed Role `unmerge` approval whose outcome was never recorded is settled lazily.
+"""A signed Role `unmerge-entities` approval whose outcome was never recorded is settled lazily.
 
 `check-cleanup-approval` reconciles it past the grace window: effect present (the Role exists again
 and its `MergedRole` marker is gone) -> outcome reconciled as applied; effect absent -> a `failed`
@@ -42,7 +42,7 @@ _CONFIG = ServiceConfig(
 
 
 def _orphan(rig: CleanupRig) -> tuple[FakeApprovalStore, str]:
-    """A signed, expired `unmerge` approval of the merged Role, created from the rig's graph."""
+    """A signed, expired `unmerge-entities` approval of the merged Role, from the rig graph."""
     store = FakeApprovalStore()
     approval = create_unmerge_approval(
         rig.read,

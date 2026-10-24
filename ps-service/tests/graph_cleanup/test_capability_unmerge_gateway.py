@@ -1,4 +1,4 @@
-"""`unmerge` of a Capability writes through the Graph Write Gateway.
+"""`unmerge-entities` of a Capability writes through the Graph Write Gateway.
 
 One approved unmerge is one gateway group: the edges the merge moved are upserted back onto the
 absorbed Capability (recreated by id with its original properties), ONLY the planned edges leave

@@ -4,13 +4,13 @@ One end-to-end scripted sequence tying the Policy, Standard, Control and
 citation loops together: fresh Policy (scaffold + P-002..P-006) -> 1 passing
 Standard (S-001..S-006, `procedure` carrying a `Sources:` suffix per the
 citation contract) -> 1 passing Control (C-001..C-006) -> a final
-`get-policy` call -> a final `cypher` content re-read -- against a single
+`get-policy` call -> a final `run-cypher` content re-read -- against a single
 `_HybridGraph` instance, combining `test_ps_author_policy_control_loop.py`'s
 own write-side dispatch branches (the Control-loop file: `find_control_with_parent`,
 `find_standard_with_parent`, `read_policy_tree`, `find_existing_policy`)
-with `test_ps_author_policy_branch_detection.py`'s own freehand-`cypher`
+with `test_ps_author_policy_branch_detection.py`'s own freehand-`run-cypher`
 FIFO-queue branch -- the two halves of this skill's own tool
-surface (content-CRUD writes plus read-only `cypher`) exercised together in
+surface (content-CRUD writes plus read-only `run-cypher`) exercised together in
 one session for the first time. `read_policy_tree`'s own dispatch is made
 STATEFUL here (unlike the earlier loop files' always-empty-children fixture): the test
 helper appends the created Standard/Control to the shared `_PolicyFixture`
@@ -29,7 +29,7 @@ Three assertions:
     `write_params` (the only place `update-standard-draft`/
     `update-control-draft`'s persisted VALUES are observable at all,
     the earlier loop files' finding -- their MCP response never echoes
-    `updated_fields`), and via a final `cypher` read scripted to return
+    `updated_fields`), and via a final `run-cypher` read scripted to return
     exactly those same persisted values, proving the Process's own
     "re-read via cypher" instruction is a real, executable step against
     this skill's tool surface, not merely documentation;
@@ -236,9 +236,9 @@ class _ControlParentFixture:
 class _HybridGraph:
     """The Control-loop file's write-side `_HybridGraph`, extended with a STATEFUL
     `read_policy_tree` dispatch (`_PolicyFixture` above) and the branch-detection file's own
-    freehand-`cypher` FIFO-queue branch, checked after every literal-dispatch
+    freehand-`run-cypher` FIFO-queue branch, checked after every literal-dispatch
     branch (same "more specific match wins" ordering discipline every
-    earlier slice already established) -- this slice's own final `cypher`
+    earlier slice already established) -- this slice's own final `run-cypher`
     content-re-read call shares no literal substring with any dispatch
     branch below, so it always falls through to the queue.
     """
@@ -336,7 +336,7 @@ class _HybridGraph:
             and "MERGE (" not in q
             and self._cypher_results
         ):
-            # The skill's own freehand `cypher`-tool call (session-end
+            # The skill's own freehand `run-cypher`-tool call (session-end
             # content re-read) -- dequeue the next scripted outcome. The
             # " SET "/"MERGE (" exclusion matters here in a way it didn't in
             # the branch-detection file's fake: this slice is the first to combine the
@@ -445,7 +445,7 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
 ) -> None:
     configure()
 
-    # Scripted for the final `cypher` content re-read (requirement (b)):
+    # Scripted for the final `run-cypher` content re-read (requirement (b)):
     # one row per node, matching exactly what the field loops below persist.
     policy_content_row = [
         _SCOPE_IN,
@@ -546,7 +546,7 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
             "RETURN p.scope_in AS scope_in, p.scope_out AS scope_out, "
             "p.normative_commitments AS normative_commitments"
         )
-        cypher_result = _call_tool("cypher", {"query": content_query}, call_log)
+        cypher_result = _call_tool("run-cypher", {"query": content_query}, call_log)
         assert cypher_result.is_error is False
 
     # --- (a) the final get-policy tree includes every created id in the
@@ -597,7 +597,7 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
     assert control_loop_params == [dict(fields) for fields in _CONTROL_LOOP_CALLS[:-1]]
     assert handle.write_queries == []  # no direct write is left
 
-    # ...and via the final `cypher` call's own scripted-but-consistent
+    # ...and via the final `run-cypher` call's own scripted-but-consistent
     # response, proving the Process's "re-read via cypher" step is a real,
     # executable call against this skill's tool surface.
     cypher_body = json.loads(_text(cypher_result))
@@ -607,5 +607,5 @@ def test_full_session_creates_full_tree_never_calls_a_status_transition_tool(
     # --- (c) mechanical call-log check: none of the four status-transition
     # tools were ever invoked anywhere in this session ----------
     assert _FORBIDDEN_TOOLS.isdisjoint(call_log)
-    assert call_log.count("cypher") == 1
+    assert call_log.count("run-cypher") == 1
     assert call_log.count("get-policy") == 1

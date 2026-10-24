@@ -127,7 +127,7 @@ def _signed_row(
 
 
 def unmerge_row(rig: CleanupRig, merged_id: str, **args: object) -> PendingApprovalRow:
-    """A signed `unmerge` approval bound to the rig's current state."""
+    """A signed `unmerge-entities` approval bound to the rig's current state."""
     return _signed_row(unmerge_plan(rig, merged_id), merged_id, **args)
 
 
@@ -155,7 +155,7 @@ def run_obligation_unmerge(rig: CleanupRig, **kwargs: object) -> dict[str, objec
 
 
 def role_unmerge_row(rig: CleanupRig, *, audit: AuditStore | None = None) -> PendingApprovalRow:
-    """A signed `unmerge` approval of the merged Role, bound to the rig's current state.
+    """A signed `unmerge-entities` approval of the merged Role, bound to the rig's current state.
 
     The merge is located in `audit` (the rig's own store by default). The display summary is the
     preview, as the service stores it.

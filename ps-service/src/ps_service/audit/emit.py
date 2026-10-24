@@ -24,10 +24,10 @@ Conventions (the audit trail's row-shape contract):
 - Synchronous vs asynchronous ingestion. A synchronous ingest writes its opening row before the
   identity check, so a request rejected by it (unknown CELEX, short-name collision, already
   ingested) is always followed by a terminal row (`failed` with a `reason_code`, or `succeeded`
-  with `outcome='already_ingested'`). An asynchronous `start_ingestion` rejected before its run
-  exists writes no row. Polling a run (`get_ingestion_status`) writes nothing, except the
+  with `outcome='already_ingested'`). An asynchronous `start-ingestion` rejected before its run
+  exists writes no row. Polling a run (`get-ingestion-status`) writes nothing, except the
   reconciler's single terminal row for an orphaned run.
-- `check_regulations`. One pair per re-ingest that actually runs (`trigger='amendment_check'`,
+- `check-regulations`. One pair per re-ingest that actually runs (`trigger='amendment_check'`,
   the re-ingest's own run id as `resource_id`, the sweep caller as actor); a call that runs no
   pipeline stage (`already_processed`, or a link-only completion) writes no row. The sweep runs
   the full UC-4 pipeline (Ingestion, Domain Mapper, Company Merge), so the completion row carries
@@ -50,8 +50,8 @@ Conventions (the audit trail's row-shape contract):
   by authentication, hence `proof='approval_code'` in the details), resource type
   `pending_approval`. A rejected ceremony step writes no row and a signed action writes no
   `passkey.sign` row: the action's own effect row records the signing.
-- `query.cypher`. One best-effort row per `cypher` tool call, written by the tool and never by the
-  query engine or another in-process caller: outcome `applied`, `rejected` (a write clause) or
+- `query.cypher`. One best-effort row per `run-cypher` tool call, written by the tool and never by
+  the query engine or another in-process caller: outcome `applied`, `rejected` (a write clause) or
   `failed`, details limited to the row count, the truncation flag and an enumerated `reason_code`,
   never the query text or a database error text. Under the local-test bypass the actor is the
   bypass sentinel.

@@ -1,7 +1,7 @@
 """Catalog, restore and invite tools of the PS MCP server.
 
 Declares `set-catalog-source`, `reset-catalog-source`, `get-catalog-source`, `invite-user`,
-`get-catalog-listing` and `restore_instrument`; `register_catalog_tools` registers them on a server
+`get-catalog-listing` and `restore-instrument`; `register_catalog_tools` registers them on a server
 built by `mcp_server.build_server`. The tools build their runtime-config and audit stores through
 the `GateEnvironment` they are bound to. This module imports only `tool_core` and `tool_gates`
 (never another tool group); `create_invitation` and `build_default_curated_catalog_dependencies`
@@ -9,7 +9,7 @@ are bound here and patched here by tests.
 
 Business Rules:
     - Catalog-source administration and `invite-user` need `SystemAdmin` or above; the catalog
-      listing is a plain read; `restore_instrument` needs `ComplianceOfficer`.
+      listing is a plain read; `restore-instrument` needs `ComplianceOfficer`.
     - A curated instrument id is validated by charset and length, and rejected when it contains
       `..`, before the tool body runs.
 """
@@ -99,7 +99,7 @@ def _reject_path_traversal_segment(value: str) -> str:
     """Reject an instrument id that contains `..`.
 
     Runs as an `AfterValidator` once `_RESTORE_INSTRUMENT_ID_PATTERN` has matched, inside pydantic's
-    schema-validation pass, so the check happens before `restore_instrument`'s body runs. It is a
+    schema-validation pass, so the check happens before `restore-instrument`'s body runs. It is a
     separate validator because the regex backend cannot express the rule.
 
     Args:
@@ -340,7 +340,7 @@ def get_catalog_listing() -> dict[str, object] | str:
     Returns:
         A dict with an `instruments` list, one entry per curated instrument, unfiltered, each with
         `instrument_id`, `title`, `source_type` and `jurisdiction` (`None` for an internal-source
-        entry). Use an `instrument_id` with `restore_instrument`.
+        entry). Use an `instrument_id` with `restore-instrument`.
 
     Errors (returned as a string beginning `error: `, never raised):
         - The override cannot be read (the runtime configuration store is unavailable).
@@ -378,7 +378,7 @@ def get_catalog_listing() -> dict[str, object] | str:
     return _run_mcp_action("get_catalog_listing", _body)
 
 
-@_gated_tool("restore_instrument", _COMPLIANCE_OFFICER_GATE)
+@_gated_tool("restore-instrument", _COMPLIANCE_OFFICER_GATE)
 def restore_instrument(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     instrument_id: Annotated[
@@ -409,7 +409,7 @@ def restore_instrument(  # noqa: D417  # `environment` is injected by the server
         A dict with `instrument_id`, a `stages` list holding one entry per completed restore
         stage, each with its own `stage` and `status`, and `near_miss_reviews_created`: the
         number of Capability near-miss reviews the restore recorded (resolve them with
-        `near_misses_list` and `near_misses_resolve`).
+        `list-near-misses` and `resolve-near-miss`).
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller is not authenticated or lacks the required access role.
@@ -473,7 +473,7 @@ def restore_instrument(  # noqa: D417  # `environment` is injected by the server
             return _GRAPH_UNAVAILABLE_MESSAGE
         return outcome.model_dump()
 
-    return _run_mcp_action("restore_instrument", _body)
+    return _run_mcp_action("restore-instrument", _body)
 
 
 def register_catalog_tools(

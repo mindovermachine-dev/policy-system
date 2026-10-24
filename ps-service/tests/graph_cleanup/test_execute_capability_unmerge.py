@@ -1,4 +1,4 @@
-"""Executor for capability `unmerge`.
+"""Executor for capability `unmerge-entities`.
 
 Audit-first and fail-closed like the merges: re-check the role, re-locate the merge in the
 audit trail, re-read and compare the state digest, record `applied`, run the write, record `failed`
@@ -84,7 +84,7 @@ def _edge_keys(snapshot: object) -> set[tuple[str, str, str]]:
 
 
 def test_the_executor_and_verifier_are_registered_under_the_tool_name() -> None:
-    assert TOOL_UNMERGE == "unmerge"
+    assert TOOL_UNMERGE == "unmerge-entities"
     assert resolve_approval_executor(TOOL_UNMERGE) is not None
     assert resolve_effect_verifier(TOOL_UNMERGE) is verify_unmerge_effect
 

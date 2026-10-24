@@ -1,4 +1,4 @@
-"""Reader for obligation `unmerge`: live state around a marker.
+"""Reader for obligation `unmerge-entities`: live state around a marker.
 
 Pure reads with literal parameterised queries; a driver failure is a generic error.
 """

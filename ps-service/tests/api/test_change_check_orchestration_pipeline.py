@@ -1,4 +1,4 @@
-"""The `check_regulations` sweep runs the full pipeline, succession last.
+"""The `check-regulations` sweep runs the full pipeline, succession last.
 
 Entry is the real `run_change_check_sweep`; the code under test includes the REAL
 `trigger_reingestion` / `will_reingest` / `classify_reingestion` / `succession`. The boundaries

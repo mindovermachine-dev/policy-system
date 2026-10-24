@@ -1,4 +1,4 @@
-"""Tests for the registered `cypher` MCP tool driven through
+"""Tests for the registered `run-cypher` MCP tool driven through
 `server.call_tool`.
 
 Covers the tool boundary, the acquisition-failure
@@ -131,7 +131,7 @@ def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _FakeGraphHandle) ->
 
 
 def _call_cypher(query: str) -> CallToolResult:
-    result = asyncio.run(_server().call_tool("cypher", {"query": query}))
+    result = asyncio.run(_server().call_tool("run-cypher", {"query": query}))
     assert isinstance(result, CallToolResult)
     return result
 

@@ -1,4 +1,4 @@
-"""Pure planner for obligation `unmerge`.
+"""Pure planner for obligation `unmerge-entities`.
 
 The merge audit details are produced by the REAL obligation-merge planner, so the unmerge planner
 is proven against the snapshot shape the executor actually records.

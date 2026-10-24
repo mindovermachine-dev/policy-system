@@ -1,4 +1,4 @@
-"""`check_regulations` writes `ingestion_run.*` audit rows per re-ingest.
+"""`check-regulations` writes `ingestion_run.*` audit rows per re-ingest.
 
 Transport side only: the actor (verified caller or the local-test-bypass sentinel), the
 re-ingest's own run id as `resource_id`, and the `error: ` mapping of an unavailable audit
@@ -91,7 +91,7 @@ def _amended_instrument(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ig
 
 
 def _call() -> CallToolResult:
-    result = asyncio.run(_server().call_tool("check_regulations", {}))
+    result = asyncio.run(_server().call_tool("check-regulations", {}))
     assert isinstance(result, CallToolResult)
     return result
 

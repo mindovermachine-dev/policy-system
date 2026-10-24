@@ -69,7 +69,7 @@ the direction*.
    outcome is read back (`merged`, a spent approval's `error` — graph untouched, start
    over from preview — or `reconciled: applied` after an interrupted run). Expired means
    re-preview, never re-sign.
-6. **Reverse.** `unmerge` restores a merged pair from its audit snapshot through the same
+6. **Reverse.** `unmerge-entities` restores a merged pair from its audit snapshot through the same
    preview → confirm → passkey shape — cleanup decisions are reversible by ceremony,
    including a Capability merge that CUC-06 started from a near-miss review (the deleted
    review is not restored). A Role merge is refused while a later merge depends on it —

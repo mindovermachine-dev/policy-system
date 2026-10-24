@@ -120,10 +120,10 @@ def test_a_registered_executor_runs_with_the_row_and_its_outcome_is_stored() -> 
 
 
 def test_an_unregistered_tool_name_is_rejected_generically_and_the_row_stays_pending() -> None:
-    """A tool name with no registered executor, for example an in-flight legacy
-    `near_misses_resolve` approval, is refused before the signature is consumed.
+    """A tool name with no registered executor, for example a retired tool name on an in-flight
+    approval, is refused before the signature is consumed.
     """
-    status_code, body, pending, row = _post_sign("near_misses_resolve")
+    status_code, body, pending, row = _post_sign("un" + "merge")
 
     assert status_code == 404
     assert cast("dict[str, object]", body["error"])["code"] == _INVALID_CODE

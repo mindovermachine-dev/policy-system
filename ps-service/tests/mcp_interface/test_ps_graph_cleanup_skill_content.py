@@ -277,7 +277,7 @@ def test_skill_names_the_release_governance_errors() -> None:
 def test_skill_walks_the_capability_unmerge_flow_in_order() -> None:
     section = _ref("unmerge.md")
 
-    assert "`unmerge`" in section
+    assert "`unmerge-entities`" in section
     positions = [
         section.index(marker)
         for marker in (
@@ -382,7 +382,7 @@ def test_skill_has_one_consolidated_error_reference_for_every_tool() -> None:
         "merge-capabilities",
         "merge-obligations",
         "release-capability-governance",
-        "unmerge",
+        "unmerge-entities",
         "check-cleanup-approval",
     ):
         assert f"`{tool}`" in section, tool
@@ -492,8 +492,8 @@ def test_skill_sources_a_role_pair_from_the_officer_or_read_only_cypher() -> Non
     section = _text()[_text().index("### Merging two roles") :]
 
     assert "no Role discovery tool" in section
-    assert "read-only `cypher`" in section
-    assert "domain_concepts" in section
+    assert "read-only `run-cypher`" in section
+    assert "get-domain-concepts" in section
 
 
 def test_skill_names_the_role_merge_errors() -> None:

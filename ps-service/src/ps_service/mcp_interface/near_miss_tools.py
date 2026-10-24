@@ -1,6 +1,6 @@
 """Near-miss review tools of the PS MCP server: list, resolve and check a near-miss approval.
 
-Registers `near_misses_list`, `near_misses_resolve` and `near_misses_check_approval`;
+Registers `list-near-misses`, `resolve-near-miss` and `check-near-miss-approval`;
 `register_near_miss_tools` registers them on a server built by `mcp_server.build_server`. Each tool
 opens its graph and builds its stores through the `GateEnvironment` it is bound to. This module
 imports only `tool_core` and `tool_gates` (never another tool group).
@@ -122,8 +122,8 @@ def _review_dependencies(environment: GateEnvironment) -> NearMissReviewDependen
     )
 
 
-@_gated_tool("near_misses_list", _PLAIN_READ_GATE)
-def near_misses_list(  # `environment` is injected by the server and hidden from clients
+@_gated_tool("list-near-misses", _PLAIN_READ_GATE)
+def list_near_misses(  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
 ) -> dict[str, object] | str:
     """List every unresolved near-miss pending review.
@@ -160,7 +160,7 @@ def near_misses_list(  # `environment` is injected by the server and hidden from
             return f"error: {exc}"
         return result.model_dump()
 
-    return _run_mcp_action("near_misses_list", _body)
+    return _run_mcp_action("list-near-misses", _body)
 
 
 def _resolve_merge_pending_approval(
@@ -171,7 +171,7 @@ def _resolve_merge_pending_approval(
     *,
     acknowledge: bool,
 ) -> dict[str, object] | str:
-    """Handle `near_misses_resolve` with `decision="merge"` by requesting a cleanup merge approval.
+    """Handle `resolve-near-miss` with `decision="merge"` by requesting a cleanup merge approval.
 
     Split out of the tool body to keep its branch count manageable; no other tool uses it.
 
@@ -197,7 +197,7 @@ def _resolve_merge_pending_approval(
         Inserts one pending-approval row on success. The merge itself runs only after a human signs.
         Nothing is written to the graph.
     """
-    actor = run_body_gate(environment, "near_misses_resolve", _NEAR_MISS_MERGE_GATE)
+    actor = run_body_gate(environment, "resolve-near-miss", _NEAR_MISS_MERGE_GATE)
     if isinstance(actor, str):
         return actor
     try:
@@ -236,8 +236,8 @@ def _resolve_merge_pending_approval(
 _MERGE_ONLY_RESOLVE_FIELDS = {"preview", "acknowledgment_required", "message"}
 
 
-@_gated_tool("near_misses_resolve", _NEAR_MISS_MERGE_GATE)
-def near_misses_resolve(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+@_gated_tool("resolve-near-miss", _NEAR_MISS_MERGE_GATE)
+def resolve_near_miss(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     review_id: Annotated[str, Field(min_length=1)],
     decision: Literal["keep-separate", "merge"],
@@ -256,7 +256,7 @@ def near_misses_resolve(  # noqa: D417  # `environment` is injected by the serve
     earliest and a tie goes to the incoming node; a Role carries no `created_at`, so the incoming
     Role survives), returns the merge preview and creates a pending passkey approval bound to that
     pair and state, with the review id signed into it. The merge runs only when the officer opens
-    `approval_url` in a browser and signs with a passkey; use `near_misses_check_approval` to
+    `approval_url` in a browser and signs with a passkey; use `check-near-miss-approval` to
     learn whether that happened.
 
     On execution the absorbed entity is deleted and a marker (`MergedCapability` or `MergedRole`)
@@ -264,16 +264,16 @@ def near_misses_resolve(  # noqa: D417  # `environment` is injected by the serve
     no new near miss. A Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move to the
     survivor; a Role's Obligations move to the surviving Role. The change is one all-or-nothing
     graph write, audited first (`capability.merge` or `role.merge`, linked to the review id and
-    reversible with `unmerge`), that also deletes the `PendingReview`. A Capability keeps at most
-    one governing Policy: when exactly one of the two is governed the preview names the Policy
-    (`policy_case` 2) and the first call, without `acknowledge_governance_change`, returns
+    reversible with `unmerge-entities`), that also deletes the `PendingReview`. A Capability keeps
+    at most one governing Policy: when exactly one of the two is governed the preview names the
+    Policy (`policy_case` 2) and the first call, without `acknowledge_governance_change`, returns
     `acknowledgment_required` and creates no approval; repeat it with the flag set once the officer
     has accepted the change. Two Capabilities governed by different Policies are refused before any
     approval, with an error naming `release-capability-governance`. A Role has no governing Policy,
     so `acknowledge_governance_change=true` on a Role review is refused. Needs no LLM Interface.
 
     Args:
-        review_id: Id of the pending review, from `near_misses_list`; at least 1 character.
+        review_id: Id of the pending review, from `list-near-misses`; at least 1 character.
         decision: `"keep-separate"` or `"merge"`; any other value is rejected before the tool runs.
         ctx: Supplied by the MCP runtime, not by the caller.
         acknowledge_governance_change: `true` to accept the governance change of a case-2
@@ -342,17 +342,17 @@ def near_misses_resolve(  # noqa: D417  # `environment` is injected by the serve
             return _GRAPH_UNAVAILABLE_MESSAGE
         return result.model_dump(exclude=_MERGE_ONLY_RESOLVE_FIELDS)
 
-    return _run_mcp_action("near_misses_resolve", _body)
+    return _run_mcp_action("resolve-near-miss", _body)
 
 
-@_gated_tool("near_misses_check_approval", _OWN_APPROVAL_READ_GATE)
-def near_misses_check_approval(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+@_gated_tool("check-near-miss-approval", _OWN_APPROVAL_READ_GATE)
+def check_near_miss_approval(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     pending_approval_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
     """Check whether a near-miss merge's pending approval has been signed and what it did.
 
-    `near_misses_resolve` with `decision="merge"` never waits for a human to complete the WebAuthn
+    `resolve-near-miss` with `decision="merge"` never waits for a human to complete the WebAuthn
     signing ceremony, so this is the separate, poll-again-later way to learn whether it has
     happened. The approval is a graph-cleanup `merge-capabilities` approval that carries the review
     id; any other approval is reported as not found. Ownership check: only the caller who created
@@ -361,7 +361,7 @@ def near_misses_check_approval(  # noqa: D417  # `environment` is injected by th
     caller cannot learn whether an id belongs to someone else.
 
     Args:
-        pending_approval_id: The `pending_approval_id` returned by `near_misses_resolve`; at least 1
+        pending_approval_id: The `pending_approval_id` returned by `resolve-near-miss`; at least 1
             character.
 
     Returns:
@@ -414,7 +414,7 @@ def near_misses_check_approval(  # noqa: D417  # `environment` is injected by th
             "error": status.error,
         }
 
-    return _run_mcp_action("near_misses_check_approval", _body)
+    return _run_mcp_action("check-near-miss-approval", _body)
 
 
 def register_near_miss_tools(
@@ -434,5 +434,5 @@ def register_near_miss_tools(
         server,
         environment,
         gates,
-        (near_misses_list, near_misses_resolve, near_misses_check_approval),
+        (list_near_misses, resolve_near_miss, check_near_miss_approval),
     )

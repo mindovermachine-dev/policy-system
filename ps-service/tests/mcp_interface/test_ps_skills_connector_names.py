@@ -7,8 +7,11 @@ plain grep).
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
+
+from ps_service.mcp_interface import mcp_server
 
 _PLUGIN_DIR = Path(__file__).resolve().parents[3] / "ps-skills" / "ps-plugin"
 
@@ -29,7 +32,7 @@ OLD_PATTERNS = (
 
 _FORBIDDEN = re.compile(r"graph-local|user-registered")
 _TOOL_LITERAL = re.compile(r"mcp__plugin_\S+")
-_TOOL_OK = re.compile(r"mcp__plugin_ps-plugin_ps-mcp__[a-z_]+")
+_TOOL_OK = re.compile(r"mcp__plugin_ps-plugin_ps-mcp__[a-z_-]+")
 
 
 def _markdown_files() -> list[Path]:
@@ -66,3 +69,25 @@ def test_any_plugin_tool_literal_has_the_exact_new_form() -> None:
         for literal in _TOOL_LITERAL.findall(path.read_text(encoding="utf-8")):
             stripped = literal.rstrip(".,;:)`'\"")
             assert _TOOL_OK.fullmatch(stripped), f"{path.name}: unexpected tool literal {stripped}"
+
+
+_REGISTERED_TOOL_NAMES = sorted(tool.name for tool in asyncio.run(mcp_server.server.list_tools()))
+
+
+def snake_spelled_tool_names(text: str, tool_names: list[str]) -> list[str]:
+    """Registered tools whose snake_case spelling appears in `text` as a backticked token."""
+    return [name for name in tool_names if "`" + name.replace("-", "_") + "`" in text]
+
+
+def test_a_snake_case_spelling_of_a_tool_is_reported() -> None:
+    assert snake_spelled_tool_names("run `get_thing` now", ["get-thing"]) == ["get-thing"]
+
+
+def test_the_kebab_spelling_of_a_tool_is_accepted() -> None:
+    assert snake_spelled_tool_names("run `get-thing` now", ["get-thing"]) == []
+
+
+def test_no_skill_spells_a_registered_tool_in_snake_case() -> None:
+    for path in _markdown_files():
+        found = snake_spelled_tool_names(path.read_text(encoding="utf-8"), _REGISTERED_TOOL_NAMES)
+        assert found == [], f"{path.relative_to(_PLUGIN_DIR)} spells {found} in snake_case"

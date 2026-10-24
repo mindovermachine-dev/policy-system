@@ -1,5 +1,5 @@
 -- PLAN.md §1.1 (issue #131): pending signed-passkey-approval records for
--- near_misses_resolve(decision="merge"). gen_random_uuid() is a Postgres
+-- resolve-near-miss(decision="merge"). gen_random_uuid() is a Postgres
 -- 13+ built-in (no pgcrypto extension required).
 
 CREATE TABLE pending_approvals (

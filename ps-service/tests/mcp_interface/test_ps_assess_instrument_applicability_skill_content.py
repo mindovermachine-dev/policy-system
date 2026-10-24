@@ -7,7 +7,7 @@ split kept the skill intact:
 - The two example interactions live in `references/` and `SKILL.md` names each
   with its `read ...` condition.
 - The Guardrails section still carries its key safety statements word for word.
-- On Load makes no `domain_concepts` fetch.
+- On Load makes no `get-domain-concepts` fetch.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ _GUARDRAIL_SENTENCES: tuple[str, ...] = (
     "Never fabricate a CELEX identifier for any candidate",
     "Never omit an excluded candidate, or leave a likely/possible candidate's tier unexplained.",
     (
-        "Never abort the assessment because `check_instrument_ingestion_status` could not be "
+        "Never abort the assessment because `check-instrument-ingestion-status` could not be "
         "reached or could not resolve a candidate"
     ),
 )
@@ -98,4 +98,4 @@ def test_guardrails_keep_their_key_safety_statements() -> None:
 def test_issue_200_on_load_makes_no_domain_concepts_fetch() -> None:
     _frontmatter, body = _split_frontmatter(_SKILL_PATH.read_text(encoding="utf-8"))
 
-    assert "domain_concepts" not in _section_text(body, "## On Load")
+    assert "get-domain-concepts" not in _section_text(body, "## On Load")

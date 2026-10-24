@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 type IngestionTrigger = Literal["sync_ingest", "async_ingest", "amendment_check"]
-"""Which entry point started the run: sync ingest (MCP/REST), `start_ingestion`, or a sweep."""
+"""Which entry point started the run: sync ingest (MCP/REST), `start-ingestion`, or a sweep."""
 
 type IngestionReasonCode = Literal[
     "config_incomplete",

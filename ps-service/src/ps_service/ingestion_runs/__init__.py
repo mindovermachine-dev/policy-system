@@ -2,8 +2,8 @@
 
 Domain path: `ps.service.ingestionruns`
 (`docs/architecture/ps-solution-architecture.md`). Persists one `ingestion_runs` row per
-`start_ingestion` MCP submission in the PS state Postgres, so a caller can poll a long
-catalog-ingestion run (`get_ingestion_status`) instead of blocking on it. The `dispatch` module
+`start-ingestion` MCP submission in the PS state Postgres, so a caller can poll a long
+catalog-ingestion run (`get-ingestion-status`) instead of blocking on it. The `dispatch` module
 holds the process-local registry of in-flight runs and launches each run's background thread.
 
 Owns its migration directory (`MIGRATIONS_DIR`), listed by the composition root

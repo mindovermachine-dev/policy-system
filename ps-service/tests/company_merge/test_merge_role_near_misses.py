@@ -1,4 +1,4 @@
-"""Ingest raises a Role near miss: `merge_baseline_graph` -> `PendingReview` -> `near_misses_list`.
+"""Ingest raises a Role near miss: `merge_baseline_graph` -> `PendingReview` -> `list-near-misses`.
 
 The real `merge_baseline_graph` runs over a gateway rig whose baseline defines Roles with scripted
 name embeddings. What persists is read back through the listing the MCP tool and REST route use.

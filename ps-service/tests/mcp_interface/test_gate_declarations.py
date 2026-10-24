@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from ps_service.mcp_interface.tool_gates import ToolGate
 
 _SELF_AUDITED_TOOLS = {"grant-access-role", "revoke-access-role"}
-_BODY_TOOLS = {"near_misses_resolve", "approve-policy", "reject-policy"}
+_BODY_TOOLS = {"resolve-near-miss", "approve-policy", "reject-policy"}
 # `approve-policy` / `reject-policy` hand the policy-lifecycle service an injected enforcer; their
 # error tuples keep `AccessDeniedError` because that service raises it (after the Policy read).
 _INJECTED_ENFORCER_TOOLS = {"approve-policy", "reject-policy"}

@@ -1,4 +1,4 @@
-"""Pure planning and conflict detection for `unmerge` of a capability or obligation merge.
+"""Pure planning and conflict detection for `unmerge-entities` of a capability or obligation merge.
 
 No I/O. `derive_capability_unmerge_inputs` and `derive_obligation_unmerge_inputs` read what a
 merge's audit snapshot says to reverse; `plan_capability_unmerge` and `plan_obligation_unmerge`

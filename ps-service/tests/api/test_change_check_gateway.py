@@ -145,7 +145,7 @@ def test_check_regulations_without_a_gateway_answers_with_an_error_string(
 
     import asyncio
 
-    result = asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
+    result = asyncio.run(mcp_server.server.call_tool("check-regulations", {}))
 
     assert isinstance(result, CallToolResult)
     block = result.content[0]

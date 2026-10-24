@@ -2,7 +2,7 @@
 
 Read on demand from `SKILL.md`. Every Guardrail in `SKILL.md` still applies.
 
-`unmerge` reverses a merge made with `merge-capabilities`, `merge-obligations` or `merge-roles`,
+`unmerge-entities` reverses a merge made with `merge-capabilities`, `merge-obligations` or `merge-roles`,
 from the audit snapshot (`capability.merge`, `obligation.merge` or `role.merge`) that merge
 recorded. It takes only `merged_id`: the id that was absorbed (a deleted Capability with a
 `MergedCapability` marker, a deleted Obligation with a `MergedObligation` marker, or a deleted
@@ -12,7 +12,7 @@ locate -> preview -> confirm -> passkey -> result; never skip a step.
 
 1. **Locate.** Ask which absorbed id to unmerge (its `merged_id`). The tool finds the newest merge
    of that id that actually applied; do not guess a different id.
-2. **Preview.** Call `unmerge` with `merged_id`. This call never edits the graph. It returns
+2. **Preview.** Call `unmerge-entities` with `merged_id`. This call never edits the graph. It returns
    `preview` plus `pending_approval_id`, `approval_url` and `expires_at`. Show every field plainly
    and say what will happen.
    - **Capability** (`kind` `capability`): the preview has `merged_id`, `survivor_id`,
@@ -71,11 +71,11 @@ another Role than the survivor. A Role merge that a later merge stands on is ref
 later `obligation.merge` of a moved Obligation (as survivor or absorbed), or a later `role.merge`
 that absorbed this merge's survivor, blocks the unmerge. The message names that later merge's
 audit event id and approval id; relay both, and say that the later merge must be reversed first
-(with `unmerge` on its absorbed id); then this one can be. If no merge of the id is in the audit
+(with `unmerge-entities` on its absorbed id); then this one can be. If no merge of the id is in the audit
 trail the tool says so. Do not invent a workaround, do not edit the graph another way and do not
 retry.
 
-Named states for `unmerge`, never collapsed into each other:
+Named states for `unmerge-entities`, never collapsed into each other:
 
 | Tool result                                                                                                               | Named state to report                                                                                 |
 | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |

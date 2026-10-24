@@ -24,7 +24,7 @@ _BIG = """# big
 
 ## On Load
 
-Select the connector, then call the `domain_concepts` tool once.
+Select the connector, then call the `get-domain-concepts` tool once.
 
 ## Process
 
@@ -51,7 +51,7 @@ def test_reports_size_references_and_on_load_tool_calls(tmp_path: Path) -> None:
     assert big.skill_chars == len(_BIG)
     assert big.references == {"rubrics/rubric.md": 5, "skills/big/references/extra.md": 10}
     assert big.unresolved_references == ("elsewhere/outside.md",)
-    assert big.on_load_tool_calls == ("domain_concepts",)
+    assert big.on_load_tool_calls == ("get-domain-concepts",)
     assert by_name["small"].on_load_tool_calls == ()
 
 

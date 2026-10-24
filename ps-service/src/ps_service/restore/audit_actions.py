@@ -3,7 +3,7 @@
 Registers the action and the `instrument` resource type with `ps_service.audit` at import
 time; `api.restore_orchestration` imports this module so registration precedes any record.
 
-One row shape serves the catalog restore (MCP `restore_instrument`,
+One row shape serves the catalog restore (MCP `restore-instrument`,
 `POST /restorations/from-catalog`) and the upload restore (`POST /restorations`):
 `resource_id` is the canonical instrument id, the details carry the lifecycle `status`
 (`started` -> `succeeded | failed | rejected | committed_apply_pending`), the `source`

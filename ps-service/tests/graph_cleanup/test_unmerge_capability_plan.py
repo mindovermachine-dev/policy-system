@@ -1,4 +1,4 @@
-"""Pure planner for capability `unmerge`.
+"""Pure planner for capability `unmerge-entities`.
 
 The merge audit details are produced by the REAL merge planner, so the unmerge planner is
 proven against the snapshot shape the executor actually records.

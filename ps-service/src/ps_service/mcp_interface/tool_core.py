@@ -112,7 +112,7 @@ def create_server() -> MCPServer:
         name="ps-mcp",
         instructions=(
             "Read-only Cypher access to the policy_system compliance graph. "
-            "Call the domain_concepts tool first and ground every query in its actual node "
+            "Call the get-domain-concepts tool first and ground every query in its actual node "
             "labels, properties, and edge directions -- never invent one. "
             "Write clauses are rejected before execution and returned as an 'error:' line."
         ),
@@ -446,7 +446,7 @@ def run_mcp_action(
     `outcome="succeeded"` and returned unchanged.
 
     Args:
-        action: The tool's own name (for example `"ingest_regulation"`), used as the log entries'
+        action: The tool's own name (for example `"ingest-regulation"`), used as the log entries'
             `action` field.
         body: Zero-argument callable doing the tool's work inside the bound run context; it reads
             its run id through `current_run_id()` because binding happens here, not in `body`.
@@ -515,7 +515,7 @@ def sanitize_graph_open[**P, R](opener: Callable[P, R]) -> Callable[P, R]:
     """Wrap one graph opener so any failure becomes `McpGraphUnavailableError`.
 
     Keeps host, port and driver detail from crossing the MCP boundary, as `resolve_graph` does for
-    the `cypher` tool.
+    the `run-cypher` tool.
 
     Args:
         opener: Callable that opens a graph or database connection.

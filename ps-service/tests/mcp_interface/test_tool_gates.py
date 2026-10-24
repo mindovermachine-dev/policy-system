@@ -439,9 +439,9 @@ def test_the_cypher_group_registers_its_tools_gates_and_resource_on_a_built_serv
     tools = asyncio.run(built.server.list_tools())
     resources = asyncio.run(built.server.list_resources())
 
-    assert {"cypher", "domain_concepts"} <= {t.name for t in tools}
-    assert built.gates["cypher"] == PLAIN_READ_GATE
-    assert built.gates["domain_concepts"] == PLAIN_READ_GATE
+    assert {"run-cypher", "get-domain-concepts"} <= {t.name for t in tools}
+    assert built.gates["run-cypher"] == PLAIN_READ_GATE
+    assert built.gates["get-domain-concepts"] == PLAIN_READ_GATE
     assert [str(r.uri) for r in resources] == ["psdomain://concepts"]
 
 
@@ -458,7 +458,9 @@ def test_a_cypher_call_on_a_fail_closed_server_never_opens_a_connection(
     monkeypatch.setattr(falkordb_client, "connect", _connect)
     touched.clear()
 
-    result = asyncio.run(build_test_server().call_tool("cypher", {"query": "MATCH (n) RETURN n"}))
+    result = asyncio.run(
+        build_test_server().call_tool("run-cypher", {"query": "MATCH (n) RETURN n"})
+    )
 
     assert isinstance(result, CallToolResult)
     block = result.content[0]
@@ -524,7 +526,7 @@ _CATALOG_GATES = {
     "get-catalog-source": SYSTEM_ADMIN_GATE,
     "invite-user": SYSTEM_ADMIN_GATE,
     "get-catalog-listing": PLAIN_READ_GATE,
-    "restore_instrument": COMPLIANCE_OFFICER_GATE,
+    "restore-instrument": COMPLIANCE_OFFICER_GATE,
 }
 
 
@@ -578,11 +580,11 @@ def test_a_get_catalog_source_call_on_a_fail_closed_server_touches_only_the_audi
 
 
 _INGESTION_GATES = {
-    "ingest_regulation": COMPLIANCE_OFFICER_GATE,
-    "start_ingestion": COMPLIANCE_OFFICER_GATE,
-    "get_ingestion_status": COMPLIANCE_OFFICER_GATE,
-    "check_regulations": COMPLIANCE_OFFICER_GATE,
-    "check_instrument_ingestion_status": PLAIN_READ_GATE,
+    "ingest-regulation": COMPLIANCE_OFFICER_GATE,
+    "start-ingestion": COMPLIANCE_OFFICER_GATE,
+    "get-ingestion-status": COMPLIANCE_OFFICER_GATE,
+    "check-regulations": COMPLIANCE_OFFICER_GATE,
+    "check-instrument-ingestion-status": PLAIN_READ_GATE,
 }
 
 
@@ -614,7 +616,7 @@ def test_an_audit_override_alone_reaches_the_run_store_a_get_ingestion_status_ca
         ingestion_run_store_factory=_run_store_factory,
     )
 
-    result = asyncio.run(server.call_tool("get_ingestion_status", {"run_id": "unseen"}))
+    result = asyncio.run(server.call_tool("get-ingestion-status", {"run_id": "unseen"}))
 
     assert isinstance(result, CallToolResult)
     assert result.is_error is False
@@ -629,7 +631,7 @@ def test_a_get_ingestion_status_call_on_a_fail_closed_server_touches_only_the_au
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     touched.clear()
 
-    result = asyncio.run(build_test_server().call_tool("get_ingestion_status", {"run_id": "x"}))
+    result = asyncio.run(build_test_server().call_tool("get-ingestion-status", {"run_id": "x"}))
 
     assert isinstance(result, CallToolResult)
     assert touched == ["audit_store_factory"]
@@ -641,7 +643,7 @@ def test_a_check_instrument_ingestion_status_call_opens_its_graph_through_the_en
 
     result = asyncio.run(
         build_test_server().call_tool(
-            "check_instrument_ingestion_status", {"celex_ids": ["32024R2847"]}
+            "check-instrument-ingestion-status", {"celex_ids": ["32024R2847"]}
         )
     )
 
@@ -734,7 +736,7 @@ def test_the_lifecycle_role_enforcer_refuses_a_gate_that_is_not_a_lifecycle_body
     with pytest.raises(ValueError, match="body gate"):
         lifecycle_role_enforcer(environment, "list-access-roles", PLAIN_READ_GATE)
     with pytest.raises(ValueError, match="lifecycle identity"):
-        lifecycle_role_enforcer(environment, "near_misses_resolve", NEAR_MISS_MERGE_GATE)
+        lifecycle_role_enforcer(environment, "resolve-near-miss", NEAR_MISS_MERGE_GATE)
 
 
 def test_the_body_gate_runs_the_gate_it_is_given_without_a_registered_declaration() -> None:
@@ -754,7 +756,7 @@ _GRAPH_CLEANUP_TOOLS = (
     "merge-obligations",
     "merge-roles",
     "release-capability-governance",
-    "unmerge",
+    "unmerge-entities",
     "check-cleanup-approval",
 )
 
@@ -827,11 +829,11 @@ def test_a_graph_cleanup_call_on_a_fail_closed_server_opens_its_graph_through_th
     assert touched == ["graph_factory"]
 
 
-_NEAR_MISS_TOOLS = ("near_misses_list", "near_misses_resolve", "near_misses_check_approval")
+_NEAR_MISS_TOOLS = ("list-near-misses", "resolve-near-miss", "check-near-miss-approval")
 _NEAR_MISS_GATES = {
-    "near_misses_list": PLAIN_READ_GATE,
-    "near_misses_resolve": NEAR_MISS_MERGE_GATE,
-    "near_misses_check_approval": OWN_APPROVAL_READ_GATE,
+    "list-near-misses": PLAIN_READ_GATE,
+    "resolve-near-miss": NEAR_MISS_MERGE_GATE,
+    "check-near-miss-approval": OWN_APPROVAL_READ_GATE,
 }
 
 
@@ -843,7 +845,7 @@ def test_the_near_miss_group_registers_its_tools_and_gates_on_a_built_server() -
     assert {name: built.gates[name] for name in _NEAR_MISS_TOOLS} == _NEAR_MISS_GATES
     for name in _NEAR_MISS_TOOLS:
         assert "environment" not in tools[name].input_schema["properties"], name
-    assert "ctx" not in tools["near_misses_resolve"].input_schema["properties"]
+    assert "ctx" not in tools["resolve-near-miss"].input_schema["properties"]
 
 
 def test_the_body_gate_requires_the_gate_to_be_passed() -> None:
@@ -885,7 +887,7 @@ def test_a_near_miss_merge_on_a_fail_closed_server_reaches_the_graph_through_the
     )
 
     text = _call_as_officer(
-        server, "near_misses_resolve", {"review_id": "review_aaa", "decision": "merge"}
+        server, "resolve-near-miss", {"review_id": "review_aaa", "decision": "merge"}
     )
 
     assert text == "error: the policy graph database is not reachable"
@@ -902,7 +904,7 @@ def test_a_near_miss_merge_cannot_create_an_approval_without_the_pending_approva
     )
 
     text = _call_as_officer(
-        server, "near_misses_resolve", {"review_id": "review_aaa", "decision": "merge"}
+        server, "resolve-near-miss", {"review_id": "review_aaa", "decision": "merge"}
     )
 
     assert text.startswith("error: ")
@@ -912,14 +914,14 @@ def test_a_near_miss_merge_cannot_create_an_approval_without_the_pending_approva
 @pytest.mark.parametrize(
     ("tool", "arguments", "expected_touched"),
     [
-        ("near_misses_list", {}, ["graph_factory"]),
+        ("list-near-misses", {}, ["graph_factory"]),
         (
-            "near_misses_resolve",
+            "resolve-near-miss",
             {"review_id": "review_aaa", "decision": "keep-separate"},
             ["graph_factory"],
         ),
         (
-            "near_misses_check_approval",
+            "check-near-miss-approval",
             {"pending_approval_id": "approval-1"},
             ["pending_approval_store_factory"],
         ),

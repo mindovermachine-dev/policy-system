@@ -2,7 +2,7 @@
 
 Proves `build_streamable_http_app` wraps the server it is given, built over the test
 environment, in a real Streamable HTTP ASGI app: the
-`cypher` tool and the `psdomain://concepts` resource are reachable over real
+`run-cypher` tool and the `psdomain://concepts` resource are reachable over real
 JSON-RPC-over-HTTP, not a reimplementation. Driven end-to-end through
 `TestClient` -- a real ASGI request/response cycle, headers included -- with the mount's own
 `lifespan` entered explicitly (mounting alone does not start the SDK's session manager).
@@ -210,7 +210,7 @@ def test_cypher_tool_reachable_through_the_built_app(monkeypatch: pytest.MonkeyP
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "cypher",
+                    "name": "run-cypher",
                     "arguments": {"query": "MATCH (n) RETURN n.id, n.name"},
                 },
             },

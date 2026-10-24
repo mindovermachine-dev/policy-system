@@ -1,4 +1,4 @@
-"""Locating the merge an `unmerge` reverses, from the audit trail .
+"""Locating the merge an `unmerge-entities` reverses, from the audit trail .
 
 The newest `applied` merge row for the id that was not followed by a `failed` row with the same
 `approval_id`. `AuditStore.query` is the only read; live graph state is verified by the planner.

@@ -2,7 +2,7 @@
 
 The real `merge_baseline_graph` runs over a gateway rig with three incoming Capabilities scoring
 0.4, exactly 0.5 and 0.6 against Capabilities already held (`_review_floor_fixtures`), merge
-threshold 0.9. What persists is read back as `near_misses_list` (`list_pending_reviews`) and the
+threshold 0.9. What persists is read back as `list-near-misses` (`list_pending_reviews`) and the
 export gate (`unresolved_near_miss_review_ids`) read it.
 """
 

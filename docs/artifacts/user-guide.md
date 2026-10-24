@@ -247,13 +247,13 @@ What is recorded:
 | Operation | Rows | Notes |
 |---|---|---|
 | Access-role changes, policy lifecycle, graph cleanup | `access_role.*`, `policy.*`, `capability.*`, `obligation.*`, `role.*` | Applied and denied attempts |
-| Regulation ingestion (`ingest_regulation`, `start_ingestion`, and each re-ingest of `check_regulations`) | `ingestion_run.submit` before the run, `ingestion_run.complete` after | The CELEX id, the instrument id, `trigger` (`sync_ingest`, `async_ingest`, `amendment_check`), the counts of new Obligations, new Capabilities and matched Capabilities, and a `reason_code` on failure. Polling a run writes nothing. A `check_regulations` sweep runs the full pipeline (Ingestion, Domain Mapper, Company Merge) for each amendment. Its completion row therefore has the real counts of the amendment |
-| Instrument restore (`restore_instrument`, `POST /restorations`) | `instrument.restore` opening and terminal rows | The instrument id, the source (`catalog` or `upload`) and the outcome: `succeeded`, `failed` (with a `reason_code`), `rejected` (`group_rejected`: the graph write was refused and nothing was written) or `committed_apply_pending` (the restore is recorded in the graph log and is applied on recovery). The `succeeded` row also has `near_miss_reviews_created`. This is the number of near-miss reviews that the restore opened. The `committed_apply_pending` row does not have it |
+| Regulation ingestion (`ingest-regulation`, `start-ingestion`, and each re-ingest of `check-regulations`) | `ingestion_run.submit` before the run, `ingestion_run.complete` after | The CELEX id, the instrument id, `trigger` (`sync_ingest`, `async_ingest`, `amendment_check`), the counts of new Obligations, new Capabilities and matched Capabilities, and a `reason_code` on failure. Polling a run writes nothing. A `check-regulations` sweep runs the full pipeline (Ingestion, Domain Mapper, Company Merge) for each amendment. Its completion row therefore has the real counts of the amendment |
+| Instrument restore (`restore-instrument`, `POST /restorations`) | `instrument.restore` opening and terminal rows | The instrument id, the source (`catalog` or `upload`) and the outcome: `succeeded`, `failed` (with a `reason_code`), `rejected` (`group_rejected`: the graph write was refused and nothing was written) or `committed_apply_pending` (the restore is recorded in the graph log and is applied on recovery). The `succeeded` row also has `near_miss_reviews_created`. This is the number of near-miss reviews that the restore opened. The `committed_apply_pending` row does not have it |
 | Near-miss resolution | `near_miss.resolve` (keep-separate), `capability.merge` (merge) | A keep-separate row has both entity ids and the decision. A near-miss merge writes the same `capability.merge` row as a graph cleanup merge, when the approver signs with their passkey. The approver is the actor. The row has the survivor, the absorbed Capability, the review id and before/after graph snapshots |
 | `invite-user` | `user.invite` | The invitee email. The invite token and URL are never recorded |
 | A role-gated tool or route refusing a caller | `access.gate` | The denied caller, the operation that the gate refused (`resource_id`, for example `set-catalog-source` or `POST /change-checks`) and the role that the operation requires. The system writes this row only for a caller whose identity is verified. `grant-access-role` and `revoke-access-role` keep their own `access_role.*` denied row |
 | Passkey enrolment | `passkey.enroll` | The person the approval is bound to and the approval id. The row records that the passkey was added. It does not hold the passkey itself. Signing a change writes no row of its own. The row of the change (for example `capability.merge`) is the record |
-| `cypher` | `query.cypher` | One row for each call. The row has the caller, the outcome (succeeded, was rejected for a write clause, or failed), the row count, and if the result was truncated. The system never records the query text |
+| `run-cypher` | `query.cypher` | One row for each call. The row has the caller, the outcome (succeeded, was rejected for a write clause, or failed), the row count, and if the result was truncated. The system never records the query text |
 
 The system does not record these items:
 
@@ -276,7 +276,7 @@ restores, `{"instrument_id": "CRA-1.0"}`. The system rejects any other `details`
 Sometimes the identity check rejects a synchronous ingest (unknown CELEX,
 short-name collision, already ingested). The audit trail then still has an opening row
 and a terminal row. Sometimes the identity check rejects an asynchronous
-`start_ingestion` at that step. The audit trail then has no row.
+`start-ingestion` at that step. The audit trail then has no row.
 
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-list-audit-events skill."_
@@ -387,7 +387,7 @@ with the revert step of the `ps-policy-lifecycle` skill. The tool rejects an `ap
 or `deprecated` policy and points to the policy lifecycle. It changes no Policy,
 Standard or Control.
 
-**Reversing a merge.** `unmerge` takes the id that the merge absorbed. It restores that
+**Reversing a merge.** `unmerge-entities` takes the id that the merge absorbed. It restores that
 id from the snapshot in the audit record of the merge. It first does the same preview,
 confirmation and passkey approval. The tool recreates a deleted Capability,
 Obligation or Role under its original id and removes its marker. The tool restores exactly the edges that the merge
@@ -431,7 +431,7 @@ Capability.
 
 **Merged duplicates and raw Cypher.** An absorbed Capability is deleted, so a query for
 Capabilities never returns it and needs no status filter for merges. If you query the
-graph directly with the `cypher` tool, the `MergedCapability`, `MergedObligation` and
+graph directly with the `run-cypher` tool, the `MergedCapability`, `MergedObligation` and
 `MergedRole` nodes (each with `id` and `merged_into`) record which node replaced an
 absorbed id. The packaged domain concepts describe the markers.
 
@@ -456,7 +456,7 @@ Sometimes ingestion or a restore finds two entities that are close but not ident
 
 A merge needs the `ComplianceOfficer` role. It is the same Capability merge as in graph cleanup, so it does not run at the call. The skill returns the merge preview and an approval link. The merge runs when you complete a passkey signing in the browser. The skill can then report if the approval was signed. The absorbed Capability is deleted behind a `MergedCapability` marker that points at the survivor, and its edges move to the survivor. The system therefore does not raise the pair again on a later ingest or restore.
 
-If a Policy governs exactly one of the two, you must acknowledge the governance change. If they have different governing Policies, the system refuses the merge until you release one with `release-capability-governance`. You can reverse a merge with `unmerge`. This does not bring back the deleted review.
+If a Policy governs exactly one of the two, you must acknowledge the governance change. If they have different governing Policies, the system refuses the merge until you release one with `release-capability-governance`. You can reverse a merge with `unmerge-entities`. This does not bring back the deleted review.
 
 Resolve the near misses of an instrument before you export it. The system refuses an export while any unresolved review touches the instrument's entities of a reviewable kind (today its Capabilities and Roles).
 
@@ -499,7 +499,7 @@ In addition to that baseline, PS Service enforces four more roles:
 | `SystemOwner` | Automatically, one time. The first authenticated caller whose identity (`sub` + `iss`) matches the identity that the operator configured at deploy time gets it. The setting is `psService.authzBootstrapOwner`. The deploy scripts set it to the email of the owner. The first caller is not the owner just because that caller calls first. Any other caller who reaches an empty instance first gets nothing. You cannot grant it afterward. Exactly one `SystemOwner` exists for the life of a real deployment. To see how an operator claims it, see [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap). | Everything that `SystemAdmin` gates, and the grant and revoke of `SystemAdmin`. |
 | `SystemAdmin` | A `SystemOwner` grants or revokes it. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, `list-audit-events`, and `verify-audit-log`. |
 | `PolicyManager` | A `SystemOwner` or `SystemAdmin` grants or revokes it. | Nothing yet. It is provisioned ahead of future policy-authoring features. No tool checks for it at this time. |
-| `ComplianceOfficer` | A `SystemOwner` or `SystemAdmin` grants or revokes it. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (either `source`), and the MCP tools `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). There is no hierarchy override. The gate also denies a `SystemAdmin` or `SystemOwner` without an explicit grant. |
+| `ComplianceOfficer` | A `SystemOwner` or `SystemAdmin` grants or revokes it. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (either `source`), and the MCP tools `ingest-regulation`, `start-ingestion`, `get-ingestion-status`, `restore-instrument`, `check-regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge-entities`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). There is no hierarchy override. The gate also denies a `SystemAdmin` or `SystemOwner` without an explicit grant. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions through Claude Desktop ([Ask a question](#ask-a-question)). No elevated role is necessary. |
 
 Two safety rules apply to each grant or revoke, for all roles:

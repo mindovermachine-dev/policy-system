@@ -1,4 +1,4 @@
-"""Tests for the `ComplianceOfficer` authz gate on the `ingest_regulation` MCP
+"""Tests for the `ComplianceOfficer` authz gate on the `ingest-regulation` MCP
 tool: a caller who is only `AuthenticatedUser`,
 or who holds `SystemAdmin`/`SystemOwner` without an explicit `ComplianceOfficer`
 grant, is denied -- no implicit hierarchy override; a
@@ -15,7 +15,7 @@ import ...` is safe here too.
 
 Every test here binds a real, non-bypass `AccessToken` (`_verified_actor`), so
 `config.is_local_test_bypass_active` is `False` and the new
-declarative role gate (`tool_gates`) in `ingest_regulation`'s body actually
+declarative role gate (`tool_gates`) in `ingest-regulation`'s body actually
 runs -- distinct from every test in `test_ingest_regulation_tool.py`, which
 drives the tool under the local-test bypass (or, for its own two real-token
 tests, now seeds a `ComplianceOfficer` grant via
@@ -119,7 +119,7 @@ def _seeded_store() -> FakeAccessRoleStore:
 
 def _call_ingest_regulation() -> CallToolResult:
     result = asyncio.run(
-        _server().call_tool("ingest_regulation", {"celex": _CELEX, "short_name": _SHORT_NAME})
+        _server().call_tool("ingest-regulation", {"celex": _CELEX, "short_name": _SHORT_NAME})
     )
     assert isinstance(result, CallToolResult)
     return result

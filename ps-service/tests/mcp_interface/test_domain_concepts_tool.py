@@ -1,8 +1,8 @@
-"""Tests for the `domain_concepts` MCP tool.
+"""Tests for the `get-domain-concepts` MCP tool.
 
 Claude Desktop exposes MCP *tools* to the model but surfaces MCP
 *resources* only through its attachment menu, so a model-driven skill
-cannot read `psdomain://concepts` on its own. The `domain_concepts` tool
+cannot read `psdomain://concepts` on its own. The `get-domain-concepts` tool
 is the slim graph schema (labels, properties, edges) rendered from the
 code-defined domain schema: no parameters, no file read, so it keeps
 working when the packaged markdown is unavailable.
@@ -24,6 +24,7 @@ from mcp.types import CallToolResult, TextContent
 
 from mcp_interface._environment import build_test_server
 from ps_service.mcp_interface import cypher_tools as mcp_server
+from ps_service.mcp_interface.tool_core import create_server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,7 +40,7 @@ def _point_helper_at(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
 
 
 def _call_tool() -> CallToolResult:
-    outcome = asyncio.run(build_test_server().call_tool("domain_concepts", {}))
+    outcome = asyncio.run(build_test_server().call_tool("get-domain-concepts", {}))
     assert isinstance(outcome, CallToolResult)
     return outcome
 
@@ -58,9 +59,21 @@ def test_tool_listed_alongside_cypher() -> None:
     tools = asyncio.run(build_test_server().list_tools())
 
     names = {t.name for t in tools}
-    assert {"cypher", "domain_concepts"} <= names
-    [tool] = [t for t in tools if t.name == "domain_concepts"]
+    assert {"run-cypher", "get-domain-concepts"} <= names
+    [tool] = [t for t in tools if t.name == "get-domain-concepts"]
     assert tool.input_schema.get("required", []) == []
+
+
+def test_server_instructions_name_the_registered_domain_concepts_tool() -> None:
+    server = build_test_server()
+    names = {t.name for t in asyncio.run(server.list_tools())}
+    instructions = create_server().instructions
+    retired = "domain" + "_" + "concepts"
+
+    assert instructions is not None
+    assert "get-domain-concepts" in instructions
+    assert retired not in instructions
+    assert "get-domain-concepts" in names
 
 
 def test_tool_returns_slim_schema_not_the_document(

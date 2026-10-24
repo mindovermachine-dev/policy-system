@@ -1,15 +1,16 @@
 """Cypher and domain-concepts tools of the PS MCP server, and the injectable cypher entry point.
 
-Declares the read-only `cypher` and `domain_concepts` tools and the `psdomain://concepts` resource;
-`register_cypher_tools` registers them on a server built by `mcp_server.build_server`. Read-only
-graph queries run in-process through `ps_service.query_engine.execute_cypher_query`; the
-write-clause guard and query execution live in Query Engine and are never duplicated here.
-`handle_mcp_tool_call` is the transport-free, dependency-injectable entry point the `cypher` tool
-and the tests share; `mcp_server.handle_mcp_tool_call` re-exports it. This module imports only
+Declares the read-only `run-cypher` and `get-domain-concepts` tools and the `psdomain://concepts`
+resource; `register_cypher_tools` registers them on a server built by
+`mcp_server.build_server`. Read-only graph queries run in-process through
+`ps_service.query_engine.execute_cypher_query`; the write-clause guard and query execution live in
+Query Engine and are never duplicated here.
+`handle_mcp_tool_call` is the transport-free, dependency-injectable entry point the `run-cypher`
+tool and the tests share; `mcp_server.handle_mcp_tool_call` re-exports it. This module imports only
 `tool_core` and `tool_gates` (never another tool group).
 
 Business Rules:
-    - Every `cypher` call writes one `query.cypher` audit row and nothing to the graph.
+    - Every `run-cypher` call writes one `query.cypher` audit row and nothing to the graph.
     - The domain-concepts document is read lazily from the installed package, so importing this
       module performs no I/O.
 """
@@ -83,7 +84,7 @@ def _domain_concepts_path() -> Traversable:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class CypherCallOutcome:
-    """The result of one in-process `cypher` run plus the facts its audit row records.
+    """The result of one in-process `run-cypher` run plus the facts its audit row records.
 
     Attributes:
         response: What the tool returns to the caller: the result dict, or an `error: ...` string.
@@ -109,7 +110,7 @@ def run_cypher_for_tool(
 ) -> CypherCallOutcome:
     """Run one read-only Cypher `query` in-process and classify how the call ended.
 
-    The shared core of `handle_mcp_tool_call` and the `cypher` tool: the tool needs the outcome
+    The shared core of `handle_mcp_tool_call` and the `run-cypher` tool: the tool needs the outcome
     class for its audit row, while `handle_mcp_tool_call` returns only the response. This function
     writes no audit row and neither inspects nor rewrites `query`; Query Engine owns the
     write-clause guard.
@@ -164,7 +165,7 @@ def handle_mcp_tool_call(
     timeout_ms: int,
     row_cap: int,
 ) -> dict[str, object] | str:
-    """Run one read-only Cypher `query` through Query Engine in-process, as `cypher` does.
+    """Run one read-only Cypher `query` through Query Engine in-process, as `run-cypher` does.
 
     Binds a fresh run id for the call, then executes the query with the given bounds. Query Engine
     owns the write-clause guard, so this layer neither inspects nor rewrites `query`.
@@ -205,7 +206,7 @@ def _record_cypher_call(
     actor: tuple[str, str] | None,
     outcome: CypherCallOutcome,
 ) -> None:
-    """Write the one `query.cypher` audit row of a `cypher` tool call; BEST-EFFORT.
+    """Write the one `query.cypher` audit row of a `run-cypher` tool call; BEST-EFFORT.
 
     The row records the verified caller (or the local-test-bypass sentinel), the outcome class and
     the enumerated facts of `outcome`; never the query text or an error text. When no audit actor
@@ -252,13 +253,13 @@ def _record_cypher_call(
     )
 
 
-@_gated_tool("cypher", _PLAIN_READ_GATE)
+@_gated_tool("run-cypher", _PLAIN_READ_GATE)
 def cypher(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment, query: str
 ) -> dict[str, object] | str:
     """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.
 
-    Call `domain_concepts` first and ground every query in the labels, properties and edges it
+    Call `get-domain-concepts` first and ground every query in the labels, properties and edges it
     lists.
     The query runs with the configured timeout and row cap.
     Policy, Standard and Control content is visible in every status, `draft` included, so filter
@@ -314,7 +315,7 @@ def cypher(  # noqa: D417  # `environment` is injected by the server and hidden 
     return outcome.response
 
 
-@_gated_tool("domain_concepts", _PLAIN_READ_GATE)
+@_gated_tool("get-domain-concepts", _PLAIN_READ_GATE)
 def domain_concepts() -> str:
     """Return the PS compliance-graph schema: node labels, properties and edges.
 
@@ -383,7 +384,7 @@ def read_domain_concepts() -> str:
 def register_cypher_tools(
     server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
 ) -> None:
-    """Register the `cypher` and `domain_concepts` tools and the domain-concepts resource.
+    """Register the `run-cypher` and `get-domain-concepts` tools and the domain-concepts resource.
 
     Args:
         server: The server the tools and the resource are registered on.

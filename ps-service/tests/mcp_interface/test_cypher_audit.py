@@ -1,4 +1,4 @@
-"""One `query.cypher` audit row per `cypher` tool call; nothing from any other caller.
+"""One `query.cypher` audit row per `run-cypher` tool call; nothing from any other caller.
 
 The tool writes the row (`applied`, `rejected` or `failed`) with details limited to `row_count`,
 `truncated` and an enumerated `reason_code`, never query text or database error text. The row
@@ -68,10 +68,10 @@ def audit(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
 
 def _cypher(query: str, *, sub: str | None = _CALLER) -> CallToolResult:
     if sub is None:
-        result = asyncio.run(_server().call_tool("cypher", {"query": query}))
+        result = asyncio.run(_server().call_tool("run-cypher", {"query": query}))
     else:
         with _verified_actor(sub=sub):
-            result = asyncio.run(_server().call_tool("cypher", {"query": query}))
+            result = asyncio.run(_server().call_tool("run-cypher", {"query": query}))
     assert isinstance(result, CallToolResult)
     return result
 

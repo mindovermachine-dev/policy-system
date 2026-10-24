@@ -1,13 +1,13 @@
 """Pre-flight parity characterization for the catalog-ingestion MCP tools.
 
 Pins, as exact returned text, the pre-flight error behaviour and its precedence
-that `ingest_regulation` exhibits today: which named `error:` string wins when
+that `ingest-regulation` exhibits today: which named `error:` string wins when
 two pre-flight failures coincide, and that no pipeline stage ever runs
 (`fake.recorder.calls == []`). Written and run green against the unmodified
 `mcp_server._resolve_and_ingest` before its validation/resolution
 half was extracted into `_prepare_catalog_ingestion`, so this file is the proof that the
 extraction changed nothing observable. It is parametrized over
-`tool` so another tool can be added (such as `"start_ingestion"`) and prove the same
+`tool` so another tool can be added (such as `"start-ingestion"`) and prove the same
 precedence holds for it without re-declaring a single scenario.
 
 Fixtures are imported from `test_ingest_regulation_tool.py` rather than
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 # The sync tool writes `ingestion_run.*` rows: keep them off Postgres.
 pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
-_TOOLS = ("ingest_regulation", "start_ingestion")
+_TOOLS = ("ingest-regulation", "start-ingestion")
 
 _WRONG_SHORT_NAME = "not-the-real-short-name"
 # Identity is decided by the live graph and Cellar, never the curated catalog,
@@ -102,7 +102,7 @@ def _bypass_and_logging(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ig
 def _ingestion_run_store(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[InMemoryIngestionRunStore]:
-    """Fake run store, so `start_ingestion` scenarios can assert no row/slot was created."""
+    """Fake run store, so `start-ingestion` scenarios can assert no row/slot was created."""
     isolate_ingestion_runs()
     store = install_ingestion_run_store(monkeypatch)
     yield store
@@ -268,14 +268,14 @@ def _properties(schema: dict[str, object]) -> dict[str, object]:
 
 def test_start_ingestion_input_schema_equals_ingest_regulations() -> None:
     schemas = _input_schemas()
-    start, blocking = schemas["start_ingestion"], schemas["ingest_regulation"]
+    start, blocking = schemas["start-ingestion"], schemas["ingest-regulation"]
 
     assert _properties(start)["celex"] == _properties(blocking)["celex"]
     assert _properties(start)["short_name"] == _properties(blocking)["short_name"]
     assert start["required"] == blocking["required"]
 
 
-@pytest.mark.parametrize("tool", ["ingest_regulation", "start_ingestion"])
+@pytest.mark.parametrize("tool", ["ingest-regulation", "start-ingestion"])
 @pytest.mark.parametrize(
     ("celex", "short_name"),
     [
@@ -298,7 +298,7 @@ def test_malformed_arguments_are_rejected_by_the_schema_before_the_body_runs(
     monkeypatch: pytest.MonkeyPatch,
     read_lines: ReadLines,
 ) -> None:
-    """Identical `ToolError`; for `start_ingestion` no row, slot or log line."""
+    """Identical `ToolError`; for `start-ingestion` no row, slot or log line."""
     isolate_ingestion_runs()
     runs = install_ingestion_run_store(monkeypatch)
     _configure_complete_llm_env(monkeypatch)

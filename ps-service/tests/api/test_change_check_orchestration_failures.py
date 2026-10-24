@@ -1,4 +1,4 @@
-"""Failure injection and retry for the `check_regulations` sweep's full pipeline.
+"""Failure injection and retry for the `check-regulations` sweep's full pipeline.
 
 Entry is the real `run_change_check_sweep`; the REAL `trigger_reingestion` / `will_reingest` /
 `classify_reingestion` / `succession` run over stateful ledger doubles for each instrument's

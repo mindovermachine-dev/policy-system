@@ -1,14 +1,14 @@
-"""Tests for the registered `near_misses_list`/`near_misses_resolve` MCP tools.
+"""Tests for the registered `list-near-misses`/`resolve-near-miss` MCP tools.
 
-`near_misses_list` takes no parameters and so has no pre-flight check, since
-neither `handle_near_misses_list` nor `handle_near_misses_resolve` call
+`list-near-misses` takes no parameters and so has no pre-flight check, since
+neither `list-near-misses` nor `resolve-near-miss` call
 `_assert_llm_interface_available`. It delegates in-process to
 `run_list_near_misses` via the shared `_run_mcp_action` audit wrapper and
 returns `run_list_near_misses(...).model_dump()`; that function already builds
 the `PendingReviewListResponse` via `near_miss_review_orchestration`'s public
 `_to_pending_review_entry`, so no reconstruction is needed in `mcp_server.py`.
 
-`near_misses_resolve(review_id, decision)`: `decision`'s
+`resolve-near-miss(review_id, decision)`: `decision`'s
 `Literal["keep-separate", "merge"]` type is itself the MCP-schema-level enum
 enforcement. It delegates in-process to `run_resolve_near_miss` via the same
 `_run_mcp_action` wrapper and returns `run_resolve_near_miss(...).model_dump()`;
@@ -18,7 +18,7 @@ that function already builds the `ResolveReviewResponse` via
 
 `decision="merge"` is the Graph Cleanup Capability merge behind a signed passkey approval and a
 `ComplianceOfficer` gate; its tests are in `test_near_miss_merge_via_cleanup.py`. This file keeps
-`keep-separate`, the listing and the ownership rules of `near_misses_check_approval`.
+`keep-separate`, the listing and the ownership rules of `check-near-miss-approval`.
 
 `_verified_actor()` (this file) binds a real `AccessToken` directly onto the
 MCP SDK's `mcp.server.auth.middleware.auth_context.auth_context_var`
@@ -327,8 +327,8 @@ def _raising_open(config: object) -> object:
     raise ConnectionError(message)
 
 
-def _call_near_misses_list() -> CallToolResult:
-    result = asyncio.run(_server().call_tool("near_misses_list", {}))
+def _call_list_near_misses() -> CallToolResult:
+    result = asyncio.run(_server().call_tool("list-near-misses", {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -357,7 +357,7 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
     graph = _ScriptedGraphHandle(steps=[[_row_for(first), _row_for(second)]])
     _use_scripted_graph(monkeypatch, graph)
 
-    result = _call_near_misses_list()
+    result = _call_list_near_misses()
 
     assert result.is_error is False
     body = json.loads(_text(result))
@@ -378,7 +378,7 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
     mcp_lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_list"
+        if line.get("component") == "mcp_interface" and line.get("action") == "list-near-misses"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert all(line["run_id"] for line in mcp_lines)
@@ -389,7 +389,7 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
 
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
-    """`near_misses_resolve` writes `near_miss.resolve` rows: keep off Postgres."""
+    """`resolve-near-miss` writes `near_miss.resolve` rows: keep off Postgres."""
 
     # The resolution's graph group is anchored to the opening row's id, which the
     # graph log accepts only for a committed audit row -- register each id with the process rig.
@@ -401,9 +401,9 @@ def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
     return store
 
 
-def _call_near_misses_resolve(review_id: str, decision: str) -> CallToolResult:
+def _call_resolve_near_miss(review_id: str, decision: str) -> CallToolResult:
     result = asyncio.run(
-        _server().call_tool("near_misses_resolve", {"review_id": review_id, "decision": decision})
+        _server().call_tool("resolve-near-miss", {"review_id": review_id, "decision": decision})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -421,7 +421,7 @@ def test_keep_separate_decision_needs_no_role_and_writes_no_access_gate_row(
         ("PendingReview",), "review_aaa", {"kind": "Capability"}
     )
 
-    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+    result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert json.loads(_text(result))["decision"] == "keep-separate"
     assert "access.gate" not in {row.action for row in audit_store.rows}
@@ -450,7 +450,7 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
         ("PendingReview",), "review_aaa", {"kind": "Capability"}
     )
 
-    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+    result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert result.is_error is False
     body = json.loads(_text(result))
@@ -483,7 +483,7 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
     mcp_lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
+        if line.get("component") == "mcp_interface" and line.get("action") == "resolve-near-miss"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert all(line["run_id"] for line in mcp_lines)
@@ -492,7 +492,7 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
         assert "principal" not in line
 
 
-# --- `near_misses_check_approval` visibility ---
+# --- `check-near-miss-approval` visibility ---
 
 
 def test_check_approval_unknown_id_gets_generic_not_found(
@@ -508,7 +508,7 @@ def test_check_approval_unknown_id_gets_generic_not_found(
     with _verified_actor():
         result = asyncio.run(
             _server().call_tool(
-                "near_misses_check_approval", {"pending_approval_id": "does-not-exist"}
+                "check-near-miss-approval", {"pending_approval_id": "does-not-exist"}
             )
         )
 
@@ -526,7 +526,7 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
     with no real actor identity can never poll any pending approval, not
     even to learn that a real one exists -- the same generic message an
     unknown id gets, never a distinct "unauthenticated" message here (that
-    distinction is `near_misses_resolve`'s own, on the write side).
+    distinction is `resolve-near-miss`'s own, on the write side).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
@@ -547,7 +547,7 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
     _override(monkeypatch, pending_approval_store_factory=_fake_store_factory(store))
 
     result = asyncio.run(
-        _server().call_tool("near_misses_check_approval", {"pending_approval_id": row.id})
+        _server().call_tool("check-near-miss-approval", {"pending_approval_id": row.id})
     )
 
     assert isinstance(result, CallToolResult)
@@ -584,7 +584,7 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
 
     with _verified_actor(sub="someone-else", iss=_ACTOR_ISSUER):
         result = asyncio.run(
-            _server().call_tool("near_misses_check_approval", {"pending_approval_id": row.id})
+            _server().call_tool("check-near-miss-approval", {"pending_approval_id": row.id})
         )
 
     assert isinstance(result, CallToolResult)
@@ -605,7 +605,7 @@ def test_list_with_a_review_of_an_unregistered_kind_returns_an_error_naming_the_
     stray = _record("review_stray", kind=UNREGISTERED_KIND)
     _use_scripted_graph(monkeypatch, _ScriptedGraphHandle(steps=[[_row_for(stray)]]))
 
-    result = _call_near_misses_list()
+    result = _call_list_near_misses()
 
     assert result.is_error is False
     assert _text(result).startswith("error: ")
@@ -618,8 +618,8 @@ def test_list_graph_unavailable_returns_named_error(
     """D-SANITIZE-UNEXPECTED: `run_list_near_misses` calls
     `dependencies.open_single_tenant_graph` directly, with no try/except of
     its own -- a generic exception from that opener must sanitise to the
-    same fixed message `_resolve_graph`/`ingest_regulation`/
-    `check_regulations` already use, never leaking host/port/driver detail,
+    same fixed message `_resolve_graph`/`ingest-regulation`/
+    `check-regulations` already use, never leaking host/port/driver detail,
     via the new `_sanitize_near_miss_review_graph_opens` wrapper (reusing
     the existing generic `_sanitize_graph_open` per-opener helper, not
     reinventing it).
@@ -628,7 +628,7 @@ def test_list_graph_unavailable_returns_named_error(
     configure()
     _use_fake_graph_opener_only(monkeypatch, _raising_open)
 
-    result = _call_near_misses_list()
+    result = _call_list_near_misses()
 
     assert result.is_error is False
     assert _text(result) == "error: the policy graph database is not reachable"
@@ -638,7 +638,7 @@ def test_list_residual_unexpected_exception_returns_generic_error_and_logs_detai
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """D-AUDIT-WRAPPER point 4 / D-SANITIZE-UNEXPECTED's last row: an
-    exception `near_misses_list`'s own body does not itself sanitise (here,
+    exception `list-near-misses`'s own body does not itself sanitise (here,
     the real `list_pending_reviews`'s own `graph.query(...)` call raising
     something unclassified, with the single-tenant graph already
     successfully opened) is caught by `_run_mcp_action`'s residual safety
@@ -650,7 +650,7 @@ def test_list_residual_unexpected_exception_returns_generic_error_and_logs_detai
     graph = _ScriptedGraphHandle(steps=[ValueError("boom -- must never reach the caller")])
     _use_scripted_graph(monkeypatch, graph)
 
-    result = _call_near_misses_list()
+    result = _call_list_near_misses()
 
     assert result.is_error is False
     assert _text(result) == "error: an unexpected error occurred"
@@ -659,7 +659,7 @@ def test_list_residual_unexpected_exception_returns_generic_error_and_logs_detai
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_list"
+        if line.get("component") == "mcp_interface" and line.get("action") == "list-near-misses"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
@@ -674,7 +674,7 @@ def test_resolve_not_found_or_already_resolved_returns_named_error(
     (`review_id` doesn't exist, or was already resolved -- both collapse to
     the same condition, per `PendingReviewNotFoundError`'s own docstring)
     is translated by `run_resolve_near_miss` into `PendingReviewNotFoundError`,
-    which `near_misses_resolve`'s own body catches and returns as
+    which `resolve-near-miss`'s own body catches and returns as
     `error: <str(exc)>` verbatim -- no merge write, no elicitation round
     trip for this `keep-separate` decision.
     """
@@ -686,7 +686,7 @@ def test_resolve_not_found_or_already_resolved_returns_named_error(
     graph = _ScriptedGraphHandle(steps=[[]])
     _use_scripted_graph(monkeypatch, graph)
 
-    result = _call_near_misses_resolve("review_missing", "keep-separate")
+    result = _call_resolve_near_miss("review_missing", "keep-separate")
 
     assert result.is_error is False
     assert _text(result) == "error: no unresolved PendingReview with id 'review_missing'"
@@ -695,7 +695,7 @@ def test_resolve_not_found_or_already_resolved_returns_named_error(
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
+        if line.get("component") == "mcp_interface" and line.get("action") == "resolve-near-miss"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     assert all("principal" not in line for line in lines)
@@ -708,7 +708,7 @@ def test_resolve_graph_unavailable_returns_named_error(
     `dependencies.open_single_tenant_graph` directly, with no try/except of
     its own -- a generic exception from that opener must sanitise to the
     same fixed message, via `_sanitize_near_miss_review_graph_opens` (same
-    wrapper `near_misses_list` reuses above, not a second implementation).
+    wrapper `list-near-misses` reuses above, not a second implementation).
     Uses `keep-separate` so no elicitation round trip is needed to reach
     this branch.
     """
@@ -716,7 +716,7 @@ def test_resolve_graph_unavailable_returns_named_error(
     configure()
     _use_fake_graph_opener_only(monkeypatch, _raising_open)
 
-    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+    result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert result.is_error is False
     assert _text(result) == "error: the policy graph database is not reachable"
@@ -726,7 +726,7 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """D-AUDIT-WRAPPER point 4 / D-SANITIZE-UNEXPECTED's last row: an
-    exception `near_misses_resolve`'s own body does not itself sanitise
+    exception `resolve-near-miss`'s own body does not itself sanitise
     (here, the real `resolve_review`'s own write-query call raising
     something unclassified, with the single-tenant graph already
     successfully opened and the review found) is caught by
@@ -746,7 +746,7 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     rig.graphs.open("policy_system").seed_node(("PendingReview",), "review_aaa", {"kind": "x"})
     rig.store.fail_appends(error=RuntimeError("boom -- must never reach the caller"))
 
-    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+    result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert result.is_error is False
     assert _text(result) == "error: an unexpected error occurred"
@@ -755,7 +755,7 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
+        if line.get("component") == "mcp_interface" and line.get("action") == "resolve-near-miss"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
@@ -771,7 +771,7 @@ def test_resolve_keep_separate_of_a_review_of_an_unregistered_kind_returns_an_er
     stray = _record("review_aaa", kind=UNREGISTERED_KIND)
     _use_scripted_graph(monkeypatch, _ScriptedGraphHandle(steps=[[_row_for(stray)]]))
 
-    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+    result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert result.is_error is False
     assert _text(result).startswith("error: ")
@@ -788,14 +788,14 @@ def _script_keep_separate(monkeypatch: pytest.MonkeyPatch) -> _ScriptedGraphHand
     return graph
 
 
-def test_near_misses_resolve_keep_separate_audits_the_verified_actor(
+def test_resolve_near_miss_keep_separate_audits_the_verified_actor(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
     configure()
     _script_keep_separate(monkeypatch)
 
     with _verified_actor():
-        result = _call_near_misses_resolve("review_aaa", "keep-separate")
+        result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert result.is_error is False
     (row,) = audit_store.rows
@@ -808,20 +808,20 @@ def test_near_misses_resolve_keep_separate_audits_the_verified_actor(
     assert row.details["decision"] == "keep_separate"
 
 
-def test_near_misses_resolve_keep_separate_audits_system_local_test_bypass_under_bypass(
+def test_resolve_near_miss_keep_separate_audits_system_local_test_bypass_under_bypass(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     _script_keep_separate(monkeypatch)
 
-    _call_near_misses_resolve("review_aaa", "keep-separate")
+    _call_resolve_near_miss("review_aaa", "keep-separate")
 
     (row,) = audit_store.rows
     assert (row.actor_subject, row.actor_issuer) == ("system:local-test-bypass",) * 2
 
 
-def test_near_misses_resolve_returns_error_prefix_when_audit_is_unavailable(
+def test_resolve_near_miss_returns_error_prefix_when_audit_is_unavailable(
     monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
 ) -> None:
     configure()
@@ -829,7 +829,7 @@ def test_near_misses_resolve_returns_error_prefix_when_audit_is_unavailable(
     graph = _script_keep_separate(monkeypatch)
 
     with _verified_actor():
-        result = _call_near_misses_resolve("review_aaa", "keep-separate")
+        result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert _text(result).startswith("error: ")
     assert "audit trail" in _text(result)

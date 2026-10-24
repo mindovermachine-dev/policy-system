@@ -1,4 +1,4 @@
-"""Executor for a Role `unmerge`: authority, staleness, failures and audit.
+"""Executor for a Role `unmerge-entities`: authority, staleness, failures and audit.
 
 Every refusal made before the write records a best-effort `failed` `role.unmerge` row with a
 `reason_code` and changes nothing; a guard miss or a failed write records one after the `applied`

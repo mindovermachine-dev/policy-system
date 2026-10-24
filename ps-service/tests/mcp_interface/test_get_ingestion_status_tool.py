@@ -1,7 +1,7 @@
-"""Tests for the `get_ingestion_status` MCP tool.
+"""Tests for the `get-ingestion-status` MCP tool.
 
 S5 covers failure outcomes: a failed run reports the same named `error:` text
-`ingest_regulation` returns, an unexpected exception is sanitized, and a run that is left
+`ingest-regulation` returns, an unexpected exception is sanitized, and a run that is left
 `running` with no worker (a failed terminal write, a process restart) is reconciled to `failed`
 on the next poll rather than reported `running` forever.
 """

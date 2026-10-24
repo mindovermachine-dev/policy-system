@@ -1,9 +1,9 @@
-"""`near_misses_resolve(merge)` is an entry point to the cleanup `merge-capabilities` approval.
+"""`resolve-near-miss(merge)` is an entry point to the cleanup `merge-capabilities` approval.
 
 Over a `CleanupRig` (real reader, planner, executor and gateway rig; only the stores and the
 signing ceremony are doubles) these tests drive the MCP tools as the near-miss reviewer would:
 the `ComplianceOfficer` gate, the preview plus approval link, the Policy cases, the signed
-`review_id`, and `near_misses_check_approval` reporting the winner and the loser.
+`review_id`, and `check-near-miss-approval` reporting the winner and the loser.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from ps_service.graph_cleanup.executors import execute_capability_merge
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.passkey_signing.errors import PendingApprovalPersistenceError
+from ps_service.passkey_signing.executors import resolve_approval_executor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -91,10 +92,10 @@ class _Env:
         args: dict[str, object] = {"review_id": _REVIEW, "decision": "merge"}
         if acknowledge is not None:
             args["acknowledge_governance_change"] = acknowledge
-        return call_tool("near_misses_resolve", args, who)
+        return call_tool("resolve-near-miss", args, who)
 
     def check(self, approval_id: str, *, who: tuple[str, str] = OFFICER) -> str:
-        return call_tool("near_misses_check_approval", {"pending_approval_id": approval_id}, who)
+        return call_tool("check-near-miss-approval", {"pending_approval_id": approval_id}, who)
 
     def sign_and_execute(
         self, approval_id: str, *, access_roles: AccessRoleStore | None = None
@@ -171,7 +172,7 @@ def test_no_real_session_gets_an_error_and_no_approval_even_under_the_local_test
     before = environment.snapshot()
 
     text = asyncio.run(
-        _server().call_tool("near_misses_resolve", {"review_id": _REVIEW, "decision": "merge"})
+        _server().call_tool("resolve-near-miss", {"review_id": _REVIEW, "decision": "merge"})
     )
 
     assert _UNAUTHENTICATED in str(text)
@@ -204,6 +205,19 @@ def test_merge_returns_the_preview_and_an_approval_link_and_leaves_the_graph_unc
     assert row.normalized_args["review_id"] == _REVIEW
     assert (row.actor_subject, row.actor_issuer) == OFFICER
     assert env.snapshot() == before
+
+
+def test_the_merge_approval_binds_a_cleanup_tool_that_has_an_executor_not_the_resolving_tool(
+    env: _Env,
+) -> None:
+    approval_id = json.loads(env.resolve_merge())["pending_approval_id"]
+
+    row = env.store.get_by_id(approval_id)
+
+    assert row is not None
+    assert row.tool_name != "resolve-near-miss"
+    assert resolve_approval_executor(row.tool_name) is not None
+    assert resolve_approval_executor("resolve-near-miss") is None
 
 
 def test_signing_the_approval_marks_the_loser_deletes_the_review_and_check_reports_the_pair(
@@ -382,7 +396,7 @@ def test_merge_of_a_review_that_is_not_a_capability_review_returns_an_error(
     )
 
     text = call_tool(
-        "near_misses_resolve", {"review_id": "review_probe", "decision": "merge"}, OFFICER
+        "resolve-near-miss", {"review_id": "review_probe", "decision": "merge"}, OFFICER
     )
 
     assert text.startswith("error: ")
@@ -398,7 +412,7 @@ def test_merge_of_a_review_of_an_unregistered_kind_returns_an_error_naming_the_k
     )
 
     text = call_tool(
-        "near_misses_resolve", {"review_id": "review_stray", "decision": "merge"}, OFFICER
+        "resolve-near-miss", {"review_id": "review_stray", "decision": "merge"}, OFFICER
     )
 
     assert text.startswith("error: ")
@@ -407,7 +421,7 @@ def test_merge_of_a_review_of_an_unregistered_kind_returns_an_error_naming_the_k
 
 
 def test_an_unknown_review_gives_the_named_not_found_error(env: _Env) -> None:
-    text = call_tool("near_misses_resolve", {"review_id": "missing", "decision": "merge"}, OFFICER)
+    text = call_tool("resolve-near-miss", {"review_id": "missing", "decision": "merge"}, OFFICER)
 
     assert text == "error: no unresolved PendingReview with id 'missing'"
     assert approval_row_count(env.store) == 0
@@ -428,7 +442,7 @@ def test_requesting_a_merge_writes_no_audit_row_and_logs_started_then_succeeded(
     lines = [
         line
         for line in read_lines(resolve_default_log_path())
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
+        if line.get("component") == "mcp_interface" and line.get("action") == "resolve-near-miss"
     ]
     assert [line["outcome"] for line in lines] == ["started", "succeeded"]
     assert len({line["run_id"] for line in lines}) == 1
@@ -493,14 +507,14 @@ def _tool(name: str) -> Tool:
 
 
 def test_the_resolve_schema_offers_the_acknowledgment_flag_and_still_hides_ctx() -> None:
-    schema = _tool("near_misses_resolve").input_schema
+    schema = _tool("resolve-near-miss").input_schema
 
     assert set(schema["properties"]) == {"review_id", "decision", "acknowledge_governance_change"}
     assert set(schema["required"]) == {"review_id", "decision"}
 
 
 def test_the_resolve_text_describes_the_cleanup_merge_and_its_marker() -> None:
-    description = _tool("near_misses_resolve").description or ""
+    description = _tool("resolve-near-miss").description or ""
 
     assert "tombstone" not in description
     assert "MERGED_INTO" not in description
@@ -511,7 +525,7 @@ def test_the_resolve_text_describes_the_cleanup_merge_and_its_marker() -> None:
 
 
 def test_the_check_text_names_the_cleanup_approval_it_reads() -> None:
-    description = _tool("near_misses_check_approval").description or ""
+    description = _tool("check-near-miss-approval").description or ""
 
     assert "merge-capabilities" in description
     assert "winner_id" in description

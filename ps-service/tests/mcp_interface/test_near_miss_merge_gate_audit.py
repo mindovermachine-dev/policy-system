@@ -1,6 +1,6 @@
-"""The `merge` branch of `near_misses_resolve` is role-gated and audited; `keep-separate` is not.
+"""The `merge` branch of `resolve-near-miss` is role-gated and audited; `keep-separate` is not.
 
-`near_misses_resolve` declares a body gate: only the merge decision needs `ComplianceOfficer`, so
+`resolve-near-miss` declares a body gate: only the merge decision needs `ComplianceOfficer`, so
 the tool body runs the shared request gate for that branch. A denied merge returns the unchanged
 error string and writes one `access.gate` row named after the tool; a keep-separate call needs no
 role and so never writes one.
@@ -72,8 +72,8 @@ def _gate_rows(store: InMemoryAuditStore) -> list[RecordedAuditRow]:
     return [row for row in store.rows if row.action == "access.gate"]
 
 
-def test_near_misses_resolve_declares_a_body_gate_that_refuses_the_bypass() -> None:
-    gate = TOOL_GATES["near_misses_resolve"]
+def test_resolve_near_miss_declares_a_body_gate_that_refuses_the_bypass() -> None:
+    gate = TOOL_GATES["resolve-near-miss"]
     assert (gate.kind, gate.role, gate.bypass) == (
         GateKind.BODY,
         AccessRole.COMPLIANCE_OFFICER,
@@ -90,7 +90,7 @@ def test_the_gate_the_body_runs_is_the_gate_the_tool_is_declared_with() -> None:
         for decorator in node.decorator_list
         if isinstance(decorator, ast.Call)
         and isinstance(decorator.args[0], ast.Constant)
-        and decorator.args[0].value == "near_misses_resolve"
+        and decorator.args[0].value == "resolve-near-miss"
     ]
     run = [
         node.args[2]
@@ -105,7 +105,7 @@ def test_the_gate_the_body_runs_is_the_gate_the_tool_is_declared_with() -> None:
     assert len(run) == 1
 
 
-def test_merge_decision_denial_writes_one_access_gate_row_named_near_misses_resolve(
+def test_merge_decision_denial_writes_one_access_gate_row_named_resolve_near_miss(
     env: _Env, audit_store: InMemoryAuditStore
 ) -> None:
     text = env.resolve_merge(who=_STRANGER)
@@ -115,7 +115,7 @@ def test_merge_decision_denial_writes_one_access_gate_row_named_near_misses_reso
     assert (row.outcome, row.resource_type, row.resource_id) == (
         "rejected",
         "operation",
-        "near_misses_resolve",
+        "resolve-near-miss",
     )
     assert row.details == {"required_role": "ComplianceOfficer"}
     assert approval_row_count(env.store) == 0
@@ -126,7 +126,7 @@ def test_merge_decision_without_a_real_session_writes_no_access_gate_row(
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     result = asyncio.run(
-        _server().call_tool("near_misses_resolve", {"review_id": _REVIEW, "decision": "merge"})
+        _server().call_tool("resolve-near-miss", {"review_id": _REVIEW, "decision": "merge"})
     )
     assert isinstance(result, CallToolResult)
     block = result.content[0]
@@ -152,5 +152,5 @@ def test_denied_merge_row_is_returned_by_list_audit_events_for_actor_and_action(
     )
     events = json.loads(listed)["events"]
     assert [(e["actor_subject"], e["resource_id"]) for e in events] == [
-        (_STRANGER[0], "near_misses_resolve")
+        (_STRANGER[0], "resolve-near-miss")
     ]

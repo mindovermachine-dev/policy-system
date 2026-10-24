@@ -42,7 +42,7 @@ Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
 the connector the Policy System Plugin declares, pointing at a hosted PS
 Service. Claude lists it as `plugin:ps-plugin:ps-mcp`. Any other name is not
 a PS Service connector. A connector that is present
-under the right name but does not expose a `check_regulations` tool is
+under the right name but does not expose a `check-regulations` tool is
 **not** a PS Service connector either, whatever it is named — report it as
 unreachable (see the error-state table under Process) rather than
 proceeding against it. From here on, "the PS Service connector" means the `ps-mcp` connector.
@@ -66,7 +66,7 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    tracked regulation now — note that a detected amendment triggers an
    automatic re-ingestion as part of the same call, not a separate,
    confirmable step.
-2. **Call the tool.** Invoke `check_regulations` (no arguments) on the PS
+2. **Call the tool.** Invoke `check-regulations` (no arguments) on the PS
    Service connector selected at On Load. This is a blocking call — a sweep
    that re-ingests one or more detected amendments can take minutes, not
    seconds; do not report a failure just because the call is still in
@@ -112,7 +112,7 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
 
 ## Guardrails
 
-- Never call `check_regulations` without first confirming with the user
+- Never call `check-regulations` without first confirming with the user
   that a full sweep (including any automatic re-ingestion it triggers) is
   what they want.
 - The skill reaches PS Service exclusively through a recognised MCP

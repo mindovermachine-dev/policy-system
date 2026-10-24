@@ -2,7 +2,7 @@
 # CUC-05: Restore a curated instrument
 
 **Status:** Specified
-**Actor:** Compliance Officer (`restore_instrument` is gated on minimum
+**Actor:** Compliance Officer (`restore-instrument` is gated on minimum
 `ComplianceOfficer`)
 **Goal:** One curated instrument — external regulation or internal
 (e.g. engineering practices) — fetched from the configured curated-content source and

@@ -9,7 +9,7 @@ description: List every RegulatoryInstrument already ingested into the Policy Sy
 
 Show which RegulatoryInstruments are in the knowledge graph right now,
 read from the live graph through one fixed, read-only Cypher query on the
-`cypher` tool — never a static catalog, and not the curated source that
+`run-cypher` tool — never a static catalog, and not the curated source that
 `ps-get-catalog-listing` lists (that is pre-ingestion).
 
 **Scope:** invoked with no arguments, it lists every RegulatoryInstrument
@@ -19,8 +19,8 @@ node, external and internal. There is no per-instrument lookup.
 
 Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
 listed by Claude as `plugin:ps-plugin:ps-mcp`. Always call its
-`domain_concepts` tool first and refetch it on every invocation. A
-connector that does not expose both `domain_concepts` and `cypher` is not
+`get-domain-concepts` tool first and refetch it on every invocation. A
+connector that does not expose both `get-domain-concepts` and `run-cypher` is not
 PS Service, whatever it is named. If no connector exposes both tools, stop
 with a clear message that no PS Service connector is available — never
 guess, and never fall back to another source. From here on, "the PS Service
@@ -28,7 +28,7 @@ connector" means the `ps-mcp` connector.
 
 ## Process
 
-1. **Run the query.** Call the `cypher` tool on the PS Service connector
+1. **Run the query.** Call the `run-cypher` tool on the PS Service connector
    with exactly this query, verbatim — never edited, never templated, no
    parameters:
 

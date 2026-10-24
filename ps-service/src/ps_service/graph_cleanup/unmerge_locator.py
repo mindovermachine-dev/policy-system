@@ -1,4 +1,4 @@
-"""Locate the merge an `unmerge` reverses, from the audit trail.
+"""Locate the merge an `unmerge-entities` reverses, from the audit trail.
 
 Reads `audit_events` through `AuditStore.query` only. The merge to reverse is the newest
 `applied` merge row for the id that was not followed by a `failed` row with the same

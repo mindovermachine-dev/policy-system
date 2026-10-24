@@ -18,7 +18,7 @@ def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest aut
     """Stub the Cellar fetch boundary for every non-live test.
 
     Every ingestion request now resolves via Cellar, so a test that reaches the
-    ``ingest_regulation`` tool with a fake pipeline must never hit the real
+    ``ingest-regulation`` tool with a fake pipeline must never hit the real
     service. Skipped for tests carrying a live marker; a per-test patch overrides it.
 
     ``tests/api`` is an importable package only once pytest has collected it, so a
@@ -36,7 +36,7 @@ def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest aut
 
 @pytest.fixture
 def ingest_audit_store(monkeypatch: pytest.MonkeyPatch) -> object:
-    """Route the sync `ingest_regulation` tool's audit rows to memory.
+    """Route the sync `ingest-regulation` tool's audit rows to memory.
 
     The tool writes an opening row before it runs anything, so a test that drives it must not
     reach Postgres. Opt in per module with

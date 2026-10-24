@@ -1,4 +1,4 @@
-"""Shared helpers for the `start_ingestion` / `get_ingestion_status` tool tests.
+"""Shared helpers for the `start-ingestion` / `get-ingestion-status` tool tests.
 
 Follows the `tests/passkey_signing/_harness.py` precedent: one module the tool-level test files
 import from, so the in-memory store wiring, the in-process tool calls and the per-test isolation
@@ -62,13 +62,13 @@ def call_tool(tool: str, arguments: dict[str, str]) -> CallToolResult:
 
 
 def call_start_ingestion(celex: str, short_name: str) -> CallToolResult:
-    """Call `start_ingestion` in-process."""
-    return call_tool("start_ingestion", {"celex": celex, "short_name": short_name})
+    """Call `start-ingestion` in-process."""
+    return call_tool("start-ingestion", {"celex": celex, "short_name": short_name})
 
 
 def call_get_ingestion_status(run_id: str) -> CallToolResult:
-    """Call `get_ingestion_status` in-process."""
-    return call_tool("get_ingestion_status", {"run_id": run_id})
+    """Call `get-ingestion-status` in-process."""
+    return call_tool("get-ingestion-status", {"run_id": run_id})
 
 
 def text(result: CallToolResult) -> str:

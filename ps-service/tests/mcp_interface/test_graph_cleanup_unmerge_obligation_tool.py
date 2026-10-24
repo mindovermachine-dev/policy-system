@@ -1,4 +1,4 @@
-"""`unmerge` (preview + approval) through the MCP tool, obligation merges.
+"""`unmerge-entities` (preview + approval) through the MCP tool, obligation merges.
 
 Covers the preview (shows the node and edges to recreate and the survivor edges that stay, approval
 bound to the merge and the state, no graph write), conflicts explained (no approval),
@@ -121,7 +121,7 @@ def test_a_merged_obligation_returns_the_preview_and_a_pending_approval_and_writ
     env.graph.requires = [*env.graph.requires, [OBL_SURVIVOR, "cap_new"]]
     env.graph.capabilities = [*env.graph.capabilities, ["cap_new", "active"]]
 
-    body = json.loads(env.call("unmerge", _ARGS))
+    body = json.loads(env.call("unmerge-entities", _ARGS))
 
     assert set(body) == {"preview", "pending_approval_id", "approval_url", "expires_at"}
     preview = body["preview"]
@@ -142,7 +142,7 @@ def test_a_merged_obligation_returns_the_preview_and_a_pending_approval_and_writ
     row = env.pending.get_by_id(body["pending_approval_id"])
     assert row is not None
     assert (row.actor_subject, row.actor_issuer) == (_OFFICER, _ISSUER)
-    assert row.tool_name == "unmerge"
+    assert row.tool_name == "unmerge-entities"
     assert row.normalized_args == {
         "merged_id": OBL_ABSORBED,
         "merge_approval_id": "merge-approval-1",
@@ -156,7 +156,7 @@ def test_a_merged_obligation_returns_the_preview_and_a_pending_approval_and_writ
 def test_an_id_with_no_merge_in_the_audit_trail_is_rejected_with_no_approval(env: _Env) -> None:
     env.audit.history = []
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text.startswith("error: ")
     assert "no merge" in text
@@ -167,7 +167,7 @@ def test_a_conflict_is_rejected_with_its_explanation_and_no_approval(env: _Env) 
     env.graph.nodes = []
     env.graph.markers = [[OBL_ABSORBED, OBL_SURVIVOR], [OBL_SURVIVOR, "obl_winner"]]
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text.startswith("error: ")
     assert "obl_winner" in text
@@ -179,7 +179,7 @@ def test_a_conflict_is_rejected_with_its_explanation_and_no_approval(env: _Env) 
 def test_an_unreadable_audit_trail_returns_the_sanitised_error(env: _Env) -> None:
     env.audit.query_error = AuditPostgresUnavailableError("db host 10.1.2.3 down")
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text == "error: the audit trail could not be read right now; try again shortly"
     assert approval_row_count(env.pending) == 0
@@ -195,13 +195,13 @@ def test_an_unreachable_graph_returns_the_sanitised_error(monkeypatch: pytest.Mo
 
     _override(monkeypatch, graph_factory=_boom)
 
-    text = environment.call("unmerge", _ARGS)
+    text = environment.call("unmerge-entities", _ARGS)
 
     assert text == "error: the policy graph database is not reachable"
 
 
 def test_check_approval_reports_an_unmerge_approval_to_its_creator_only(env: _Env) -> None:
-    created = json.loads(env.call("unmerge", _ARGS))
+    created = json.loads(env.call("unmerge-entities", _ARGS))
     approval_id = created["pending_approval_id"]
 
     mine = json.loads(env.call("check-cleanup-approval", {"pending_approval_id": approval_id}))
@@ -210,7 +210,7 @@ def test_check_approval_reports_an_unmerge_approval_to_its_creator_only(env: _En
     assert mine == {
         "pending_approval_id": approval_id,
         "status": "pending",
-        "tool_name": "unmerge",
+        "tool_name": "unmerge-entities",
         "outcome": None,
     }
     assert theirs == f"error: no pending approval with id {approval_id!r}"
@@ -218,7 +218,7 @@ def test_check_approval_reports_an_unmerge_approval_to_its_creator_only(env: _En
 
 def test_the_tool_description_covers_obligation_merges_and_the_survivor_edge_rule() -> None:
     tools = asyncio.run(_server().list_tools())
-    description = next(t.description for t in tools if t.name == "unmerge")
+    description = next(t.description for t in tools if t.name == "unmerge-entities")
 
     assert description is not None
     assert "obligation.merge" in description

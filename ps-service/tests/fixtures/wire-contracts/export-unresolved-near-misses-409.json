@@ -1,7 +1,7 @@
 {
   "error": {
     "code": "export_unresolved_near_misses",
-    "message": "cannot export 'CRA-1.0': 2 unresolved near-miss reviews involve entities of this instrument (review_1, review_2). Resolve them (near_misses_list, near_misses_resolve) and export again.",
+    "message": "cannot export 'CRA-1.0': 2 unresolved near-miss reviews involve entities of this instrument (review_1, review_2). Resolve them (list-near-misses, resolve-near-miss) and export again.",
     "failing_stage": null
   },
   "run_id": null

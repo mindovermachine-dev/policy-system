@@ -2,7 +2,7 @@
 # CUC-04: Ingest a regulation
 
 **Status:** Specified
-**Actor:** Compliance Officer (the `start_ingestion`/`get_ingestion_status` pair is
+**Actor:** Compliance Officer (the `start-ingestion`/`get-ingestion-status` pair is
 gated on the `ComplianceOfficer` grant)
 **Goal:** One EU regulation, identified by CELEX, ingested through the full pipeline into
 the merged company graph — with the run observable live, resumable after leaving, and

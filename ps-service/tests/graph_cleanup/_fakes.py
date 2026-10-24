@@ -410,7 +410,7 @@ class ScriptedReleaseGraph(ScriptedMergeGraph):
 
 @dataclass
 class ScriptedUnmergeGraph:
-    """Graph for capability `unmerge`: `ABSORBED` is deleted and marked as merged into `SURVIVOR`.
+    """Graph for capability `unmerge-entities`: `ABSORBED` is deleted and marked as merged.
 
     Queries are dispatched by their text. Read-only: an unmerge writes through the
     gateway (`CleanupRig`), so a write statement here is a failure of the test.
@@ -574,7 +574,7 @@ def capability_merge_history(
 
 @dataclass
 class ScriptedObligationUnmergeGraph:
-    """Graph for obligation `unmerge`: `OBL_ABSORBED` is deleted and marked as merged.
+    """Graph for obligation `unmerge-entities`: `OBL_ABSORBED` is deleted and marked as merged.
 
     Queries are dispatched by their text. Read-only: an unmerge writes through the
     gateway (`CleanupRig`), so a write statement here is a failure of the test.

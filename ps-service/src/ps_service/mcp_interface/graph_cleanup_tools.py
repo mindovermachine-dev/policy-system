@@ -1,7 +1,7 @@
 """Graph-cleanup tools of the PS MCP server.
 
 Registers `find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`,
-`merge-obligations`, `merge-roles`, `release-capability-governance`, `unmerge` and
+`merge-obligations`, `merge-roles`, `release-capability-governance`, `unmerge-entities` and
 `check-cleanup-approval`; `register_graph_cleanup_tools` registers them on a server built by
 `mcp_server.build_server`. Each tool delegates to `ps_service.graph_cleanup.service`, which owns the
 behaviour, and builds its graph opener and stores through the `GateEnvironment` it is bound to. This
@@ -547,7 +547,7 @@ def release_capability_governance_tool(  # noqa: D417  # `environment` is inject
 _AUDIT_UNREADABLE_MESSAGE = "error: the audit trail could not be read right now; try again shortly"
 
 
-@_gated_tool("unmerge", _CLEANUP_GATE)
+@_gated_tool("unmerge-entities", _CLEANUP_GATE)
 def unmerge_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     merged_id: Annotated[str, Field(min_length=1)],
@@ -663,7 +663,7 @@ def unmerge_tool(  # noqa: D417  # `environment` is injected by the server and h
             "expires_at": approval.expires_at,
         }
 
-    return _run_mcp_action("unmerge", _body)
+    return _run_mcp_action("unmerge-entities", _body)
 
 
 @_gated_tool("check-cleanup-approval", _CLEANUP_GATE)
@@ -674,10 +674,10 @@ def check_cleanup_approval_tool(  # noqa: D417  # `environment` is injected by t
     """Report the status and outcome of a graph-cleanup passkey approval.
 
     Companion to `merge-capabilities`, `merge-obligations`, `merge-roles`,
-    `release-capability-governance` and `unmerge`: the passkey ceremony happens in a browser, so
-    this is how to learn whether the approval was signed and what the edit did. Requires an
-    explicit `ComplianceOfficer` grant. Only the officer who created the approval can see it; any
-    other caller, or an unknown id, gets the same not-found error.
+    `release-capability-governance` and `unmerge-entities`: the passkey ceremony happens in a
+    browser, so this is how to learn whether the approval was signed and what the edit did. Requires
+    an explicit `ComplianceOfficer` grant. Only the officer who created the approval can see it;
+    any other caller, or an unknown id, gets the same not-found error.
 
     Args:
         pending_approval_id: The `pending_approval_id` returned by the tool that created the

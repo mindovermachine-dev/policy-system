@@ -140,7 +140,7 @@ TOOL_MERGE_CAPABILITIES = "merge-capabilities"
 TOOL_MERGE_OBLIGATIONS = "merge-obligations"
 TOOL_MERGE_ROLES = "merge-roles"
 TOOL_RELEASE_GOVERNANCE = "release-capability-governance"
-TOOL_UNMERGE = "unmerge"
+TOOL_UNMERGE = "unmerge-entities"
 _COMPONENT = "graph_cleanup"
 _AUDIT_ERRORS = (
     AuditPostgresUnavailableError,
@@ -1741,7 +1741,7 @@ def _replan_unmerge(
 def execute_unmerge(
     row: PendingApprovalRow, config: ServiceConfig, dependencies: GraphCleanupDependencies
 ) -> dict[str, object]:
-    """Execute one signed `unmerge` approval; return its outcome dict.
+    """Execute one signed `unmerge-entities` approval; return its outcome dict.
 
     Reverses an earlier Capability, Obligation or Role merge. Follows the same fail-closed order as
     the merges, and also re-locates the merge in the audit trail: it must still be the one the

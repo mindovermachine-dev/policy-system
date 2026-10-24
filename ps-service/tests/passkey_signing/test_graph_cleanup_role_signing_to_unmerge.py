@@ -164,8 +164,8 @@ def test_importing_the_app_registers_the_unmerge_executor_for_roles_too() -> Non
         resolve_effect_verifier,
     )
 
-    assert resolve_approval_executor("unmerge") is not None
-    assert resolve_effect_verifier("unmerge") is not None
+    assert resolve_approval_executor("unmerge-entities") is not None
+    assert resolve_effect_verifier("unmerge-entities") is not None
 
 
 def test_a_valid_signature_audits_then_writes_once(world: _World) -> None:
@@ -261,7 +261,7 @@ def test_a_signed_role_unmerge_recreates_the_role_and_check_cleanup_approval_rep
         dependencies=world.rig.dependencies(world.roles),
     )
     assert status is not None
-    assert status.tool_name == "unmerge"
+    assert status.tool_name == "unmerge-entities"
     assert status.status == "signed"
     assert status.outcome == {
         "merged_id": ROLE_ABSORBED,

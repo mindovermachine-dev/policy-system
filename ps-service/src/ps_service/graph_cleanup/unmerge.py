@@ -1,4 +1,4 @@
-"""Assemble an `unmerge` plan: locate the merge in the audit trail, read the graph, plan.
+"""Assemble an `unmerge-entities` plan: locate the merge in the audit trail, read the graph, plan.
 
 The one place that joins the audit locator, the graph reader and the pure planner. The
 preview/approval service and the post-signature executor both call it, so both judge the

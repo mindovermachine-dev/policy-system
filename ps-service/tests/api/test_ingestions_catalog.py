@@ -663,7 +663,7 @@ def test_short_name_collision_with_an_already_ingested_different_celex_is_reject
 ):
     """A non-curated CELEX whose ``short_name`` is already
     recorded in the single-tenant graph under a *different* CELEX is rejected with
-    409, before any pipeline stage runs -- REST parity with the ``ingest_regulation``
+    409, before any pipeline stage runs -- REST parity with the ``ingest-regulation``
     MCP tool's own graph-side collision check.
     """
     fake = build_fake_pipeline_dependencies(

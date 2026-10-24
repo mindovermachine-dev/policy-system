@@ -1,4 +1,4 @@
-"""Executor for obligation `unmerge`.
+"""Executor for obligation `unmerge-entities`.
 
 Audit-first and fail-closed like the other executors: re-check the role, re-locate the merge in
 the audit trail, re-read and compare the state digest, record `applied`, run the write, record

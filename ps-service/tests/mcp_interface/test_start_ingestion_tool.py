@@ -1,7 +1,7 @@
-"""Tests for the `start_ingestion` MCP tool.
+"""Tests for the `start-ingestion` MCP tool.
 
 The tool validates synchronously, records an `ingestion_runs` row, dispatches the pipeline on a
-background thread and returns a `run_id` at once. `get_ingestion_status` is used to poll the run
+background thread and returns a `run_id` at once. `get-ingestion-status` is used to poll the run
 to its terminal result. Only genuine boundaries are faked: the run store (the approved Postgres
 boundary), the graphs and the adapters/LLM callers behind `_use_real_pipeline_stages`.
 """
@@ -176,7 +176,7 @@ def test_without_a_gateway_the_background_run_fails_closed_with_a_graph_unavaila
 def test_polled_result_equals_the_blocking_tools_response_apart_from_run_id(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """Same outcome as `ingest_regulation`, apart from `run_id`."""
+    """Same outcome as `ingest-regulation`, apart from `run_id`."""
     _ = store
     _use_real_pipeline_stages(monkeypatch)
     started = body(call_start_ingestion(_CELEX, _SHORT_NAME))
@@ -249,7 +249,7 @@ def test_submission_and_background_run_log_one_correlated_lifecycle_each(
 
     emitter.flush()
     lines = read_lines(resolve_default_log_path())
-    for action in ("start_ingestion", "background_ingestion_run"):
+    for action in ("start-ingestion", "background_ingestion_run"):
         action_lines = [
             line
             for line in lines
@@ -282,7 +282,7 @@ def test_run_ids_are_random_uuid4_values_that_differ_between_submissions(
 def test_resubmitting_an_ingested_celex_is_rejected_before_any_row_or_thread(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
-    """An already-ingested CELEX is rejected, as `ingest_regulation` does."""
+    """An already-ingested CELEX is rejected, as `ingest-regulation` does."""
     _use_real_pipeline_stages(monkeypatch)
     first = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
     wait_for_run(first)
@@ -659,7 +659,7 @@ def test_start_ingestion_audits_the_verified_actor_with_trigger_async_ingest(
     started = [
         line
         for line in read_lines(resolve_default_log_path())
-        if line.get("action") == "start_ingestion" and line.get("outcome") == "started"
+        if line.get("action") == "start-ingestion" and line.get("outcome") == "started"
     ]
     assert [line["run_id"] for line in started] == [run_id]
 

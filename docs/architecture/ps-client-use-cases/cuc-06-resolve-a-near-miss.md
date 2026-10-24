@@ -48,7 +48,7 @@ merged with the effect previewed, signed, audited, and reversible.
    incoming node), the edge counts and the Policy case. A **Role** review is two Roles of
    one instrument and merges through the Role merge (`merge-roles`, same `ComplianceOfficer`
    gate and passkey approval): the absorbed Role is deleted behind a `MergedRole` marker, its
-   Obligations move to the survivor, and `unmerge` reverses it. A Role has no governing
+   Obligations move to the survivor, and `unmerge-entities` reverses it. A Role has no governing
    Policy, so no governance acknowledgment applies. The controls live on the
    artifact; chat advises, the click is the user's.
 3. **Keep separate.** No ceremony: the decision executes at once, is audited at the
@@ -87,7 +87,7 @@ merged with the effect previewed, signed, audited, and reversible.
 - **Passkey ceremony on merge only** — the review/resolve instance of the lifecycle-only
   ceremony rule; the signing summary binds to the exact pair and review state.
   Keep-separate never triggers one.
-- **Reversible.** `unmerge` (CUC-07) recreates the loser from the `capability.merge`
+- **Reversible.** `unmerge-entities` (CUC-07) recreates the loser from the `capability.merge`
   snapshot and removes its marker. It does not recreate the deleted review: the pair is not offered for review
   again unless a later ingest or restore detects it anew.
 - Resolving clears the review's Inbox item. No new notifications are emitted.

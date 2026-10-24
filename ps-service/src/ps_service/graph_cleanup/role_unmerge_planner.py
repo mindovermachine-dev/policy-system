@@ -1,4 +1,4 @@
-"""Pure planning and conflict detection for `unmerge` of a Role merge.
+"""Pure planning and conflict detection for `unmerge-entities` of a Role merge.
 
 No I/O. `derive_role_unmerge_inputs` reads what a `role.merge` audit row says to reverse;
 `plan_role_unmerge` compares it with the live graph, rejects every conflict with an explanation and

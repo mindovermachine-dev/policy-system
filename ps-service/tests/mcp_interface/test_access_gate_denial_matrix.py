@@ -56,11 +56,11 @@ _ROLE_TOOLS: dict[str, tuple[dict[str, object], str]] = {
     "reset-catalog-source": ({}, _DEFAULT_UNAUTHENTICATED),
     "get-catalog-source": ({}, _DEFAULT_UNAUTHENTICATED),
     "invite-user": ({"email": "new.user@example.com"}, _DEFAULT_UNAUTHENTICATED),
-    "ingest_regulation": (_CELEX_ARGS, _DEFAULT_UNAUTHENTICATED),
-    "check_regulations": ({}, _DEFAULT_UNAUTHENTICATED),
-    "restore_instrument": ({"instrument_id": "CRA-1"}, _DEFAULT_UNAUTHENTICATED),
-    "start_ingestion": (_CELEX_ARGS, _DEFAULT_UNAUTHENTICATED),
-    "get_ingestion_status": ({"run_id": "run-1"}, _DEFAULT_UNAUTHENTICATED),
+    "ingest-regulation": (_CELEX_ARGS, _DEFAULT_UNAUTHENTICATED),
+    "check-regulations": ({}, _DEFAULT_UNAUTHENTICATED),
+    "restore-instrument": ({"instrument_id": "CRA-1"}, _DEFAULT_UNAUTHENTICATED),
+    "start-ingestion": (_CELEX_ARGS, _DEFAULT_UNAUTHENTICATED),
+    "get-ingestion-status": ({"run_id": "run-1"}, _DEFAULT_UNAUTHENTICATED),
     "list-access-roles": ({}, _ROLE_MANAGEMENT_UNAUTHENTICATED),
     "list-audit-events": ({}, _ROLE_MANAGEMENT_UNAUTHENTICATED),
     "verify-audit-log": ({}, _ROLE_MANAGEMENT_UNAUTHENTICATED),
@@ -79,7 +79,7 @@ _ROLE_TOOLS: dict[str, tuple[dict[str, object], str]] = {
         _CLEANUP_UNAUTHENTICATED,
     ),
     "release-capability-governance": ({"capability_id": "cap_a"}, _CLEANUP_UNAUTHENTICATED),
-    "unmerge": ({"merged_id": "cap_b"}, _CLEANUP_UNAUTHENTICATED),
+    "unmerge-entities": ({"merged_id": "cap_b"}, _CLEANUP_UNAUTHENTICATED),
     "check-cleanup-approval": ({"pending_approval_id": "approval-1"}, _CLEANUP_UNAUTHENTICATED),
 }
 _REFUSING_TOOLS = sorted(
@@ -173,7 +173,7 @@ def test_denied_ingest_regulation_starts_no_ingestion_run_row(
     audit_store: InMemoryAuditStore,
 ) -> None:
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
-        _call("ingest_regulation", _CELEX_ARGS)
+        _call("ingest-regulation", _CELEX_ARGS)
     assert [row.action for row in audit_store.rows] == ["access.gate"]
 
 

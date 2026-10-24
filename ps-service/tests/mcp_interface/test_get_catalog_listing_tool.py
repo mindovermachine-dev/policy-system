@@ -1,8 +1,8 @@
 """Tests for the registered `get-catalog-listing` MCP tool.
 
 The happy path: `get_catalog_listing` (zero parameters --
-there is no validation surface; mirrors `check_regulations`/
-`near_misses_list`) delegates in-process to `resolve_effective_source` +
+there is no validation surface; mirrors `check-regulations`/
+`list-near-misses`) delegates in-process to `resolve_effective_source` +
 `fetch_catalog` (a byte-for-byte mirror of
 `list_curated_catalog`'s own body, `routes.py:224-240`), via the shared
 `_run_mcp_action` audit wrapper, returning a
@@ -288,7 +288,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
 
     Mirrors `test_mcp_auth.py::_authenticated_test_client`/
     `test_ingest_regulation_tool.py::_authenticated_test_client` exactly --
-    this module's real-token tests drive `get-catalog-listing` (not `cypher`)
+    this module's real-token tests drive `get-catalog-listing` (not `run-cypher`)
     through the same genuinely auth-enforcing mounted app, never the
     bypass-shaped one every other test in this module builds via a bare
     `server.call_tool`.
@@ -384,7 +384,7 @@ def test_real_verified_token_call_logs_no_principal(
     the actual mounted Streamable HTTP transport, mirroring
     `test_mcp_auth.py`'s own pattern, never a bare in-process
     `server.call_tool` -- the `mcp_interface` log entries carry no
-    `principal` and not the token's `sub`. Unlike `ingest_regulation`, `get_catalog_listing`'s own
+    `principal` and not the token's `sub`. Unlike `ingest-regulation`, `get_catalog_listing`'s own
     delegate (`fetch_catalog`) takes no `caller`/principal parameter of its
     own, so there is no second, downstream log entry to assert on here.
     """

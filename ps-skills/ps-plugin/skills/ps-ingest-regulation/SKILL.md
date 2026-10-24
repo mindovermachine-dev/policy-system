@@ -14,8 +14,8 @@ command (issue #126) with an MCP-tool-backed equivalent reachable by any
 MCP-capable client, with no locally-installed, signed ps-cli binary required.
 
 A real run takes several minutes. Rather than one silent call that only
-answers at the end, the skill submits the run (`start_ingestion`, which
-returns a `run_id` immediately) and then polls `get_ingestion_status`,
+answers at the end, the skill submits the run (`start-ingestion`, which
+returns a `run_id` immediately) and then polls `get-ingestion-status`,
 telling the user each time the pipeline moves on to its next stage.
 
 **Scope:** works for any CELEX that exists on Cellar/ELI, whether or not it
@@ -47,9 +47,9 @@ Service. Claude lists it as `plugin:ps-plugin:ps-mcp`. Any other name is not
 a PS Service connector. From here on, "the PS Service connector" means the
 `ps-mcp` connector.
 
-- If the connector exposes both `start_ingestion` and `get_ingestion_status`,
+- If the connector exposes both `start-ingestion` and `get-ingestion-status`,
   use the submit-and-poll flow (Process steps 2-3).
-- If it exposes neither of those but does expose `ingest_regulation` (an
+- If it exposes neither of those but does expose `ingest-regulation` (an
   older PS Service), use the blocking fallback (Process step 2b) instead.
 - A connector that exposes none of these three tools is **not** a PS Service
   connector, whatever it is named — report it as unreachable (see
@@ -67,7 +67,7 @@ a PS Service connector. From here on, "the PS Service connector" means the
 - A slow run is not a failed run. Never resubmit a run whose status is still
   `running`, and never silently retry a failed one — report the named
   failure and stop.
-- Poll within a budget: at most **20** `get_ingestion_status` calls per
+- Poll within a budget: at most **20** `get-ingestion-status` calls per
   invocation of this skill. The run keeps going on PS Service whether or not
   you are polling.
 - Narrate progress, not noise: tell the user when the stage changes, not on
@@ -78,7 +78,7 @@ a PS Service connector. From here on, "the PS Service connector" means the
 0. **Resume an earlier run.** If the user asks to check an earlier run (e.g.
    "check run <run_id>") or otherwise supplies a `run_id` from a previous
    submission, skip steps 1-2 and go straight to step 3 with that `run_id`
-   and a fresh budget of 20 polls. Never call `start_ingestion` when
+   and a fresh budget of 20 polls. Never call `start-ingestion` when
    resuming.
 1. **Confirm inputs.** Ask the user for the regulation's CELEX identifier
    (a 10-character code, e.g. `32024R2847`) and its intended `short_name` —
@@ -88,7 +88,7 @@ a PS Service connector. From here on, "the PS Service connector" means the
    ingestions of the same CELEX fork into two differently-named graphs when
    the title's wording changed between fetches). Restate both back to the
    user before submitting.
-2. **Submit the run.** Call `start_ingestion` on the PS Service connector
+2. **Submit the run.** Call `start-ingestion` on the PS Service connector
    with `celex` and `short_name` exactly as confirmed in step 1. It checks
    the request straight away and returns either
    `{"run_id": "<id>", "status": "running"}` — tell the user the run was
@@ -99,7 +99,7 @@ a PS Service connector. From here on, "the PS Service connector" means the
    2b. **Fallback (older PS Service only, see On Load).** read
    `references/blocking-fallback.md` and follow it instead of steps 2-3.
 
-3. **Poll and narrate.** Call `get_ingestion_status` with that `run_id`.
+3. **Poll and narrate.** Call `get-ingestion-status` with that `run_id`.
    Every answer has the same shape: `{"run_id", "status", "stage",
 "result", "error"}`.
    - `status: "running"` — the run is still going. If `stage` is set and
@@ -119,7 +119,7 @@ a PS Service connector. From here on, "the PS Service connector" means the
      itself failed; classify it with the table in step 4. Only for the
      temporarily-unavailable store error may you poll once more after a
      pause; otherwise stop.
-   - Count every `get_ingestion_status` call, including the one allowed retry
+   - Count every `get-ingestion-status` call, including the one allowed retry
      after a temporarily-unavailable store error. When 20 calls have returned
      `running`, stop polling and tell the user exactly:
 
@@ -132,7 +132,7 @@ a PS Service connector. From here on, "the PS Service connector" means the
 
      Do not report this as a failure, and do not resubmit.
 4. **Name every non-success outcome**, whether it came back from
-   `start_ingestion`, as a failed run's `error`, from `get_ingestion_status`
+   `start-ingestion`, as a failed run's `error`, from `get-ingestion-status`
    itself, or from the fallback — never collapsed into a generic
    "ingestion failed":
    To classify a result, read `references/error-states.md` and match it against
@@ -166,15 +166,15 @@ a PS Service connector. From here on, "the PS Service connector" means the
 
 ## Guardrails
 
-- Never call `start_ingestion` (or the fallback `ingest_regulation`)
+- Never call `start-ingestion` (or the fallback `ingest-regulation`)
   without first confirming `celex` and `short_name` with the user — this
   action writes to the compliance graph. `short_name` has no optional or
   default form: issue #96 found that deriving it automatically from a
   non-curated CELEX's fetched title let the same regulation fork into two
   differently-named graphs across re-ingestions, so the tools always require
   the user's own value instead.
-- Never call `start_ingestion` more than once for one confirmed request,
-  and never resubmit while `get_ingestion_status` still says `running` — a
+- Never call `start-ingestion` more than once for one confirmed request,
+  and never resubmit while `get-ingestion-status` still says `running` — a
   long run is normal.
 - Resuming with "check run <run_id>" only polls; it never submits a new run.
 - Never report a run as failed, or as finished, while its status is still

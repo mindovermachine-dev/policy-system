@@ -60,8 +60,8 @@ from ps_service.api.models import (
     ExportAcceptedResponse,
     ExportRequest,
     IngestionAcceptedResponse,
+    IngestionProgressResponse,
     IngestionRequest,
-    IngestionStatusResponse,
     InstrumentCheckOutcomeBody,
     PathIdentifier,
     PendingApprovalStatusResponse,
@@ -839,7 +839,7 @@ async def check_merge_pending_approval(
     )
 
 
-async def get_ingestion_status(run_id: PathIdentifier) -> IngestionStatusResponse:
+async def get_ingestion_status(run_id: PathIdentifier) -> IngestionProgressResponse:
     """Report the pipeline stage currently executing for a run (``GET /ingestions/{run_id}``).
 
     A best-effort live-progress read, not a record lookup. It always answers 200, including for a
@@ -850,10 +850,10 @@ async def get_ingestion_status(run_id: PathIdentifier) -> IngestionStatusRespons
             hyphens. Any other value is rejected with 422 before the handler runs.
 
     Returns:
-        An :class:`IngestionStatusResponse` with ``run_id`` and the stage currently recorded for it,
-        or ``None`` when no stage is recorded.
+        An :class:`IngestionProgressResponse` with ``run_id`` and the stage currently
+        recorded for it, or ``None`` when no stage is recorded.
     """
-    return IngestionStatusResponse(run_id=run_id, stage=get_stage(run_id))
+    return IngestionProgressResponse(run_id=run_id, stage=get_stage(run_id))
 
 
 def build_api_router() -> APIRouter:

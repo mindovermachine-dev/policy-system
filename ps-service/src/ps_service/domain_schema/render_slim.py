@@ -1,4 +1,4 @@
-"""Render the schema as the slim plain-text form served by the `domain_concepts` tool.
+"""Render the schema as the slim plain-text form served by the `get-domain-concepts` tool.
 
 No notes and no prose: only labels, properties (type and presence) and edges (with
 cardinality), so the text stays small enough for an LLM client's context.

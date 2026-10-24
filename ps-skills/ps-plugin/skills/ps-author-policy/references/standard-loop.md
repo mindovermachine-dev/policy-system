@@ -48,7 +48,7 @@ title=<derived>)` -- no `fields` at creation time, the same title-only
    read the Standard's six content properties (`procedure`,
    `implementer_role`, `reviewer_role`, `applicability_boundary`,
    `verification_notes`, `change_rationale`) plus `implementation_status`
-   via `cypher` and compute `overall_score` per `scoring-model.md` §4
+   via `run-cypher` and compute `overall_score` per `scoring-model.md` §4
    (`100 * Σ(weight_i * score_i) / 2`) against `standard-rubric.md`'s own
    six weights (S-001..S-006) -- never a different rubric's weights, never
    an ad hoc score.

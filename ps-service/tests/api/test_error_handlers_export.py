@@ -11,8 +11,11 @@ independent of the full route. `ExportInstrumentNotFoundError` -> 404,
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from mcp_interface._environment import build_test_server
 
 from ps_service.api.error_handlers import register_exception_handlers
 from ps_service.api.errors import (
@@ -107,6 +110,15 @@ def test_export_unresolved_near_misses_error_exposes_count_and_review_ids() -> N
     assert exc.review_ids == ("review_a", "review_b")
     assert exc.instrument_id == "CRA-1.0"
     assert "2 unresolved near-miss reviews" in str(exc)
+
+
+def test_export_unresolved_near_misses_message_names_the_registered_near_miss_tools() -> None:
+    message = str(ExportUnresolvedNearMissesError("CRA-1.0", ("review_a",)))
+    registered = {tool.name for tool in asyncio.run(build_test_server().list_tools())}
+
+    assert "Resolve them (list-near-misses, resolve-near-miss) and export again." in message
+    assert {"list-near-misses", "resolve-near-miss"} <= registered
+    assert "near_misses_" not in message
 
 
 def test_export_unresolved_near_misses_message_names_no_single_reviewable_kind() -> None:

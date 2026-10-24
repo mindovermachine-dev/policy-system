@@ -1,6 +1,6 @@
 """Content lint: the docs, skill and docstrings describe the full UC-4 re-ingest.
 
-`check_regulations` re-runs the full pipeline, not only the Ingestion stage. These
+`check-regulations` re-runs the full pipeline, not only the Ingestion stage. These
 tests pin that on every place that describes the behaviour (UC-4, the container
 architecture, the solution architecture, the user guide, the `ps-check-regulations` skill and the
 `trigger_reingestion` / package docstrings), and that no source file still cites the issue number.

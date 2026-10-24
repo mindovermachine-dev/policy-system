@@ -11,7 +11,7 @@ same `PsTokenVerifier`, via the MCP SDK's own `MCPServer(token_verifier=...)`
 gate (`RequireAuthMiddleware`/`BearerAuthBackend`) -- not a reimplementation
 in this codebase.
 
-Under a valid token, the `cypher` tool's `query_engine` log entry carries no principal and the
+Under a valid token, the `run-cypher` tool's `query_engine` log entry carries no principal and the
 token's `sub` reaches no log line, while the tool's `query.cypher` audit row records that `sub` as
 its actor. Proven by reading the real `query_engine`/`execute_cypher_query` log entry the real,
 unmonkeypatched delegate emits end to end, and the row an in-memory audit store receives. No fake
@@ -124,7 +124,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
 
 
 def _serve_a_seeded_fake_graph(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point the `cypher` tool's FalkorDB connection at a seeded fake graph."""
+    """Point the `run-cypher` tool's FalkorDB connection at a seeded fake graph."""
     fake_db = _FakeFalkorDB(_FakeGraphHandle())
 
     _override(monkeypatch, graph_factory=graph_factory_for(fake_db))
@@ -171,7 +171,7 @@ def _call_cypher_tool_over_bearer_http(*, auth_context: AuthContext, token: str)
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": {"name": "cypher", "arguments": {"query": "MATCH (n) RETURN n"}},
+                "params": {"name": "run-cypher", "arguments": {"query": "MATCH (n) RETURN n"}},
             },
             headers={
                 "Accept": _JSON_RPC_ACCEPT,
@@ -232,7 +232,7 @@ def test_bearer_authenticated_cypher_call_logs_no_principal_and_audits_the_actor
     mock_oidc_provider: MockOidcProvider,
     read_lines: ReadLines,
 ) -> None:
-    """A bearer-authenticated `cypher` call logs its `query_engine` entry with no `principal`
+    """A bearer-authenticated `run-cypher` call logs its `query_engine` entry with no `principal`
     key and writes the token's `sub` to no log line, while its single `query.cypher` audit row
     records that `sub` as the actor. Drives the real mounted transport end to end (`initialize`
     -> `notifications/initialized` -> `tools/call`) with a real `Authorization: Bearer <token>`

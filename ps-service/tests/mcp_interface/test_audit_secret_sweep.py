@@ -1,12 +1,12 @@
 """No new audit row or log line carries a secret, free-text error, trace or path.
 
 Capstone: every new emitter (sync ingest, restore, near-miss resolve,
-`check_regulations` re-ingest, invite, and the async run's completion builder) is driven once
+`check-regulations` re-ingest, invite, and the async run's completion builder) is driven once
 through a FAILING path whose exception message and inputs are full of sentinel secrets. None of
 the sentinels may appear in any recorded audit row or in any emitted log line.
 
 The role-gate denial (`access.gate`) and `query.cypher` are swept here too, each with an audit
-store that raises sentinel text and, for `cypher`, a database error full of sentinels. The
+store that raises sentinel text and, for `run-cypher`, a database error full of sentinels. The
 `passkey.enroll` sweep lives in `passkey_signing/test_enrollment_audit.py` because it needs that
 directory's ceremony rig (the importlib collection order forbids importing it from here).
 
@@ -301,7 +301,7 @@ def test_cypher_failure_rows_and_logs_contain_no_secret(
     _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     _install_graph(monkeypatch, _FakeGraphHandle(error=RuntimeError(_LEAK)))
 
-    asyncio.run(_server().call_tool("cypher", {"query": f"MATCH (n) RETURN n // {_LEAK}"}))
+    asyncio.run(_server().call_tool("run-cypher", {"query": f"MATCH (n) RETURN n // {_LEAK}"}))
 
     if failing == "database":
         (row,) = store.rows

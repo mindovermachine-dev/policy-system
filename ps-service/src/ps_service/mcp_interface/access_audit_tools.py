@@ -321,7 +321,7 @@ def list_audit_events(  # noqa: D417, PLR0913, PLR0917 -- every parameter is an 
 
     The trail includes the denials of role-gated operations (`access.gate`, resource type
     `operation`, the operation name as the resource id), passkey enrolments (`passkey.enroll`,
-    resource type `pending_approval`) and `cypher` tool use (`query.cypher`, resource type
+    resource type `pending_approval`) and `run-cypher` tool use (`query.cypher`, resource type
     `query`), next to the access-role, policy, ingestion, restore and other business rows. It does
     not hold authentication outcomes or rejected passkey steps.
 

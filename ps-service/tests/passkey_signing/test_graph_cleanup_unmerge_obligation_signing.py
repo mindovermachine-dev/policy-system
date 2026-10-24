@@ -151,8 +151,8 @@ def test_importing_the_app_registers_the_unmerge_executor_for_obligations_too() 
         resolve_effect_verifier,
     )
 
-    assert resolve_approval_executor("unmerge") is not None
-    assert resolve_effect_verifier("unmerge") is not None
+    assert resolve_approval_executor("unmerge-entities") is not None
+    assert resolve_effect_verifier("unmerge-entities") is not None
 
 
 def test_a_valid_signature_audits_then_writes_once(world: _World) -> None:

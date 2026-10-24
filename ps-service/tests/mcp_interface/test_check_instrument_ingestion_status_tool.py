@@ -1,11 +1,11 @@
-"""Tests for the registered `check_instrument_ingestion_status` MCP tool.
+"""Tests for the registered `check-instrument-ingestion-status` MCP tool.
 
 The happy path: a fixed, parameterized
 `UNWIND $celex_ids AS c MATCH (n:RegulatoryInstrument {celex: c}) RETURN
 DISTINCT n.celex AS celex` query, run through `execute_cypher_query` via
-`_resolve_graph` -- exactly like the `cypher` tool's own reliance on those
+`_resolve_graph` -- exactly like the `run-cypher` tool's own reliance on those
 two helpers -- and the `_run_mcp_action` log triad, exactly like
-`check_regulations`.
+`check-regulations`.
 
 The degraded path: `_resolve_graph`/`execute_cypher_query`
 failures (`McpGraphUnavailableError`, `GraphUnseededError`,
@@ -13,17 +13,17 @@ failures (`McpGraphUnavailableError`, `GraphUnseededError`,
 inside the tool body and folded to `{"statuses": {c: "unknown" for c in
 celex_ids}}`, never a top-level `error:` string -- so the call itself still
 completes with `_run_mcp_action`'s `outcome="succeeded"`, deliberately
-diverging from `check_regulations`'s own
+diverging from `check-regulations`'s own
 `test_graph_unavailable_returns_named_error_when_single_tenant_graph_open_fails`
 (`test_check_regulations_tool.py:286-320`), whose `error:`-prefixed return
 trips `_run_mcp_action`'s `outcome="failed"` branch instead.
 
 Authorization: this tool
-intentionally declares no role gate (`AUTHENTICATED_ONLY`), matching `cypher`/
-`near_misses_list` (both plain graph reads). The tests below prove that
+intentionally declares no role gate (`AUTHENTICATED_ONLY`), matching `run-cypher`/
+`list-near-misses` (both plain graph reads). The tests below prove that
 placement from the tool-gate declarations (`TOOL_GATES`).
 
-`check_regulations` declares a `ComplianceOfficer` `ROLE` gate (a sweep automatically
+`check-regulations` declares a `ComplianceOfficer` `ROLE` gate (a sweep automatically
 re-ingests detected amendments), so it is not used below as an *ungated*-peer comparison
 for test (a) -- it sits in that same test's "gated" contrast alongside
 `set-catalog-source`. Test (b) is unaffected: it is about registration mechanics, which
@@ -144,7 +144,7 @@ def _install_unreachable_graph(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _call_check_instrument_ingestion_status(celex_ids: list[str]) -> CallToolResult:
     result = asyncio.run(
-        _server().call_tool("check_instrument_ingestion_status", {"celex_ids": celex_ids})
+        _server().call_tool("check-instrument-ingestion-status", {"celex_ids": celex_ids})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -196,7 +196,7 @@ def test_audit_log_records_started_then_succeeded_and_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """(b): the `mcp_interface` log shows a `started`->`succeeded` pair under one run id that
-    carries no caller identity, as `check_regulations` does.
+    carries no caller identity, as `check-regulations` does.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -212,7 +212,7 @@ def test_audit_log_records_started_then_succeeded_and_logs_no_principal(
         line
         for line in all_lines
         if line.get("component") == "mcp_interface"
-        and line.get("action") == "check_instrument_ingestion_status"
+        and line.get("action") == "check-instrument-ingestion-status"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert all(line.get("run_id") for line in mcp_lines)
@@ -331,7 +331,7 @@ def test_degraded_path_audit_log_shows_succeeded_not_failed(
 ) -> None:
     """(c): the `mcp_interface` audit log shows `outcome="succeeded"` (not
     `"failed"`) for a degraded-path call. This is the call-level success
-    semantics that deliberately diverges from `check_regulations`'s own
+    semantics that deliberately diverges from `check-regulations`'s own
     `test_graph_unavailable_returns_named_error_when_single_tenant_graph_open_fails`
     (`test_check_regulations_tool.py:286-320`): that sibling test's tool
     body returns an `error:`-prefixed *string*, which trips
@@ -353,7 +353,7 @@ def test_degraded_path_audit_log_shows_succeeded_not_failed(
         line
         for line in all_lines
         if line.get("component") == "mcp_interface"
-        and line.get("action") == "check_instrument_ingestion_status"
+        and line.get("action") == "check-instrument-ingestion-status"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     for line in mcp_lines:
@@ -364,34 +364,34 @@ def test_degraded_path_audit_log_shows_succeeded_not_failed(
 
 
 def test_tool_declares_no_role_gate_matching_plain_graph_read_peers() -> None:
-    """(a): `check_instrument_ingestion_status` is declared `AUTHENTICATED_ONLY`, exactly like
-    its plain-graph-read peers `cypher`/`near_misses_list`, and unlike the administrative or
-    gated tools `set-catalog-source` and `check_regulations`, which declare a `ROLE` gate. This
+    """(a): `check-instrument-ingestion-status` is declared `AUTHENTICATED_ONLY`, exactly like
+    its plain-graph-read peers `run-cypher`/`list-near-misses`, and unlike the administrative or
+    gated tools `set-catalog-source` and `check-regulations`, which declare a `ROLE` gate. This
     cohort placement -- not new gating code -- is what gives it the same authorization checks as
     other graph-read operations exposed via the MCP interface: no elevated `AccessRole` is ever
     checked for this tool, matching its peers exactly.
     """
-    for peer in ("check_instrument_ingestion_status", "cypher", "near_misses_list"):
+    for peer in ("check-instrument-ingestion-status", "run-cypher", "list-near-misses"):
         gate = TOOL_GATES[peer]
         assert gate.kind is GateKind.AUTHENTICATED_ONLY, peer
         assert gate.role is None, peer
 
     # Contrast: administrative/gated tools declare a role gate on registration, proving the
     # peers above are ungated by comparison rather than trivially.
-    assert TOOL_GATES["check_regulations"].kind is GateKind.ROLE
+    assert TOOL_GATES["check-regulations"].kind is GateKind.ROLE
     assert TOOL_GATES["set-catalog-source"].kind is GateKind.ROLE
 
 
 def test_tool_registered_on_server_the_same_ungated_way_as_check_regulations() -> None:
-    """(b): `check_instrument_ingestion_status` is registered on the single
-    `server` singleton the same way as `check_regulations`: both stay callable after decoration
+    """(b): `check-instrument-ingestion-status` is registered on the single
+    `server` singleton the same way as `check-regulations`: both stay callable after decoration
     and both are present in the same `server` tool registry. This is purely about registration
-    mechanics -- unaffected by `check_regulations`'s own role gate (see test (a) above); the
+    mechanics -- unaffected by `check-regulations`'s own role gate (see test (a) above); the
     "ungated" framing describes both tools' shared registration shape, not their authorization
     status.
     """
     assert callable(mcp_server.check_instrument_ingestion_status)
     assert callable(mcp_server.check_regulations)
     tool_names = {t.name for t in asyncio.run(_server().list_tools())}
-    assert "check_instrument_ingestion_status" in tool_names
-    assert "check_regulations" in tool_names
+    assert "check-instrument-ingestion-status" in tool_names
+    assert "check-regulations" in tool_names

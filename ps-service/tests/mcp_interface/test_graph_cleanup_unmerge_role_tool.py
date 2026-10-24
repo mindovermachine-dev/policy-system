@@ -1,4 +1,4 @@
-"""`unmerge` (preview + approval) through the MCP tool, Role merges.
+"""`unmerge-entities` (preview + approval) through the MCP tool, Role merges.
 
 The graph and the audit history are what a REAL `role.merge` left on the Graph Cleanup gateway
 rig. Covers the preview (the Role and Obligations to restore, the count of Obligations the
@@ -130,7 +130,7 @@ def test_a_merged_role_returns_the_preview_and_a_pending_approval_and_writes_not
     before = env.graph_state()
     groups = len(env.rig.logged_groups)
 
-    body = json.loads(env.call("unmerge", _ARGS))
+    body = json.loads(env.call("unmerge-entities", _ARGS))
 
     assert set(body) == {"preview", "pending_approval_id", "approval_url", "expires_at"}
     preview = body["preview"]
@@ -147,7 +147,7 @@ def test_a_merged_role_returns_the_preview_and_a_pending_approval_and_writes_not
     row = env.pending.get_by_id(body["pending_approval_id"])
     assert row is not None
     assert (row.actor_subject, row.actor_issuer) == (_OFFICER, _ISSUER)
-    assert row.tool_name == "unmerge"
+    assert row.tool_name == "unmerge-entities"
     assert row.normalized_args == {
         "merged_id": ROLE_ABSORBED,
         "merge_approval_id": "approval-1",
@@ -165,7 +165,7 @@ def test_the_preview_counts_the_obligations_the_survivor_gained_since_the_merge(
     env.rig.seed_endpoint("Obligation", "obl_since", text="obl_since")
     env.rig.seed_has(ROLE_SURVIVOR, "obl_since")
 
-    preview = json.loads(env.call("unmerge", _ARGS))["preview"]
+    preview = json.loads(env.call("unmerge-entities", _ARGS))["preview"]
 
     assert preview["survivor_obligations_added_since_merge"] == 1
     assert preview["obligations_to_restore"] == [OBL_MOVED_1, OBL_MOVED_2]
@@ -174,7 +174,7 @@ def test_the_preview_counts_the_obligations_the_survivor_gained_since_the_merge(
 def test_a_conflict_with_the_live_graph_is_explained_and_creates_no_approval(env: _Env) -> None:
     del env.rig.graph.nodes[("MergedRole", ROLE_ABSORBED)]
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text.startswith("error: ")
     assert "no MergedRole marker" in text
@@ -184,7 +184,7 @@ def test_a_conflict_with_the_live_graph_is_explained_and_creates_no_approval(env
 def test_an_unknown_id_names_merge_roles_among_the_tools_whose_merges_can_be_unmerged(
     env: _Env,
 ) -> None:
-    text = env.call("unmerge", {"merged_id": "role_never_merged"})
+    text = env.call("unmerge-entities", {"merged_id": "role_never_merged"})
 
     assert text.startswith("error: no merge of 'role_never_merged' was found")
     assert "merge-roles" in text
@@ -200,7 +200,7 @@ def test_an_unaudited_merge_of_a_moved_obligation_is_refused_by_the_live_checks(
         del graph.edges[key]
     graph.nodes[("MergedObligation", OBL_MOVED_1)] = {"merged_into": "obl_other"}
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text.startswith("error: ")
     assert OBL_MOVED_1 in text
@@ -221,7 +221,7 @@ def test_a_caller_without_an_explicit_compliance_officer_grant_gets_an_error_and
 ) -> None:
     before = env.graph_state()
 
-    text = env.call("unmerge", _ARGS, sub=sub)
+    text = env.call("unmerge-entities", _ARGS, sub=sub)
 
     assert text == _ACCESS_DENIED
     assert approval_row_count(env.pending) == 0
@@ -236,7 +236,7 @@ def test_no_real_session_is_refused_even_under_the_local_test_bypass(
         monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     before = env.graph_state()
 
-    result = asyncio.run(_server().call_tool("unmerge", _ARGS))
+    result = asyncio.run(_server().call_tool("unmerge-entities", _ARGS))
 
     assert isinstance(result, CallToolResult)
     block = result.content[0]
@@ -280,7 +280,7 @@ def test_a_later_merge_of_a_moved_obligation_blocks_the_unmerge_and_names_its_au
 ) -> None:
     event_id = _later_obligation_merge(env, survivor="obl_other", absorbed=OBL_MOVED_1, minutes=5)
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text.startswith("error: ")
     assert event_id in text
@@ -350,7 +350,7 @@ def test_a_graph_or_unexpected_failure_returns_a_fixed_message_and_creates_no_ap
     _override(monkeypatch, graph_factory=opener)
     before = env.graph_state()
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text == expected
     assert not any(leak in text for leak in _LEAKS)
@@ -372,7 +372,7 @@ def test_an_unreadable_audit_trail_returns_a_fixed_message_and_creates_no_approv
     env.rig.audit.query_error = error
     before = env.graph_state()
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text == _AUDIT_UNREADABLE
     assert not any(leak in text for leak in _LEAKS)
@@ -387,7 +387,7 @@ def test_an_unreachable_approval_store_returns_a_fixed_message_and_leaves_no_tra
     _override(monkeypatch, pending_approval_store_factory=_factory(down))
     before = env.graph_state()
 
-    text = env.call("unmerge", _ARGS)
+    text = env.call("unmerge-entities", _ARGS)
 
     assert text == _UNEXPECTED
     assert approval_row_count(down) == 0

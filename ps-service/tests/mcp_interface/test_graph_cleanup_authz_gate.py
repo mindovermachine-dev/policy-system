@@ -45,7 +45,7 @@ _TOOLS: list[tuple[str, dict[str, object]]] = [
     ("merge-obligations", {"survivor_id": "obl_a", "absorbed_id": "obl_b"}),
     ("merge-roles", {"survivor_id": "role_a", "absorbed_id": "role_b"}),
     ("release-capability-governance", {"capability_id": "cap_a"}),
-    ("unmerge", {"merged_id": "cap_b"}),
+    ("unmerge-entities", {"merged_id": "cap_b"}),
     ("check-cleanup-approval", {"pending_approval_id": "approval-1"}),
 ]
 

@@ -1,8 +1,8 @@
 """Ingestion and regulation-change tools of the PS MCP server.
 
-Declares `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `check_regulations` and
-`check_instrument_ingestion_status`, together with the background ingestion-run machinery behind
-`start_ingestion`; `register_ingestion_tools` registers them on a server built by
+Declares `ingest-regulation`, `start-ingestion`, `get-ingestion-status`, `check-regulations` and
+`check-instrument-ingestion-status`, together with the background ingestion-run machinery behind
+`start-ingestion`; `register_ingestion_tools` registers them on a server built by
 `mcp_server.build_server`. The tools build their ingestion-run, audit and graph collaborators
 through the `GateEnvironment` they are bound to. This module imports only `tool_core` and
 `tool_gates` (never another tool group); `build_default_pipeline_dependencies`,
@@ -55,7 +55,7 @@ from ps_service.api.ingestion_orchestration import (
 from ps_service.api.models import IngestionRunStatusResponse, StartIngestionResponse
 from ps_service.api.routes import (
     _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- reuses the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift; mirrors change_check_orchestration.py's cross-module private-import convention
-    _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- same reuse for `check_regulations`, mirroring `_to_accepted_response` immediately above
+    _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- same reuse for `check-regulations`, mirroring `_to_accepted_response` immediately above
 )
 from ps_service.api.run_status import get_stage
 from ps_service.api.stage_failure_log import stage_failure_detail
@@ -356,7 +356,7 @@ def _resolve_and_ingest(
     return _to_accepted_response(run_id, outcome).model_dump()
 
 
-@_gated_tool("ingest_regulation", _COMPLIANCE_OFFICER_GATE)
+@_gated_tool("ingest-regulation", _COMPLIANCE_OFFICER_GATE)
 def ingest_regulation(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
@@ -365,7 +365,7 @@ def ingest_regulation(  # noqa: D417  # `environment` is injected by the server 
     """Ingest one EU regulation by CELEX identifier into the compliance graph and wait for it.
 
     Runs the full pipeline (ingestion, extraction, derivation, merge) for `celex` and blocks until
-    it finishes, which can take several minutes; use `start_ingestion` to return at once and poll
+    it finishes, which can take several minutes; use `start-ingestion` to return at once and poll
     instead. Any valid CELEX is resolved against Cellar/ELI and ingested under the `short_name` you
     give, used verbatim and never derived from the fetched title, so the same CELEX never forks into
     two differently named graphs. The ingested instrument is `<SHORT_NAME>-<version>`. Requires the
@@ -421,7 +421,7 @@ def ingest_regulation(  # noqa: D417  # `environment` is injected by the server 
             return audit
         return _resolve_and_ingest(celex, short_name, config=config, run_id=run_id, audit=audit)
 
-    return _run_mcp_action("ingest_regulation", _body)
+    return _run_mcp_action("ingest-regulation", _body)
 
 
 _BACKGROUND_INGESTION_ACTION = "background_ingestion_run"
@@ -540,7 +540,7 @@ def _execute_background_ingestion(
 def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> IngestionRunRow:
     """Mark a `running` row no in-process worker holds as failed (interrupted), then re-read it.
 
-    A declared, idempotent side effect of `get_ingestion_status`: the row is
+    A declared, idempotent side effect of `get-ingestion-status`: the row is
     `running` yet its worker is gone (its terminal write failed, or the process restarted), so
     it would otherwise be reported `running` forever. The write is a single-winner
     compare-and-swap, a no-op if the worker finished first. It never fails the poll: any store
@@ -571,8 +571,8 @@ def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> I
 def _check_ingestion_config(config: ServiceConfig) -> str | None:
     """Return the `error:` text when the pipeline config is incomplete, else `None`.
 
-    `start_ingestion` runs this synchronously so an incomplete configuration is reported to the
-    caller exactly as `ingest_regulation` reports it (the pipeline's own first step), instead of
+    `start-ingestion` runs this synchronously so an incomplete configuration is reported to the
+    caller exactly as `ingest-regulation` reports it (the pipeline's own first step), instead of
     surfacing only later as a failed background run.
     """
     try:
@@ -635,7 +635,7 @@ def _submit_ingestion_run(
 
 
 def _ingestion_run_status_response(run_id: str, row: IngestionRunRow | None) -> dict[str, object]:
-    """Shape one run row (or its absence) as the single five-key `get_ingestion_status` payload."""
+    """Shape one run row (or its absence) as the single five-key `get-ingestion-status` payload."""
     if row is None:
         return IngestionRunStatusResponse(
             run_id=run_id, status="unknown", stage=None, result=None, error=None
@@ -649,7 +649,7 @@ def _ingestion_run_status_response(run_id: str, row: IngestionRunRow | None) -> 
     ).model_dump()
 
 
-@_gated_tool("start_ingestion", _COMPLIANCE_OFFICER_GATE)
+@_gated_tool("start-ingestion", _COMPLIANCE_OFFICER_GATE)
 def start_ingestion(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
@@ -657,10 +657,10 @@ def start_ingestion(  # noqa: D417  # `environment` is injected by the server an
 ) -> dict[str, object] | str:
     """Start ingesting one EU regulation by CELEX identifier and return at once.
 
-    Takes the inputs of `ingest_regulation` and runs the same fast pre-flight checks synchronously,
+    Takes the inputs of `ingest-regulation` and runs the same fast pre-flight checks synchronously,
     but does not wait for the multi-minute pipeline (ingestion, extraction, derivation, merge): it
     records the run, starts it on a background thread and returns immediately. Poll
-    `get_ingestion_status` with the returned `run_id` for the live stage and the final result.
+    `get-ingestion-status` with the returned `run_id` for the live stage and the final result.
     Requires the ComplianceOfficer role (skipped only under the local-test bypass).
 
     Args:
@@ -675,17 +675,17 @@ def start_ingestion(  # noqa: D417  # `environment` is injected by the server an
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller is not authenticated or lacks the ComplianceOfficer role.
-        - Any pre-flight failure `ingest_regulation` reports: `celex` already ingested, `short_name`
+        - Any pre-flight failure `ingest-regulation` reports: `celex` already ingested, `short_name`
           claimed by a different CELEX, `celex` not found on Cellar/ELI, LLM Interface unhealthy,
           the service configuration incomplete, or the policy graph database unreachable.
         - A run for the same `short_name` is already in progress, or too many runs are in flight.
         - The run could not be recorded, or the run store is unavailable.
-        - A failure inside the pipeline itself is not reported by this call; `get_ingestion_status`
+        - A failure inside the pipeline itself is not reported by this call; `get-ingestion-status`
           reports it later.
 
     Side Effects:
         Creates an ingestion-run record, reserves a run slot and starts a background thread. The
-        thread then runs the pipeline exactly as `ingest_regulation` does (graph writes,
+        thread then runs the pipeline exactly as `ingest-regulation` does (graph writes,
         `trigger='async_ingest'` audit rows) and records the run's terminal outcome.
         A caller refused by the role gate gets the unchanged `error: ` string and one
         best-effort `access.gate` audit row for this operation; no row is written for a caller
@@ -705,7 +705,7 @@ def start_ingestion(  # noqa: D417  # `environment` is injected by the server an
             return incomplete
         # `_run_mcp_action` always binds a run_id before calling this closure, so
         # `current_run_id()` is never `None` here -- the `""` fallback only satisfies the
-        # type checker, as in `ingest_regulation`. This is the id the row, the live-stage
+        # type checker, as in `ingest-regulation`. This is the id the row, the live-stage
         # registry, the pipeline's log lines and the worker's log lines all share.
         run_id = current_run_id() or ""
         return _submit_ingestion_run(
@@ -717,28 +717,28 @@ def start_ingestion(  # noqa: D417  # `environment` is injected by the server an
             environment=environment,
         )
 
-    return _run_mcp_action("start_ingestion", _body)
+    return _run_mcp_action("start-ingestion", _body)
 
 
-@_gated_tool("get_ingestion_status", _COMPLIANCE_OFFICER_GATE)
+@_gated_tool("get-ingestion-status", _COMPLIANCE_OFFICER_GATE)
 def get_ingestion_status(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     run_id: Annotated[str, Field(min_length=1, max_length=64)],
 ) -> dict[str, object] | str:
-    """Report the progress and final result of a `start_ingestion` run.
+    """Report the progress and final result of a `start-ingestion` run.
 
     Requires the ComplianceOfficer role (skipped only under the local-test bypass), checked before
     any lookup.
 
     Args:
-        run_id: The `run_id` returned by `start_ingestion`, 1-64 characters.
+        run_id: The `run_id` returned by `start-ingestion`, 1-64 characters.
 
     Returns:
         One fixed shape for every outcome: `run_id`; `status` (`running`, `succeeded`, `failed`, or
         `unknown` for an id that was never submitted); `stage` (the stage a running run is
         executing, when known, else `None`); `result` (on success, the same summary
-        `ingest_regulation` returns); and `error` (on failure, the `error: ...` text
-        `ingest_regulation` would have returned).
+        `ingest-regulation` returns); and `error` (on failure, the `error: ...` text
+        `ingest-regulation` would have returned).
 
     Errors (returned as a string beginning `error: `, never raised):
         - The caller is not authenticated or lacks the ComplianceOfficer role.
@@ -765,7 +765,7 @@ def get_ingestion_status(  # noqa: D417  # `environment` is injected by the serv
             row = _reconcile_orphaned_run(store, row)
         return _ingestion_run_status_response(run_id, row)
 
-    return _run_mcp_action("get_ingestion_status", _body)
+    return _run_mcp_action("get-ingestion-status", _body)
 
 
 def _run_audited_change_check(
@@ -775,7 +775,7 @@ def _run_audited_change_check(
     *,
     environment: GateEnvironment,
 ) -> dict[str, object] | str:
-    """Run the `check_regulations` sweep with the caller as audit actor.
+    """Run the `check-regulations` sweep with the caller as audit actor.
 
     Args:
         config: Resolved service configuration.
@@ -815,7 +815,7 @@ def _run_audited_change_check(
     return _to_change_check_response(result).model_dump()
 
 
-@_gated_tool("check_regulations", _COMPLIANCE_OFFICER_GATE)
+@_gated_tool("check-regulations", _COMPLIANCE_OFFICER_GATE)
 def check_regulations(environment: GateEnvironment) -> dict[str, object] | str:
     """Sweep every tracked regulation for detected amendments and re-ingest any found.
 
@@ -858,12 +858,12 @@ def check_regulations(environment: GateEnvironment) -> dict[str, object] | str:
         # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
         # calling this closure, so `current_run_id()` is never actually `None`
         # here -- the `""` fallback only satisfies the type checker's narrowing,
-        # mirroring `ingest_regulation`'s own identical idiom.
+        # mirroring `ingest-regulation`'s own identical idiom.
         return _run_audited_change_check(
             config, actor, current_run_id() or "", environment=environment
         )
 
-    return _run_mcp_action("check_regulations", _body)
+    return _run_mcp_action("check-regulations", _body)
 
 
 # `celex` is a plain node PROPERTY on `RegulatoryInstrument`, never its node id
@@ -877,7 +877,7 @@ _INGESTION_STATUS_QUERY = (
 )
 
 
-@_gated_tool("check_instrument_ingestion_status", _PLAIN_READ_GATE)
+@_gated_tool("check-instrument-ingestion-status", _PLAIN_READ_GATE)
 def check_instrument_ingestion_status(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
     celex_ids: Annotated[
@@ -895,7 +895,7 @@ def check_instrument_ingestion_status(  # noqa: D417  # `environment` is injecte
 
     Args:
         celex_ids: 1 to 25 CELEX ids, each exactly 10 characters matching the CELEX pattern used by
-            `ingest_regulation`. A violation is rejected before the tool runs. Duplicates collapse
+            `ingest-regulation`. A violation is rejected before the tool runs. Duplicates collapse
             to a
             single entry in the result.
 
@@ -941,7 +941,7 @@ def check_instrument_ingestion_status(  # noqa: D417  # `environment` is injecte
             }
         }
 
-    return _run_mcp_action("check_instrument_ingestion_status", _body)
+    return _run_mcp_action("check-instrument-ingestion-status", _body)
 
 
 def register_ingestion_tools(

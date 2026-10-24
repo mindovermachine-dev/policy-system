@@ -25,7 +25,7 @@ class IngestionRunRow:
         actor_subject: Subject of the principal that submitted the run.
         actor_issuer: Issuer of that principal.
         status: `running` until exactly one terminal write flips it to `succeeded` or `failed`.
-        result: The success dict `ingest_regulation` would have returned; set only when
+        result: The success dict `ingest-regulation` would have returned; set only when
             `status == "succeeded"`, otherwise `None`.
         error: Sanitized `error:` text; set only when `status == "failed"`, otherwise `None`.
         submitted_at: When the run was accepted.

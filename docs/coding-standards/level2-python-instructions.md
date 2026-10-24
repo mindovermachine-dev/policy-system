@@ -173,9 +173,10 @@ def apply_discount(total: Decimal, rate: Decimal) -> Decimal:
 
 ### MCP Interface Patterns
 
-- **Delegate, don't reimplement**: an MCP tool function is a thin wrapper over existing engine logic — e.g. `cypher_tools.py`'s `cypher` tool calls `ps_service.query_engine.execute_cypher_query` in-process rather than reimplementing query execution or the write-clause guard, which live only in `ps_service.query_engine.cypher_query`. Validation and guards live in exactly one place; the MCP layer never duplicates them.
+- **Delegate, don't reimplement**: an MCP tool function is a thin wrapper over existing engine logic — e.g. `cypher_tools.py`'s `run-cypher` tool calls `ps_service.query_engine.execute_cypher_query` in-process rather than reimplementing query execution or the write-clause guard, which live only in `ps_service.query_engine.cypher_query`. Validation and guards live in exactly one place; the MCP layer never duplicates them.
 - **Errors are return values, not exceptions**: a tool function catches failures from its delegate and returns an `error: ...` string/JSON payload rather than raising — propagate the delegate's *result-shaped* error verbatim (e.g. a Cypher syntax error), but sanitize anything lower-level (driver internals, connection details, file paths) before it crosses the MCP boundary. Differs from ps-service's domain-specific-exception pattern and ps-cli's `PsCliError` pattern: the MCP protocol conveys failure through the result payload, not a raised exception.
 - **Tool docstrings are client-facing**: a `@server.tool()` function's docstring is read by the calling LLM client to decide how and when to invoke the tool — it is tool-usage guidance (expected input shape, return shape, what triggers the error case), not an internal implementation note for other developers.
+- **Tool names follow one convention**: lower-kebab-case, at least two words, verb-first, with the verb taken from the documented set in the container architecture's "Tool naming convention" table (`docs/architecture/ps-service-container-architecture.md`, MCP Interface). `test_tool_naming_convention.py` enforces it on every registered tool.
 
 ### LLM Interface Patterns
 

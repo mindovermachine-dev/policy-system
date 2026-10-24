@@ -1,4 +1,4 @@
-"""Preview and approval for obligation `unmerge`, plus `check-cleanup-approval`.
+"""Preview and approval for obligation `unmerge-entities`, plus `check-cleanup-approval`.
 
 The preview shows the node and edges to recreate and the survivor edges that stay, and the
 approval is bound to the merge and the state; conflicts are explained and yield no approval;
@@ -96,7 +96,7 @@ def test_a_clean_unmerge_creates_an_approval_bound_to_the_merge_and_the_state() 
 
     row = store.get_by_id(approval.pending_approval_id)
     assert row is not None
-    assert row.tool_name == "unmerge"
+    assert row.tool_name == "unmerge-entities"
     assert row.normalized_args == {
         "merged_id": OBL_ABSORBED,
         "merge_approval_id": "merge-approval-1",

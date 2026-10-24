@@ -1,4 +1,4 @@
-"""Tests for the `ComplianceOfficer` authz gate on the `check_regulations` MCP
+"""Tests for the `ComplianceOfficer` authz gate on the `check-regulations` MCP
 tool: a caller who is only `AuthenticatedUser`,
 or who holds `SystemAdmin`/`SystemOwner` without an explicit `ComplianceOfficer`
 grant, is denied -- no implicit hierarchy override -- and a
@@ -12,11 +12,11 @@ copies of those files' own helpers.
 
 Every test here binds a real, non-bypass `AccessToken` (`_verified_actor`), so
 `config.is_local_test_bypass_active` is `False` and the new
-declarative role gate (`tool_gates`) in `check_regulations`'s body
+declarative role gate (`tool_gates`) in `check-regulations`'s body
 actually runs -- distinct from every test in `test_check_regulations_tool.py`,
 which drives the tool entirely under the local-test bypass and needs no
 change here (that file has no real-bearer-token test at all, unlike
-`ingest_regulation`'s/`restore_instrument`'s own tool test files).
+`ingest-regulation`'s/`restore-instrument`'s own tool test files).
 
 `build_fake_change_check_dependencies` is imported from `tests/api/_fakes.py`,
 the same shared fixture `test_check_regulations_tool.py`'s own happy path
@@ -108,7 +108,7 @@ def _seeded_store() -> FakeAccessRoleStore:
 
 
 def _call_check_regulations() -> CallToolResult:
-    result = asyncio.run(_server().call_tool("check_regulations", {}))
+    result = asyncio.run(_server().call_tool("check-regulations", {}))
     assert isinstance(result, CallToolResult)
     return result
 

@@ -1,4 +1,4 @@
--- Ingestion Runs component baseline (issue #194): one row per start_ingestion
+-- Ingestion Runs component baseline (issue #194): one row per start-ingestion
 -- submission, recording the run's status and, once finished, its result or
 -- its sanitized error text. The permanent who-did-what record lives in
 -- audit_events (audit component), not here.
@@ -8,7 +8,7 @@
 -- ps_service.persistence.migration_runner).
 --
 -- run_id is supplied by the application (the uuid4 bind_run_context binds for
--- the submitting start_ingestion call), never defaulted here, so one id
+-- the submitting start-ingestion call), never defaulted here, so one id
 -- correlates log entries, the live-stage registry, audit_events and this row.
 -- Every query this component issues is a primary-key lookup or update, so no
 -- secondary index is created.

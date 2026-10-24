@@ -14,10 +14,10 @@ entities separate or merging them. This replaces ps-cli's `near-misses list`/
 reachable by any MCP-capable client, with no locally-installed, signed
 ps-cli binary required.
 
-**Scope covered so far:** listing unresolved reviews (`near_misses_list`),
+**Scope covered so far:** listing unresolved reviews (`list-near-misses`),
 resolving one with `decision="keep-separate"`, and resolving one with
-`decision="merge"` (`near_misses_resolve`), then following the merge's passkey
-approval (`near_misses_check_approval`). A merge is the Graph Cleanup Capability
+`decision="merge"` (`resolve-near-miss`), then following the merge's passkey
+approval (`check-near-miss-approval`). A merge is the Graph Cleanup Capability
 merge: the tool returns a preview and an approval link, and a Compliance
 Officer signs it with a passkey. This skill's own job is to make sure the user
 has seen and understood what the merge does, and that it needs the
@@ -42,8 +42,8 @@ Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
 the connector the Policy System Plugin declares, pointing at a hosted PS
 Service. Claude lists it as `plugin:ps-plugin:ps-mcp`. Any other name is not
 a PS Service connector. A connector that is present
-under the right name but does not expose both a `near_misses_list` tool
-and a `near_misses_resolve` tool is **not** a PS Service connector either,
+under the right name but does not expose both a `list-near-misses` tool
+and a `resolve-near-miss` tool is **not** a PS Service connector either,
 whatever it is named — report it as unreachable (see the error-state
 table under Process) rather than proceeding against it. From here on,
 "the PS Service connector" means the `ps-mcp` connector.
@@ -78,7 +78,7 @@ Read the rows with `ps-list-audit-events`.
   preview and a pending passkey approval (`pending_approval_id`,
   `approval_url`, `expires_at`). Only when a Compliance Officer opens the link
   and signs with a passkey does the merge run. Never present the merge as
-  done before `near_misses_check_approval` reports it signed.
+  done before `check-near-miss-approval` reports it signed.
 - State what the merge does, in these terms, before proposing it: the
   Capability with the earlier `created_at` survives (a missing one counts
   earliest, a tie goes to the incoming node). The other is deleted and a
@@ -88,8 +88,8 @@ Read the rows with `ps-list-audit-events`.
   review record is deleted. For a `Role` review the merge is the Role merge
   instead: the absorbed Role's Obligations move to the survivor, the absorbed
   Role is deleted behind a `MergedRole` marker, no Policy is involved (never
-  set `acknowledge_governance_change`), and `unmerge` reverses it. The merge is one all-or-nothing write and can be
-  reversed afterwards with the `unmerge` tool (see `ps-graph-cleanup`), which
+  set `acknowledge_governance_change`), and `unmerge-entities` reverses it. The merge is one all-or-nothing write and can be
+  reversed afterwards with the `unmerge-entities` tool (see `ps-graph-cleanup`), which
   does not restore the review record.
 - A Capability has at most one governing Policy. When exactly one of the two
   is governed the preview shows `policy_case` 2 and the survivor ends up
@@ -109,7 +109,7 @@ Read the rows with `ps-list-audit-events`.
 
 ### Listing reviews
 
-1. **Call the tool.** Invoke `near_misses_list` (no arguments) on the PS
+1. **Call the tool.** Invoke `list-near-misses` (no arguments) on the PS
    Service connector selected at On Load. This is a read-only call.
 2. **Report the result**, distinguishing every non-success outcome into one
    of the following named states — never collapsed into a generic
@@ -145,7 +145,7 @@ Read the rows with `ps-list-audit-events`.
    list first if the user hasn't named one and doesn't already know it),
    and that they want `decision="keep-separate"`. Never infer the `id` or
    default the decision.
-2. **Call the tool.** Invoke `near_misses_resolve` with `review_id` and
+2. **Call the tool.** Invoke `resolve-near-miss` with `review_id` and
    `decision="keep-separate"` on the same PS Service connector.
 3. **Report the result**, distinguishing every non-success outcome into one
    of the following named states — never collapsed into a generic
@@ -174,7 +174,7 @@ Read the rows with `ps-list-audit-events`.
    list first if the user hasn't named one and doesn't already know it),
    and that they want `decision="merge"` specifically. Never infer the `id`
    or default the decision.
-3. **Call the tool.** Invoke `near_misses_resolve` with `review_id` and
+3. **Call the tool.** Invoke `resolve-near-miss` with `review_id` and
    `decision="merge"` on the same PS Service connector. Leave
    `acknowledge_governance_change` unset on the first call.
 4. **Show the preview.** A successful response is
@@ -188,11 +188,11 @@ Read the rows with `ps-list-audit-events`.
    officer whether they accept the change, and only on an explicit yes repeat
    the call with `acknowledge_governance_change=true`.
 5. **Follow the approval.** When the user says they have signed, call
-   `near_misses_check_approval` with the `pending_approval_id` and report
+   `check-near-miss-approval` with the `pending_approval_id` and report
    `status` (`pending`, `expired` or `signed`). Once `signed`, `winner_id` and
    `loser_id` name the survivor and the absorbed Capability; a non-null `error` means the
    signature was valid but the merge was not carried out and nothing changed.
-   Never retry silently; a new `near_misses_resolve` call creates a new
+   Never retry silently; a new `resolve-near-miss` call creates a new
    approval.
 6. **Report the result**, distinguishing every non-success outcome into one
    of the following named states — never collapsed into a generic
@@ -224,7 +224,7 @@ Read the rows with `ps-list-audit-events`.
 - Never omit a returned error — surface it plainly rather than treating a
   failed call as an empty list.
 - A merge changes the graph only when a Compliance Officer signs its passkey
-  approval. Never describe it as done before `near_misses_check_approval`
+  approval. Never describe it as done before `check-near-miss-approval`
   reports it signed, never set `acknowledge_governance_change` without the
   officer's explicit acceptance, and never offer the merge to a caller who
   lacks the `ComplianceOfficer` role.

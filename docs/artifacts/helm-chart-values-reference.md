@@ -107,7 +107,7 @@ helm install policy-system ./charts/policy-system \
 Without `psService.ollamaHostGatewayIP` set, PS Service cannot reach Ollama. `/ready` still
 reports `"status": "ready"` — readiness depends on FalkorDB, PS state Postgres and the startup graph replay, not on the LLM provider — but an authenticated call lists
 `llm_interface` under `unhealthy_dependencies`, and `ps-cli ingest document` and the
-`ingest_regulation`, `start_ingestion` and `check_regulations` tools stop at their pre-flight check with
+`ingest-regulation`, `start-ingestion` and `check-regulations` tools stop at their pre-flight check with
 `LLM Interface is unavailable.`. See
 [Azure values](#azure-values) for the same verification step.
 
@@ -198,7 +198,7 @@ curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://<hostname>:30443/ready
 # values and `helm upgrade`; the restarted pod re-probes at startup.
 ```
 
-`ps-cli ingest document` and the `ingest_regulation`, `start_ingestion` and `check_regulations`
+`ps-cli ingest document` and the `ingest-regulation`, `start-ingestion` and `check-regulations`
 MCP tools run the same check as a pre-flight and stop with `LLM Interface is unavailable.`
 while `llm_interface` is listed.
 

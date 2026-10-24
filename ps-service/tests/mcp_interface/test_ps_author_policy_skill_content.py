@@ -14,16 +14,16 @@ pure content assertion, a structural/content lint) and asserts:
   `propose-policy`, `approve-policy`, `reject-policy`,
   `revert-policy-to-draft` (the "never calling it itself").
 - Every one of the 9 tool names this skill actually calls (the
-  skill's tool table minus the four forbidden ones: `cypher`, `create-policy-draft`,
+  skill's tool table minus the four forbidden ones: `run-cypher`, `create-policy-draft`,
   `update-policy-draft`, `get-policy`, `add-standard-to-draft`,
   `update-standard-draft`, `add-control-to-draft`, `update-control-draft`,
-  `domain_concepts`) appears at least once in the document body.
+  `get-domain-concepts`) appears at least once in the document body.
 - Every named-exception error-message substring from the
   assembled Guardrails table appears somewhere in the Guardrails/Process
   text -- catching silent drift if a future `errors.py`/`mcp_server.py`
   message changes without this skill's table being updated. Each substring
   asserted here was itself re-verified against the real source
-  (`ps_service.policy_lifecycle.errors`, the `cypher` tool's own docstring)
+  (`ps_service.policy_lifecycle.errors`, the `run-cypher` tool's own docstring)
   while writing this file, not copied from a paraphrase uncritically.
 """
 
@@ -68,7 +68,7 @@ _FORBIDDEN_TOOL_NAMES: tuple[str, ...] = (
 
 # The skill's tool table, minus the four forbidden tools above.
 _CALLED_TOOL_NAMES: tuple[str, ...] = (
-    "cypher",
+    "run-cypher",
     "create-policy-draft",
     "update-policy-draft",
     "get-policy",
@@ -268,4 +268,4 @@ def test_issue_200_on_load_makes_no_domain_concepts_fetch() -> None:
     _frontmatter, body = _split_frontmatter(text)
     on_load = " ".join(_section_text(body, "## On Load").split())
 
-    assert "call the `domain_concepts` tool" not in on_load
+    assert "call the `get-domain-concepts` tool" not in on_load

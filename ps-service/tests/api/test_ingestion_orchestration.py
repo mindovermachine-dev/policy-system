@@ -1006,7 +1006,7 @@ def test_resolve_via_cellar_returns_catalog_entry_with_derived_short_name_and_ba
 
 def test_resolve_via_cellar_uses_caller_supplied_short_name_verbatim_when_given() -> None:
     """When a caller supplies `short_name`
-    explicitly (the MCP `ingest_regulation` path), it is used as given and
+    explicitly (the MCP `ingest-regulation` path), it is used as given and
     `_derive_short_name` is never reached -- proven by passing a value that
     does not match what `_derive_short_name` would have derived from this
     fixture's own title.

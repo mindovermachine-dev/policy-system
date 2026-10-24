@@ -2468,7 +2468,7 @@ def test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path() -> None
 def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Through the real composition root: both the `cypher` tool and
+    """Through the real composition root: both the `run-cypher` tool and
     the `psdomain://concepts` resource are reachable over the mounted transport
     in the same session — composing the fact in one test, not two disconnected
     ones (mirrors the established convention).
@@ -2500,7 +2500,7 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": {"name": "cypher", "arguments": {"query": "MATCH (n) RETURN n.id"}},
+                "params": {"name": "run-cypher", "arguments": {"query": "MATCH (n) RETURN n.id"}},
             },
             headers={"Accept": _JSON_RPC_ACCEPT, "mcp-session-id": session_id},
         )
@@ -2564,7 +2564,7 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_logs_no_princ
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": {"name": "cypher", "arguments": {"query": "MATCH (n) RETURN n.id"}},
+                "params": {"name": "run-cypher", "arguments": {"query": "MATCH (n) RETURN n.id"}},
             },
             headers={"Accept": _JSON_RPC_ACCEPT, "mcp-session-id": session_id},
         )

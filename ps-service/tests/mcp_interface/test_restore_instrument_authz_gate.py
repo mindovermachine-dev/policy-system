@@ -1,4 +1,4 @@
-"""Tests for the `ComplianceOfficer` authz gate on the `restore_instrument` MCP
+"""Tests for the `ComplianceOfficer` authz gate on the `restore-instrument` MCP
 tool: a caller who is only `AuthenticatedUser`,
 or who holds `SystemAdmin`/`SystemOwner` without an explicit `ComplianceOfficer`
 grant, is denied -- no implicit hierarchy override, is denied; a
@@ -11,7 +11,7 @@ exactly: `_verified_actor`/`_fake_store_factory`/`FakeAccessRoleStore`/
 
 Every test here binds a real, non-bypass `AccessToken` (`_verified_actor`), so
 `config.is_local_test_bypass_active` is `False` and the new
-declarative role gate (`tool_gates`) in `restore_instrument`'s body
+declarative role gate (`tool_gates`) in `restore-instrument`'s body
 actually runs -- distinct from every test in `test_restore_instrument_tool.py`,
 which drives the tool under the local-test bypass (or, for its own real-token
 test, now seeds a `ComplianceOfficer` grant via `_grant_compliance_officer`)
@@ -25,7 +25,7 @@ never silently drift from that file's own restore-artifact fixtures.
 `build_default_restore_from_catalog_dependencies`'s DI seam is narrowed
 so `restore` is always the real, shipped `restore_instrument` -- this file's own denial/
 outage tests never even reach `build_default_restore_from_catalog_dependencies()` at all
-(the authz gate in `mcp_server.py`'s `restore_instrument` tool body returns before that call
+(the authz gate in `mcp_server.py`'s `restore-instrument` tool body returns before that call
 is ever made), so they need no restore-dependency wiring whatsoever; only the one success
 test still needs the real restore path, via the same `_use_fake_restore_infra`
 `test_restore_instrument_tool.py`'s own happy-path tests use -- its `open_db` default
@@ -131,7 +131,7 @@ def _seeded_store() -> FakeAccessRoleStore:
 
 def _call_restore_instrument() -> CallToolResult:
     result = asyncio.run(
-        _server().call_tool("restore_instrument", {"instrument_id": _INSTRUMENT_ID})
+        _server().call_tool("restore-instrument", {"instrument_id": _INSTRUMENT_ID})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -148,7 +148,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     (never elevated) gets the fixed access-denied message, and no restore
     dependency is ever wired up at all -- the role gate denies before
     `build_default_restore_from_catalog_dependencies()` is ever called
-    (confirmed by reading `restore_instrument`'s own body), so this test
+    (confirmed by reading `restore-instrument`'s own body), so this test
     needs no restore-dependency wiring whatsoever.
     """
     configure()

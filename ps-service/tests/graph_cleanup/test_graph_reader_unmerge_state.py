@@ -1,4 +1,4 @@
-"""Reader for capability `unmerge`: live state around a marker.
+"""Reader for capability `unmerge-entities`: live state around a marker.
 
 Pure reads with literal parameterised queries; a driver failure is a generic error.
 """

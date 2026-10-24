@@ -1,6 +1,6 @@
-"""Tests for the registered `check_regulations` MCP tool.
+"""Tests for the registered `check-regulations` MCP tool.
 
-The happy-path sweep: `check_regulations` (zero parameters
+The happy-path sweep: `check-regulations` (zero parameters
 -- there is no format-validation surface for this tool, stated
 explicitly here so its absence isn't mistaken for a gap) runs the
 LLM-Interface-health preflight check, then delegates in-process to
@@ -10,13 +10,13 @@ wrapper, returning
 
 The remaining sanitisation rows for this tool: the
 LLM-Interface-unhealthy preflight check (proving it fires for this specific
-tool, not just `ingest_regulation`), the graph-unavailable sanitiser around
+tool, not just `ingest-regulation`), the graph-unavailable sanitiser around
 `dependencies.open_single_tenant` (new production code:
-`_sanitize_change_check_graph_opens`, mirroring `ingest_regulation`'s own
+`_sanitize_change_check_graph_opens`, mirroring `ingest-regulation`'s own
 `_sanitize_pipeline_graph_opens` shape and reusing the same generic
 `_sanitize_graph_open` per-opener wrapper -- not reinvented), and
 `_run_mcp_action`'s own residual unexpected-exception safety net, proven here specifically for
-`check_regulations` via a fake `dependencies.read_tracked_instruments` raising something
+`check-regulations` via a fake `dependencies.read_tracked_instruments` raising something
 unclassified.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
@@ -28,7 +28,7 @@ fixture already used by the REST-side `run_change_check_sweep` tests
 not reinvented. No single existing REST-side
 test scripts all six outcome buckets in one sweep, so this file's one test
 assembles that scenario itself, from the same fixture, to prove
-`check_regulations` reports every bucket verbatim.
+`check-regulations` reports every bucket verbatim.
 
 `pytest-asyncio` is not installed; this file drives the tool with a bare
 `asyncio.run(server.call_tool(...))`, exactly like `test_cypher_tool.py`/
@@ -82,7 +82,7 @@ class NationalTranspositionNotSupportedError(Exception):
 
 
 def _call_check_regulations() -> CallToolResult:
-    result = asyncio.run(_server().call_tool("check_regulations", {}))
+    result = asyncio.run(_server().call_tool("check-regulations", {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -96,7 +96,7 @@ def _text(result: CallToolResult) -> str:
 def test_happy_path_sweep_reports_all_six_outcome_buckets_and_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """One `check_regulations` call, scripting all six outcome buckets in a
+    """One `check-regulations` call, scripting all six outcome buckets in a
     single sweep: `current`, `poll_failed`, `not_configured`,
     `amendment_reingested`, `skipped`, `reingest_failed`. Asserts the
     returned dict's `instruments` list carries all six verbatim, plus the
@@ -239,7 +239,7 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_and_logs_no_principal(
     mcp_lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "check_regulations"
+        if line.get("component") == "mcp_interface" and line.get("action") == "check-regulations"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert all(line["run_id"] for line in mcp_lines)
@@ -255,11 +255,11 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """Preflight: when `dependency_health.is_healthy(LLM_INTERFACE)` is
-    `False`, `check_regulations` fails fast with the exact `handlers.py:72`
+    `False`, `check-regulations` fails fast with the exact `handlers.py:72`
     message, before any graph is opened or the sweep is run -- and the
     failure is still logged, with no caller identity. Mirrors
     `test_ingest_regulation_tool.py`'s identically-named test for this same
-    preflight branch, proven here specifically for `check_regulations`.
+    preflight branch, proven here specifically for `check-regulations`.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -280,7 +280,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "check_regulations"
+        if line.get("component") == "mcp_interface" and line.get("action") == "check-regulations"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     assert all("principal" not in line for line in lines)
@@ -292,7 +292,7 @@ def test_graph_unavailable_returns_named_error_when_single_tenant_graph_open_fai
     """`run_change_check_sweep` calls
     `dependencies.open_single_tenant` directly, with no try/except of its
     own -- a generic exception from that opener must sanitise to the same
-    fixed message `_resolve_graph`/`ingest_regulation` already use, never
+    fixed message `_resolve_graph`/`ingest-regulation` already use, never
     leaking host/port/driver detail, via the new
     `_sanitize_change_check_graph_opens` wrapper (reusing the existing
     generic `_sanitize_graph_open` per-opener helper, not reinventing it).
@@ -326,14 +326,14 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """The audit wrapper's residual safety net: an
-    exception `check_regulations`'s own body does not itself sanitise (here,
+    exception `check-regulations`'s own body does not itself sanitise (here,
     `dependencies.read_tracked_instruments` raising something unclassified,
     with the single-tenant graph already successfully opened) is caught by
     `_run_mcp_action`'s residual safety net -- returned as the fixed,
     generic message (never the raw exception text), with the scrubbed message and exception type
     logged server-side only. Mirrors
     `test_ingest_regulation_tool.py`'s identically-named test, proven here
-    specifically for `check_regulations`.
+    specifically for `check-regulations`.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -359,7 +359,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "check_regulations"
+        if line.get("component") == "mcp_interface" and line.get("action") == "check-regulations"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]

@@ -689,7 +689,7 @@ class CellarResolution:
     """A CELEX resolved via Cellar/ELI, plus its fetch-once adapter.
 
     Public because both ingestion entry points (``routes.create_ingestion`` and the
-    ``ingest_regulation`` MCP tool) receive it from :func:`resolve_ingestion_entry`.
+    ``ingest-regulation`` MCP tool) receive it from :func:`resolve_ingestion_entry`.
 
     Attributes:
         entry: The ``CatalogEntry`` carrying the CELEX, the fetched title and version, and the
@@ -803,7 +803,7 @@ def resolve_ingestion_entry(
 ) -> CellarResolution:
     """Resolve one ingestion request's identity -- the single shared entry-point function.
 
-    Called by both ``routes.create_ingestion`` and the ``ingest_regulation`` MCP
+    Called by both ``routes.create_ingestion`` and the ``ingest-regulation`` MCP
     tool, so both entry points reach identical outcomes.
     Identity is decided by the live graph and Cellar -- never by the curated
     catalog. Checks run in order, graph first so a request that is doomed by the
@@ -1666,7 +1666,7 @@ def run_audited_catalog_ingestion(
 ) -> IngestionOutcome:
     """Resolve and run one synchronous catalog ingestion between its two audit rows.
 
-    The shared orchestration of ``POST /ingestions`` and the ``ingest_regulation`` MCP tool.
+    The shared orchestration of ``POST /ingestions`` and the ``ingest-regulation`` MCP tool.
     An ``ingestion_run.submit`` opening row (``applied``, ``status=started``,
     ``trigger='sync_ingest'``) is written FIRST, before the identity check, and is
     fail-closed: if it cannot be written nothing runs and ``AuditTrailUnavailableError``

@@ -19,7 +19,7 @@ the Compliance Officer to either skip the exercise or do it by hand.
 confirms them before proceeding, produces a tiered candidate list from
 general model knowledge only, cross-checks each candidate's determinable
 CELEX against the compliance graph's ingestion status via
-`check_instrument_ingestion_status`, and brackets the delivered candidate
+`check-instrument-ingestion-status`, and brackets the delivered candidate
 list with a prominent non-authoritative/incomplete/not-a-substitute
 disclaimer. Any internal or model-call failure during assessment
 generation that isn't already covered by the connector-unreachable
@@ -41,12 +41,12 @@ Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
 the connector the Policy System Plugin declares, pointing at a hosted PS
 Service. Claude lists it as `plugin:ps-plugin:ps-mcp`. Any other name is not
 a PS Service connector. A connector that is present
-under the right name but does not expose a `check_instrument_ingestion_status`
+under the right name but does not expose a `check-instrument-ingestion-status`
 tool is **not** a PS Service connector either, whatever it is named — report
 it as unreachable rather than proceeding against it. From here on, "the PS
 Service connector" means the `ps-mcp` connector.
 
-`check_instrument_ingestion_status` is the tool this skill uses (Process
+`check-instrument-ingestion-status` is the tool this skill uses (Process
 step 5) to cross-check every candidate's determinable CELEX against the
 compliance graph's ingestion status, once tiering (step 4) has produced the
 candidate list. The interview, confirmation, and tiering steps run entirely
@@ -80,7 +80,7 @@ candidate.
   determinable CELEX is always labelled "not checked — no CELEX" instead.
 - Never abort the whole assessment because the ingestion-status cross-check
   could not be completed — if the PS Service connector is unreachable when
-  step 5 calls `check_instrument_ingestion_status`, report every candidate's
+  step 5 calls `check-instrument-ingestion-status`, report every candidate's
   ingestion-status flag as `unknown` and still produce the rest of the
   artifact in full.
 - If any other internal or model-call failure occurs during assessment
@@ -140,7 +140,7 @@ candidate.
    exists, collect the CELEX identifier of every candidate for which one was
    determined in step 4 (skip only the candidates explicitly marked "CELEX
    not determinable") and make **one batched call** to
-   `check_instrument_ingestion_status` on the PS Service connector selected
+   `check-instrument-ingestion-status` on the PS Service connector selected
    at On Load, passing every collected CELEX id in a single `celex_ids`
    list — never one call per candidate. Merge the tool's returned `statuses`
    value back into the corresponding candidates as an **ingestion-status**
@@ -238,10 +238,10 @@ When the PS Service connector is unreachable at step 5, read `references/example
 - The skill reaches PS Service exclusively through a recognised MCP
   connector — `ps-mcp` — never a
   direct graph connection, a repo-local script, or a spawned external
-  binary. `check_instrument_ingestion_status` (Process step 5) is called
+  binary. `check-instrument-ingestion-status` (Process step 5) is called
   through this same recognised connector, like every other tool call this
   skill makes — never a separate or ad hoc channel.
-- `check_instrument_ingestion_status` requires no elevated `AccessRole`: it
+- `check-instrument-ingestion-status` requires no elevated `AccessRole`: it
   is a plain graph read, exactly like the read-only tools other PS Service
   skills call. This is a deliberate distinction, not an oversight — contrast
   it with `ps-manage-access-roles` and `ps-list-audit-events`, whose tools
@@ -253,7 +253,7 @@ When the PS Service connector is unreachable at step 5, read `references/example
   into anything other than `unknown` for every candidate that had a
   determinable CELEX — the two failure/absence states must stay visually
   distinct, per Process step 5.
-- Never abort the assessment because `check_instrument_ingestion_status`
+- Never abort the assessment because `check-instrument-ingestion-status`
   could not be reached or could not resolve a candidate — always produce
   the rest of the artifact in full, per Process step 5's degraded path.
 - The delivered artifact always brackets its candidate list with the

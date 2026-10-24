@@ -784,7 +784,7 @@ def build_fake_pipeline_dependencies(
 #
 # Every catalog-source ingestion request resolves its CELEX through
 # `resolve_via_cellar` -- there is no curated fast path that skips the network.
-# A test that POSTs `/ingestions` (or calls the `ingest_regulation` MCP tool)
+# A test that POSTs `/ingestions` (or calls the `ingest-regulation` MCP tool)
 # with a fake pipeline and no fetch patch of its own would therefore reach the
 # real Cellar/ELI service. One shared default stub at the fetch boundary, installed
 # by an autouse fixture in each affected conftest, closes that for every file at

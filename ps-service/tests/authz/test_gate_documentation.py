@@ -112,7 +112,7 @@ def test_list_audit_events_tool_docstring_lists_the_new_actions() -> None:
 @pytest.mark.parametrize(
     "tool",
     [
-        near_miss_tools.near_misses_resolve,
+        near_miss_tools.resolve_near_miss,
         policy_transition_tools.approve_policy,
         policy_transition_tools.reject_policy,
     ],

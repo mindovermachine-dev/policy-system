@@ -47,7 +47,7 @@ CLEANUP_TOOLS = frozenset(
         "merge-obligations",
         "merge-roles",
         "release-capability-governance",
-        "unmerge",
+        "unmerge-entities",
         "check-cleanup-approval",
     }
 )
@@ -144,7 +144,7 @@ def test_an_unreachable_graph_never_leaks_internals_from_any_tool(
         "merge-obligations": {"survivor_id": "obl_a", "absorbed_id": "obl_b"},
         "merge-roles": {"survivor_id": "role_a", "absorbed_id": "role_b"},
         "release-capability-governance": {"capability_id": "cap_a"},
-        "unmerge": {"merged_id": "cap_b"},
+        "unmerge-entities": {"merged_id": "cap_b"},
         "check-cleanup-approval": {"pending_approval_id": "unknown"},
     }[name]  # pyright: ignore[reportAssignmentType]  -- values are the per-tool argument dicts
 

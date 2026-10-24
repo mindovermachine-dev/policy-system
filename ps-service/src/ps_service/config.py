@@ -556,7 +556,7 @@ def _parse_graph_drift_check_interval_seconds(raw: str) -> int:
 def _parse_ingestion_runs_max_in_flight(raw: str) -> int:
     """Parse and range-check `PS_INGESTIONRUNS_MAX_IN_FLIGHT`, failing closed on any bad value.
 
-    The most ingestion runs `start_ingestion` lets execute concurrently in this process; a
+    The most ingestion runs `start-ingestion` lets execute concurrently in this process; a
     submission over the cap is rejected with a named rate-limit error. Same validation shape
     as `_parse_query_row_cap` (parse, then positivity check).
     """

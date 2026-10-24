@@ -737,7 +737,7 @@ class RoleUnmergeInputs(BaseModel):
 
 
 class RoleUnmergeState(BaseModel):
-    """The live graph around a merged-away Role, as `unmerge` needs it.
+    """The live graph around a merged-away Role, as `unmerge-entities` needs it.
 
     Attributes:
         absorbed_exists: True when a Role with the absorbed id exists again.
@@ -937,7 +937,7 @@ class CapabilityUnmergeInputs(BaseModel):
 
 
 class CapabilityUnmergeState(BaseModel):
-    """The live graph around a merge's marker, as `unmerge` needs it.
+    """The live graph around a merge's marker, as `unmerge-entities` needs it.
 
     Attributes:
         absorbed_status: Effective status of a Capability that exists under the absorbed id;
@@ -1095,7 +1095,7 @@ class ObligationUnmergeInputs(BaseModel):
 
 
 class ObligationUnmergeState(BaseModel):
-    """The live graph around a deleted Obligation, as `unmerge` needs it.
+    """The live graph around a deleted Obligation, as `unmerge-entities` needs it.
 
     Attributes:
         absorbed_exists: True when the absorbed Obligation exists again.

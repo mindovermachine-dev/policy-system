@@ -39,8 +39,8 @@ Requires:
 Exit codes:
     0   The export succeeded; the written paths are printed.
     1   No embedding model is configured, FalkorDB is unreachable, the instrument still
-        has unresolved near-miss reviews (resolve them with near_misses_list and
-        near_misses_resolve first; the count and review ids go to stderr and nothing is
+        has unresolved near-miss reviews (resolve them with list-near-misses and
+        resolve-near-miss first; the count and review ids go to stderr and nothing is
         written) or the single-tenant graph cannot be read for that check, the audit trail is
         unavailable, the embedding backfill could not be written, the LLM provider
         failed, or the source graphs are not exportable. A message goes to stderr.

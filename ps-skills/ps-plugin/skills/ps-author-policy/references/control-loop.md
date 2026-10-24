@@ -55,7 +55,7 @@ fields={"type": <answer>})`, the only post-creation path to change it.
 4. **Immediate-persist-then-rescore.** After each field is persisted, re-
    read the Control's content properties (`pass_fail_criteria`,
    `execution_method`, `evidence_plan`, `executor_role`, `reviewer_role`,
-   `risk_alignment_rationale`, `implementation_status`) via `cypher` and
+   `risk_alignment_rationale`, `implementation_status`) via `run-cypher` and
    compute `overall_score` per `scoring-model.md` §4
    (`100 * Σ(weight_i * score_i) / 2`) against `control-rubric.md`'s own
    six weights (C-001..C-006) -- never a different rubric's weights, never

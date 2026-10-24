@@ -9,11 +9,11 @@ than a reachable connector reporting a graph-side problem.
 > **Compliance Officer:** Yes, that's correct.
 >
 > **Skill:** _(tiers the same four candidates, then attempts the batched
-> `check_instrument_ingestion_status` call for PSD2, GDPR, and MiCA's
+> `check-instrument-ingestion-status` call for PSD2, GDPR, and MiCA's
 > determinable CELEX ids)_
 >
 > ```text
-> check_instrument_ingestion_status(celex_ids=["32015L2366", "32016R0679", "32023R1114"])
+> check-instrument-ingestion-status(celex_ids=["32015L2366", "32016R0679", "32023R1114"])
 > → connector "ps-mcp" unreachable: connection refused
 > ```
 >

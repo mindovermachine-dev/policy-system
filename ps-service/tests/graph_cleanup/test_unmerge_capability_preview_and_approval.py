@@ -1,4 +1,4 @@
-"""Preview and approval for capability `unmerge`, plus `check-cleanup-approval`.
+"""Preview and approval for capability `unmerge-entities`, plus `check-cleanup-approval`.
 
 The preview lists restored edges and the survivor-added edges that stay, and the approval is bound
 to the merge and the state; conflicts are explained and yield no approval; reconciliation.
@@ -6,6 +6,7 @@ to the merge and the state; conflicts are explained and yield no approval; recon
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,9 @@ from ps_service.graph_cleanup.service import (
     preview_unmerge,
 )
 from ps_service.logging import configure
+from ps_service.passkey_signing.service import (
+    _compute_sign_challenge,  # pyright: ignore[reportPrivateUsage]
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -94,7 +98,7 @@ def test_a_clean_unmerge_creates_an_approval_bound_to_the_merge_and_the_state() 
 
     row = store.get_by_id(approval.pending_approval_id)
     assert row is not None
-    assert row.tool_name == "unmerge"
+    assert row.tool_name == "unmerge-entities"
     assert row.normalized_args == {
         "merged_id": ABSORBED,
         "merge_approval_id": "merge-approval-1",
@@ -171,6 +175,18 @@ def test_a_governance_change_conflict_is_explained_and_creates_no_approval() -> 
         _create(graph, store, audit)
 
     assert approval_row_count(store) == 0
+
+
+def test_the_signing_challenge_is_bound_to_the_unmerge_tool_name() -> None:
+    store = FakeApprovalStore()
+    approval = _create(ScriptedUnmergeGraph(), store, _audit())
+    row = store.get_by_id(approval.pending_approval_id)
+    assert row is not None
+    assert row.tool_name == "unmerge-entities"
+
+    as_another_tool = replace(row, tool_name="merge-capabilities")
+
+    assert _compute_sign_challenge(row) != _compute_sign_challenge(as_another_tool)
 
 
 def test_an_id_with_no_merge_in_the_audit_trail_creates_no_approval() -> None:

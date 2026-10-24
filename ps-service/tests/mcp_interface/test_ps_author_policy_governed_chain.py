@@ -194,13 +194,13 @@ def _call(tool: str, args: dict[str, object]) -> dict[str, object]:
 
 
 def _detect() -> list[list[object]]:
-    """The skill's step 3 detection query, verbatim, through the real `cypher` tool."""
+    """The skill's step 3 detection query, verbatim, through the real `run-cypher` tool."""
     query = (
         f"MATCH (c:Capability {{name: '{_CAP_NAME}'}})-[:GOVERNED_BY]->(p:Policy) "
         "OPTIONAL MATCH (p)-[:SUPERSEDED_BY]->(f:Policy) "
         "RETURN p.id AS policy_id, p.status AS status, f.id AS fork_id, f.status AS fork_status"
     )
-    return cast("list[list[object]]", _call("cypher", {"query": query})["rows"])
+    return cast("list[list[object]]", _call("run-cypher", {"query": query})["rows"])
 
 
 def _seed_approved_prior() -> None:

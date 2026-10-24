@@ -1,7 +1,7 @@
 """The domain-concepts document describes the merge markers that replaced the Capability tombstone.
 
 These are properties of the hand-written document, served verbatim by the
-`psdomain://concepts` resource (the `domain_concepts` tool renders the slim schema from code;
+`psdomain://concepts` resource (the `get-domain-concepts` tool renders the slim schema from code;
 its status and edge assertions live with the schema tests). The prose is hand-written, so it is
 read through `read_domain_concepts()`.
 """
@@ -23,7 +23,7 @@ def _domain_text() -> str:
 
 
 def _tool_text() -> str:
-    outcome = asyncio.run(build_test_server().call_tool("domain_concepts", {}))
+    outcome = asyncio.run(build_test_server().call_tool("get-domain-concepts", {}))
     assert isinstance(outcome, CallToolResult)
     return "".join(c.text for c in outcome.content if isinstance(c, TextContent))
 

@@ -137,7 +137,7 @@ def test_another_actor_or_no_actor_gets_nothing() -> None:
 
 def test_an_unknown_id_and_a_near_miss_row_are_not_found() -> None:
     store = FakeApprovalStore()
-    near_miss = _seed(store, tool_name="near_misses_resolve")
+    near_miss = _seed(store, tool_name="resolve-near-miss")
 
     assert _check(store, near_miss) is None
     assert (
@@ -510,7 +510,7 @@ def test_rows_that_are_not_orphans_never_touch_the_gateway(case: str) -> None:
         ),
         "near-miss": _seed(
             store,
-            tool_name="near_misses_resolve",
+            tool_name="resolve-near-miss",
             signed=True,
             expired_for=RECONCILE_GRACE + timedelta(seconds=5),
         ),

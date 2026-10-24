@@ -1,4 +1,4 @@
-"""`unmerge` of an Obligation writes through the Graph Write Gateway.
+"""`unmerge-entities` of an Obligation writes through the Graph Write Gateway.
 
 One approved unmerge is one gateway group: the deleted Obligation is recreated by an idempotent
 upsert by id with its `HAS`, `SATISFIED_BY` and `REQUIRES` edges, and the

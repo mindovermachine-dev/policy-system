@@ -1,4 +1,4 @@
-"""Audit emission of the `check_regulations` / `POST /change-checks` sweep.
+"""Audit emission of the `check-regulations` / `POST /change-checks` sweep.
 
 Each re-ingest the sweep actually runs is bracketed by an `ingestion_run.submit` opening row
 (fail-closed) and an `ingestion_run.complete` terminal row (best-effort) with

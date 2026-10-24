@@ -79,7 +79,7 @@ from mcp_interface.test_ingest_regulation_tool import (
     _use_real_pipeline_stages,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from mcp_interface.test_near_miss_tools import (
-    _call_near_misses_resolve,  # pyright: ignore[reportPrivateUsage]  -- reuse the near-miss tool test's call helper
+    _call_resolve_near_miss,  # pyright: ignore[reportPrivateUsage]  -- reuse the near-miss tool test's call helper
     _script_keep_separate,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from ps_service.invitations.client import create_invitation
@@ -135,7 +135,7 @@ def test_near_miss_group_keep_separate_audits_near_miss_resolve(
         ("PendingReview",), "review_aaa", {"kind": "Capability"}
     )
 
-    result = _call_near_misses_resolve("review_aaa", "keep-separate")
+    result = _call_resolve_near_miss("review_aaa", "keep-separate")
 
     assert json.loads(_text(result))["decision"] == "keep-separate"
     assert [row.action for row in audit_store.rows] == ["near_miss.resolve"]
@@ -171,7 +171,7 @@ def test_cypher_group_cypher_audits_query_cypher(
     _install_graph(monkeypatch, handle)
     _override(monkeypatch, audit_store_factory=audit_store_factory(audit_store))
 
-    result = asyncio.run(_server().call_tool("cypher", {"query": "MATCH (n) RETURN n.id"}))
+    result = asyncio.run(_server().call_tool("run-cypher", {"query": "MATCH (n) RETURN n.id"}))
 
     assert isinstance(result, CallToolResult)
     assert json.loads(_text(result))["row_count"] == 1

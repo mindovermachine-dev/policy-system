@@ -220,7 +220,7 @@ class ExportUnresolvedNearMissesError(ApiError):
     instrument's `{short}_baseline` graph. Review decisions live outside the exported graphs, so
     exporting now would publish nodes that were never reviewed. The message names no single kind,
     because a review of any registered kind can refuse the export. The caller resolves the reviews
-    (`near_misses_list`, `near_misses_resolve`) and exports again. Handled as HTTP 409; `str(exc)`
+    (`list-near-misses`, `resolve-near-miss`) and exports again. Handled as HTTP 409; `str(exc)`
     is the full message, safe to surface verbatim, and is the one text the maintainer script
     also prints.
 
@@ -242,7 +242,7 @@ class ExportUnresolvedNearMissesError(ApiError):
         super().__init__(
             f"cannot export {instrument_id!r}: {len(review_ids)} unresolved near-miss {noun} "
             f"{verb} entities of this instrument ({', '.join(review_ids)}). "
-            "Resolve them (near_misses_list, near_misses_resolve) and export again."
+            "Resolve them (list-near-misses, resolve-near-miss) and export again."
         )
 
     @property
@@ -402,7 +402,7 @@ class CelexAlreadyIngestedError(ApiError):
     """A CELEX is already present in the live graph.
 
     Raised by `ingestion_orchestration.resolve_ingestion_entry` before any pipeline stage runs.
-    It is shared by `POST /ingestions` and the `ingest_regulation` MCP tool, so both entry points
+    It is shared by `POST /ingestions` and the `ingest-regulation` MCP tool, so both entry points
     reject a re-ingest of an already ingested CELEX (under any `short_name`, including the same
     one) with byte-identical semantics. The message names only the CELEX and the `short_name` it
     is already ingested under. Handled as HTTP 409; `str(exc)` is domain-level and surfaced
@@ -416,7 +416,7 @@ class ShortNameCollisionError(ApiError):
     Raised by `ingestion_orchestration.resolve_ingestion_entry` before any pipeline stage runs.
     The check reads only the live graph (`ingestion_orchestration.check_short_name_collision`): a
     different CELEX already recorded under this `short_name`, compared case-insensitively. The
-    curated catalog is never consulted. Shared by `POST /ingestions` and the `ingest_regulation`
+    curated catalog is never consulted. Shared by `POST /ingestions` and the `ingest-regulation`
     MCP tool, so both entry points reject a cross-instrument collision with byte-identical
     semantics. Handled as HTTP 409; `str(exc)` is domain-level and surfaced verbatim.
     """

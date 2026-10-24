@@ -39,9 +39,9 @@ def test_skill_names_the_connector_and_calls_domain_concepts_before_cypher() -> 
     text = _text()
 
     assert "ps-mcp" in text
-    assert "domain_concepts" in text
-    assert "cypher" in text
-    assert text.index("domain_concepts") < text.index("Call the `cypher` tool")
+    assert "get-domain-concepts" in text
+    assert "run-cypher" in text
+    assert text.index("get-domain-concepts") < text.index("Call the `run-cypher` tool")
 
 
 def test_skill_queries_live_graph_and_never_a_static_catalog() -> None:
@@ -196,7 +196,7 @@ def test_query_rejection_redacts_connection_details_and_never_prints_a_stack_tra
 def test_connector_with_cypher_but_no_domain_concepts_is_not_ps_service() -> None:
     text = _text()
 
-    assert "does not expose both `domain_concepts` and `cypher` is not PS Service" in text
+    assert "does not expose both `get-domain-concepts` and `run-cypher` is not PS Service" in text
 
 
 _README = _REPO / "ps-skills" / "readme.md"

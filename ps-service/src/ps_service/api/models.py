@@ -155,12 +155,19 @@ class IngestionAcceptedResponse(BaseModel):
     stages: list[StageOutcome]
 
 
-class IngestionStatusResponse(BaseModel):
+class IngestionProgressResponse(BaseModel):
     """Response body for ``GET /ingestions/{run_id}``: a best-effort live-progress read.
 
     Always returned with HTTP 200, including for an unknown, finished or not-yet-started
     ``run_id``. It observes the in-flight stage registry and is not authoritative resource
     retrieval, so there is no 404 case.
+
+    It differs from :class:`IngestionRunStatusResponse` because the two read different
+    sources for different callers. This model reads the in-process stage registry of a
+    synchronous run, is open to any authenticated caller, and so carries only ``run_id`` and
+    ``stage``. The MCP model reads the durable run row of a background run and is limited to
+    ``ComplianceOfficer``. One shared shape would either expose ``result`` and ``error`` to
+    every authenticated caller or add a ``status`` that the stage registry cannot know.
 
     Attributes:
         run_id: The queried run id; non-empty.
@@ -175,10 +182,10 @@ class IngestionStatusResponse(BaseModel):
 
 
 class StartIngestionResponse(BaseModel):
-    """Success payload of the `start_ingestion` tool.
+    """Success payload of the `start-ingestion` tool.
 
     Attributes:
-        run_id: Identifier of the background ingestion run, to pass to `get_ingestion_status`.
+        run_id: Identifier of the background ingestion run, to pass to `get-ingestion-status`.
         status: Always ``"running"``.
     """
 
@@ -189,15 +196,20 @@ class StartIngestionResponse(BaseModel):
 
 
 class IngestionRunStatusResponse(BaseModel):
-    """Payload of the `get_ingestion_status` tool: one fixed five-key shape for every status.
+    """Payload of the `get-ingestion-status` tool: one fixed five-key shape for every status.
 
     Every field is always present, ``None`` included.
+
+    It differs from :class:`IngestionProgressResponse` because it reads the durable run row
+    of a background run and is limited to ``ComplianceOfficer``, so it may carry ``result`` and
+    ``error``. The REST progress read serves any authenticated caller from the in-process
+    stage registry of a synchronous run and cannot know ``status``, ``result`` or ``error``.
 
     Attributes:
         run_id: The queried run id.
         status: ``"unknown"`` (no such run), ``"running"``, ``"succeeded"`` or ``"failed"``.
         stage: Stage the run is executing now; ``None`` unless it is running.
-        result: The success payload that `ingest_regulation` returns; ``None`` unless the run
+        result: The success payload that `ingest-regulation` returns; ``None`` unless the run
             succeeded.
         error: Sanitised ``error:`` text of a failed run; ``None`` unless the run failed.
     """
@@ -589,7 +601,7 @@ class ResolveReviewResponse(BaseModel):
 class PendingApprovalStatusResponse(BaseModel):
     """Response body for `GET /near-misses/approvals/{pending_approval_id}`.
 
-    It has the same fields as the `near_misses_check_approval` tool's response, because both
+    It has the same fields as the `check-near-miss-approval` tool's response, because both
     surfaces report the same graph-cleanup `merge-capabilities` approval through one mapper.
 
     Attributes:

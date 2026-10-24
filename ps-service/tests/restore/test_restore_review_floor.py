@@ -2,7 +2,7 @@
 
 The real `restore_instrument` runs through the gateway rig over three incoming Capabilities
 scoring 0.4, exactly 0.5 and 0.6 against Capabilities already held (`_review_floor_fixtures`),
-at a merge threshold of 0.9. What the operator sees is read back the way `near_misses_list` and
+at a merge threshold of 0.9. What the operator sees is read back the way `list-near-misses` and
 the export gate read it: `list_pending_reviews` and `unresolved_near_miss_review_ids`.
 """
 

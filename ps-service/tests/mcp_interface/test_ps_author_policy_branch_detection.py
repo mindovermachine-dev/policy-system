@@ -3,7 +3,7 @@
 Proves the tool-call SEQUENCE that `ps-skills/ps-plugin/skills/
 ps-author-policy/SKILL.md`'s Process section documents (branch detection:
 not-found / fresh / resume / fork / disagreement) actually works end to end
-against the real `cypher`/`create-policy-draft`/`get-policy` MCP tools --
+against the real `run-cypher`/`create-policy-draft`/`get-policy` MCP tools --
 "red" here means proving this sequence, not that the tools themselves don't
 exist yet (they already do). Every scenario drives the real
 tool functions directly (never the SKILL.md prose, which pytest cannot
@@ -13,7 +13,7 @@ the scenario descriptions, including the 6th (disagreement) scenario.
 
 Fake graph: a `_HybridGraph`, combining `test_cypher_tool.py`'s
 `_FakeGraphHandle` per-call result/error
-FIFO-queue scripting for the freehand `cypher` tool with
+FIFO-queue scripting for the freehand `run-cypher` tool with
 `test_policy_lifecycle_tool_calls.py`'s `_FakeGraph` literal-query-substring
 dispatch for the write-side content-CRUD tools -- extended here with one
 additional literal-dispatch branch for the Policy-tree read
@@ -126,7 +126,7 @@ class _FakeQueryResult:
     """Satisfies `GraphQueryResult` structurally with scripted values.
 
     Two-field shape (`header` + `result_set`), per Appendix A's note: the
-    `cypher` tool path needs `header` to build its `columns` response; the
+    `run-cypher` tool path needs `header` to build its `columns` response; the
     write-tool path never reads it (`header=[]` is a harmless default).
     """
 
@@ -179,7 +179,7 @@ class _HybridGraph:
 
     Combines `test_cypher_tool.py`'s `_FakeGraphHandle` per-call
     result/error scripting (generalized to a FIFO queue -- the disagreement
-    scenario needs four distinct scripted `cypher` results in one test) with
+    scenario needs four distinct scripted `run-cypher` results in one test) with
     `test_policy_lifecycle_tool_calls.py`'s `_FakeGraph` literal-query dispatch
     for the write-side content-CRUD tools. One instance serves both call
     shapes because both connect through the same single
@@ -269,7 +269,7 @@ class _HybridGraph:
             rows: list[object] = [[self._existing[0], self._existing[1]]] if self._existing else []
             return _FakeQueryResult(result_set=rows)
         if q.strip().upper().startswith(("MATCH", "RETURN")) and self._cypher_results:
-            # The skill's own freehand `cypher`-tool call (branch-detection
+            # The skill's own freehand `run-cypher`-tool call (branch-detection
             # existence/GOVERNED_BY reads) -- dequeue the next scripted
             # outcome.
             self.cypher_queries.append(q)
@@ -378,7 +378,7 @@ def _text(result: CallToolResult) -> str:
 
 
 def _call_cypher(query: str) -> CallToolResult:
-    result = asyncio.run(_server().call_tool("cypher", {"query": query}))
+    result = asyncio.run(_server().call_tool("run-cypher", {"query": query}))
     assert isinstance(result, CallToolResult)
     return result
 

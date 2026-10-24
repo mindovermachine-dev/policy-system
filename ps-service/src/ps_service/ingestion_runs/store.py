@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 _COMPONENT = "ingestion_runs"
 _TRIGGER: IngestionTrigger = "async_ingest"
-"""Every row of this store is a `start_ingestion` run; sync and sweep runs have no run row."""
+"""Every row of this store is a `start-ingestion` run; sync and sweep runs have no run row."""
 
 _COLUMNS = (
     "run_id, celex, short_name, actor_subject, actor_issuer, status, result, error, "
@@ -125,7 +125,7 @@ class IngestionRunStore(Protocol):
         Returns `True` only for the one call that flipped the row, and only that call writes the
         `ingestion_run.complete` audit row, in the same transaction. `audit_actor=None` audits
         it under the submitter (the row's own actor); the reconciler passes its sentinel.
-        `error` is the sanitized text kept on the run row for `get_ingestion_status`; the audit
+        `error` is the sanitized text kept on the run row for `get-ingestion-status`; the audit
         row never carries it, only the enumerated `reason_code` (required when `status='failed'`).
 
         Args:

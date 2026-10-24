@@ -1,4 +1,4 @@
-"""Documentation does not say the `domain_concepts`
+"""Documentation does not say the `get-domain-concepts`
 tool returns the same text as the `psdomain://concepts` resource.
 
 The tool renders a slim schema from code; only the RESOURCE is served verbatim.

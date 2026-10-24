@@ -300,14 +300,27 @@
         "required": ["celex_ids"],
         "type": "object"
       },
-      "name": "check_instrument_ingestion_status"
+      "name": "check-instrument-ingestion-status"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "pending_approval_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["pending_approval_id"],
+        "type": "object"
+      },
+      "name": "check-near-miss-approval"
     },
     {
       "inputSchema": {
         "properties": {},
         "type": "object"
       },
-      "name": "check_regulations"
+      "name": "check-regulations"
     },
     {
       "inputSchema": {
@@ -389,25 +402,6 @@
     {
       "inputSchema": {
         "properties": {
-          "query": {
-            "type": "string"
-          }
-        },
-        "required": ["query"],
-        "type": "object"
-      },
-      "name": "cypher"
-    },
-    {
-      "inputSchema": {
-        "properties": {},
-        "type": "object"
-      },
-      "name": "domain_concepts"
-    },
-    {
-      "inputSchema": {
-        "properties": {
           "min_similarity": {
             "anyOf": [
               {
@@ -461,16 +455,10 @@
     },
     {
       "inputSchema": {
-        "properties": {
-          "policy_id": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": ["policy_id"],
+        "properties": {},
         "type": "object"
       },
-      "name": "get-policy"
+      "name": "get-domain-concepts"
     },
     {
       "inputSchema": {
@@ -484,7 +472,20 @@
         "required": ["run_id"],
         "type": "object"
       },
-      "name": "get_ingestion_status"
+      "name": "get-ingestion-status"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "policy_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["policy_id"],
+        "type": "object"
+      },
+      "name": "get-policy"
     },
     {
       "inputSchema": {
@@ -525,7 +526,7 @@
         "required": ["celex", "short_name"],
         "type": "object"
       },
-      "name": "ingest_regulation"
+      "name": "ingest-regulation"
     },
     {
       "inputSchema": {
@@ -674,6 +675,13 @@
     },
     {
       "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list-near-misses"
+    },
+    {
+      "inputSchema": {
         "properties": {
           "absorbed_id": {
             "minLength": 1,
@@ -742,47 +750,6 @@
     {
       "inputSchema": {
         "properties": {
-          "pending_approval_id": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": ["pending_approval_id"],
-        "type": "object"
-      },
-      "name": "near_misses_check_approval"
-    },
-    {
-      "inputSchema": {
-        "properties": {},
-        "type": "object"
-      },
-      "name": "near_misses_list"
-    },
-    {
-      "inputSchema": {
-        "properties": {
-          "acknowledge_governance_change": {
-            "default": false,
-            "type": "boolean"
-          },
-          "decision": {
-            "enum": ["keep-separate", "merge"],
-            "type": "string"
-          },
-          "review_id": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": ["review_id", "decision"],
-        "type": "object"
-      },
-      "name": "near_misses_resolve"
-    },
-    {
-      "inputSchema": {
-        "properties": {
           "policy_id": {
             "minLength": 1,
             "type": "string"
@@ -829,6 +796,27 @@
     {
       "inputSchema": {
         "properties": {
+          "acknowledge_governance_change": {
+            "default": false,
+            "type": "boolean"
+          },
+          "decision": {
+            "enum": ["keep-separate", "merge"],
+            "type": "string"
+          },
+          "review_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["review_id", "decision"],
+        "type": "object"
+      },
+      "name": "resolve-near-miss"
+    },
+    {
+      "inputSchema": {
+        "properties": {
           "instrument_id": {
             "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
             "type": "string"
@@ -837,7 +825,7 @@
         "required": ["instrument_id"],
         "type": "object"
       },
-      "name": "restore_instrument"
+      "name": "restore-instrument"
     },
     {
       "inputSchema": {
@@ -877,6 +865,18 @@
     {
       "inputSchema": {
         "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": ["query"],
+        "type": "object"
+      },
+      "name": "run-cypher"
+    },
+    {
+      "inputSchema": {
+        "properties": {
           "url": {
             "minLength": 1,
             "type": "string"
@@ -904,7 +904,7 @@
         "required": ["celex", "short_name"],
         "type": "object"
       },
-      "name": "start_ingestion"
+      "name": "start-ingestion"
     },
     {
       "inputSchema": {
@@ -917,7 +917,7 @@
         "required": ["merged_id"],
         "type": "object"
       },
-      "name": "unmerge"
+      "name": "unmerge-entities"
     },
     {
       "inputSchema": {
@@ -1705,7 +1705,7 @@
           ],
           "type": "object"
         },
-        "IngestionStatusResponse": {
+        "IngestionProgressResponse": {
           "properties": {
             "run_id": {
               "minLength": 1,
@@ -2764,7 +2764,7 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/IngestionStatusResponse"
+                    "$ref": "#/components/schemas/IngestionProgressResponse"
                   }
                 }
               }

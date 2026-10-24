@@ -1,4 +1,4 @@
-"""Tests for the registered `ingest_regulation` MCP tool .
+"""Tests for the registered `ingest-regulation` MCP tool .
 
 The curated-CELEX happy path: `find_by_celex` resolves a real
 catalog entry, the caller-supplied `short_name` matches the catalog's own
@@ -18,7 +18,7 @@ this tool: `IngestionConfigIncompleteError`, `PipelineStageError`, the
 LLM-Interface-unhealthy preflight check, the graph-unavailable sanitiser
 around each of `run_catalog_ingestion_pipeline`'s three graph-open call
 sites, and `_run_mcp_action`'s own residual unexpected-exception safety net,
-proven here specifically for `ingest_regulation`.
+proven here specifically for `ingest-regulation`.
 
 Auth/audit completeness is proven end to end under a
 *real, verified* bearer token -- not just the local-test-bypass principal
@@ -215,7 +215,7 @@ def _configure_complete_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _call_ingest_regulation(celex: str, short_name: str) -> CallToolResult:
     result = asyncio.run(
-        _server().call_tool("ingest_regulation", {"celex": celex, "short_name": short_name})
+        _server().call_tool("ingest-regulation", {"celex": celex, "short_name": short_name})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -228,7 +228,7 @@ def _text(result: CallToolResult) -> str:
 
 
 # --- the two ways this module supplies pipeline
-# dependencies to the `ingest_regulation` tool, given that
+# dependencies to the `ingest-regulation` tool, given that
 # `build_default_pipeline_dependencies`'s own DI seam is narrowed to
 # `graphs` only -- `PipelineStages`/`PipelineAdapters` are always the real,
 # shipped functions when that factory itself runs unpatched. -----------------
@@ -709,12 +709,12 @@ class _RecordingDomainMappingAdapter:
 
 
 def _never_ingest_internal(*args: object, **kwargs: object) -> object:
-    """`ingest_internal` is never invoked by `ingest_regulation` -- fail loudly if it is."""
+    """`ingest_internal` is never invoked by `ingest-regulation` -- fail loudly if it is."""
     raise AssertionError(f"ingest_internal must not be called (args={args!r}, kwargs={kwargs!r})")
 
 
 def _never_internal_seed_adapter() -> object:
-    """The internal-seed adapter is never used by `ingest_regulation` -- fail loudly if built."""
+    """The internal-seed adapter is never used by `ingest-regulation` -- fail loudly if built."""
     raise AssertionError("the internal-seed adapter must not be built by this tool")
 
 
@@ -1038,7 +1038,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     """A `TestClient` over the real, auth-armed `build_streamable_http_app`.
 
     Mirrors `test_mcp_auth.py::_authenticated_test_client` exactly -- this
-    module's real-token tests drive `ingest_regulation` (not `cypher`) through
+    module's real-token tests drive `ingest-regulation` (not `run-cypher`) through
     the same genuinely auth-enforcing mounted app, never the bypass-shaped
     one every other test in this module builds via a bare
     `server.call_tool`.
@@ -1076,7 +1076,7 @@ def _sse_result_text(response_text: str) -> str:
 def _call_ingest_regulation_over_http(
     client: TestClient, *, token: str, celex: str, short_name: str
 ) -> str:
-    """Drive `ingest_regulation` through the real mounted transport with a
+    """Drive `ingest-regulation` through the real mounted transport with a
     bearer token: `initialize` -> `notifications/initialized` -> `tools/call`,
     the same JSON-RPC sequence `test_mcp_auth.py` already establishes.
     """
@@ -1115,7 +1115,7 @@ def _call_ingest_regulation_over_http(
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "ingest_regulation",
+                "name": "ingest-regulation",
                 "arguments": {"celex": celex, "short_name": short_name},
             },
         },
@@ -1338,7 +1338,7 @@ def test_curated_celex_happy_path_emits_one_started_succeeded_log_pair_with_no_p
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
+        if line.get("component") == "mcp_interface" and line.get("action") == "ingest-regulation"
     ]
     assert [line["outcome"] for line in lines] == ["started", "succeeded"]
     assert all(line["run_id"] for line in lines)
@@ -1463,7 +1463,7 @@ def test_non_curated_celex_repeated_ingestion_with_drifting_titles_resolves_iden
 ) -> None:
     """The caller-supplied `short_name` is used as given, never re-derived from the Cellar title.
 
-    Two sequential `ingest_regulation` calls for the same non-curated CELEX,
+    Two sequential `ingest-regulation` calls for the same non-curated CELEX,
     against a fake Cellar/ELI adapter that returns a *differently-worded*
     title on each call (simulating a re-crawl rendering drift), must both
     resolve to the identical, caller-supplied `short_name` -- the same value
@@ -1577,7 +1577,7 @@ def _parity_fake(scenario: _ParityScenario) -> FakePipeline:
 def test_rest_and_mcp_return_identical_outcomes_for_the_same_request(
     monkeypatch: pytest.MonkeyPatch, scenario_id: str
 ) -> None:
-    """``POST /ingestions`` and the ``ingest_regulation`` MCP tool both
+    """``POST /ingestions`` and the ``ingest-regulation`` MCP tool both
     call ``resolve_ingestion_entry``, so for the same CELEX/short_name and the same graph and
     Cellar state they accept or reject identically -- the MCP ``error: <message>`` string
     equals the REST error body's own message, and an accepted request yields the same
@@ -1754,7 +1754,7 @@ def test_llm_interface_unhealthy_returns_named_error_without_opening_any_graph(
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
+        if line.get("component") == "mcp_interface" and line.get("action") == "ingest-regulation"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     assert all("principal" not in line for line in lines)
@@ -1767,7 +1767,7 @@ def test_graph_unavailable_returns_named_error_when_native_graph_open_fails(
     graphs before `_execute_catalog_stages`/`_run_stage` ever runs, with no
     try/except of its own -- a generic exception from any one of the three
     openers must sanitise to the same fixed message `_resolve_graph` already
-    uses for `cypher`, never leaking host/port/driver detail, and no stage
+    uses for `run-cypher`, never leaking host/port/driver detail, and no stage
     ever runs.
     """
     _configure_complete_llm_env(monkeypatch)
@@ -1858,7 +1858,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     """D-AUDIT-WRAPPER point 4 / D-SANITIZE-UNEXPECTED's last row: an
-    exception `ingest_regulation`'s own body does not itself sanitise (here,
+    exception `ingest-regulation`'s own body does not itself sanitise (here,
     `routes._to_accepted_response` blowing up after a fully successful
     pipeline run) is caught by `_run_mcp_action`'s residual safety net --
     returned as the fixed, generic message (never the raw exception text),
@@ -1890,7 +1890,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
+        if line.get("component") == "mcp_interface" and line.get("action") == "ingest-regulation"
     ]
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
@@ -1967,7 +1967,7 @@ def test_real_verified_token_call_logs_no_principal_and_the_pipeline_gets_the_mc
     mcp_lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
+        if line.get("component") == "mcp_interface" and line.get("action") == "ingest-regulation"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert all("principal" not in line for line in mcp_lines)
@@ -2007,7 +2007,7 @@ def test_local_test_bypass_call_logs_no_principal_and_the_pipeline_gets_the_mcp_
     mcp_lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
+        if line.get("component") == "mcp_interface" and line.get("action") == "ingest-regulation"
     ]
     assert all("principal" not in line for line in mcp_lines)
     assert all(LOCAL_TEST_PRINCIPAL_ID not in json.dumps(line) for line in mcp_lines)
@@ -2059,7 +2059,7 @@ def test_failed_call_under_a_real_verified_token_logs_no_principal(
     mcp_lines = [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "ingest_regulation"
+        if line.get("component") == "mcp_interface" and line.get("action") == "ingest-regulation"
     ]
     assert [line["outcome"] for line in mcp_lines] == ["started", "failed"]
     assert all("principal" not in line for line in mcp_lines)

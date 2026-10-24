@@ -646,7 +646,7 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
 
     # No exception raised during TestClient entry IS the starts-successfully
     # proof (a refused bind would raise here); no credential/header/token of
-    # any kind is passed to `cypher` below.
+    # any kind is passed to `run-cypher` below.
     with TestClient(app):
         result = cypher_tools.cypher(build_production_environment(), "MATCH (n) RETURN n.id")
 

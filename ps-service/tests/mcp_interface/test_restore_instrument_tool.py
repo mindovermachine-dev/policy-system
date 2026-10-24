@@ -1,6 +1,6 @@
-"""Tests for the registered `restore_instrument` MCP tool.
+"""Tests for the registered `restore-instrument` MCP tool.
 
-The happy path: `restore_instrument(instrument_id=...)`
+The happy path: `restore-instrument(instrument_id=...)`
 (`instrument_id` validated at the MCP schema
 layer against `_RESTORE_INSTRUMENT_ID_PATTERN`, at least as strict as
 ps-cli's own `_instrument_id_type` callback) delegates in-process to
@@ -689,7 +689,7 @@ def _text(result: CallToolResult) -> str:
 
 def _call_restore_instrument(instrument_id: str = _INSTRUMENT_ID) -> CallToolResult:
     result = asyncio.run(
-        _server().call_tool("restore_instrument", {"instrument_id": instrument_id})
+        _server().call_tool("restore-instrument", {"instrument_id": instrument_id})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -734,7 +734,7 @@ def _mcp_log_lines(all_lines: list[dict[str, object]]) -> list[dict[str, object]
     return [
         line
         for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "restore_instrument"
+        if line.get("component") == "mcp_interface" and line.get("action") == "restore-instrument"
     ]
 
 
@@ -973,7 +973,7 @@ def test_malformed_instrument_id_is_rejected_at_the_schema_layer_before_the_body
     regex: pydantic-core's regex backend has no look-around support) rejects
     a leading hyphen, a forward slash, and two `".."`-containing values --
     the same cases `test_parser.py`'s own `_instrument_id_type` tests cover
-    -- before `restore_instrument`'s body ever runs (the fetch transport
+    -- before `restore-instrument`'s body ever runs (the fetch transport
     below is never called). A bare in-process `server.call_tool` (this
     module's own convention throughout) propagates that schema rejection as
     a raised `ToolError`, not a returned `CallToolResult(is_error=True)` --
@@ -1018,7 +1018,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
 
     Mirrors `test_get_catalog_listing_tool.py`'s/`test_ingest_regulation_tool
     .py`'s own `_authenticated_test_client` exactly -- this module's
-    real-token tests drive `restore_instrument` (not `cypher`) through the same
+    real-token tests drive `restore-instrument` (not `run-cypher`) through the same
     genuinely auth-enforcing mounted app, never the bypass-shaped one every
     other test in this module builds via a bare `server.call_tool`.
     """
@@ -1053,7 +1053,7 @@ def _sse_result_text(response_text: str) -> str:
 
 
 def _call_restore_instrument_over_http(client: TestClient, *, token: str) -> str:
-    """Drive `restore_instrument` through the real mounted transport with a
+    """Drive `restore-instrument` through the real mounted transport with a
     bearer token: `initialize` -> `notifications/initialized` -> `tools/call`,
     the same JSON-RPC sequence `test_mcp_auth.py` already establishes.
     """
@@ -1095,7 +1095,7 @@ def _call_restore_instrument_over_http(client: TestClient, *, token: str) -> str
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "restore_instrument",
+                "name": "restore-instrument",
                 "arguments": {"instrument_id": _INSTRUMENT_ID},
             },
         },

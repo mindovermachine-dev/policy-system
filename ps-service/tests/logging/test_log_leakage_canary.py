@@ -321,7 +321,7 @@ def test_cypher_with_canary_query_then_no_canary_in_any_sink(
     capfd: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The `cypher` tool's query text and database error text reach no log sink or audit row."""
+    """The `run-cypher` tool's query text and database error text reach no log sink or audit row."""
     caplog.set_level(logging.DEBUG)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     store = InMemoryAuditStore()
@@ -331,7 +331,7 @@ def test_cypher_with_canary_query_then_no_canary_in_any_sink(
 
     result = asyncio.run(
         _server().call_tool(
-            "cypher", {"query": f"MATCH (n) WHERE n.name = '{CANARY_POLICY}' RETURN n"}
+            "run-cypher", {"query": f"MATCH (n) WHERE n.name = '{CANARY_POLICY}' RETURN n"}
         )
     )
 
@@ -368,7 +368,7 @@ def test_mcp_tool_calls_by_a_canary_principal_then_no_canary_in_any_sink(
     capfd: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A verified canary caller's admitted `cypher` call and refused invite are never logged."""
+    """A verified canary caller's admitted `run-cypher` call and refused invite are never logged."""
     caplog.set_level(logging.DEBUG)
     store = InMemoryAuditStore()
     _override(monkeypatch, audit_store_factory=audit_store_factory(store))
@@ -378,7 +378,7 @@ def test_mcp_tool_calls_by_a_canary_principal_then_no_canary_in_any_sink(
 
     with _verified_actor(sub=CANARY_USER):
         admitted = asyncio.run(
-            _server().call_tool("cypher", {"query": "MATCH (n) RETURN count(n) AS c"})
+            _server().call_tool("run-cypher", {"query": "MATCH (n) RETURN count(n) AS c"})
         )
         refused = asyncio.run(_server().call_tool("invite-user", {"email": CANARY_EMAIL}))
 

@@ -1,4 +1,4 @@
-"""`ingest_regulation` writes `ingestion_run.*` audit rows.
+"""`ingest-regulation` writes `ingestion_run.*` audit rows.
 
 The sync MCP tool delegates to `run_audited_catalog_ingestion`; these tests prove the transport
 side: the actor (verified caller or the local-test-bypass sentinel), the bound run id as
