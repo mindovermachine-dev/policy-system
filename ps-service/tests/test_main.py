@@ -30,8 +30,9 @@ import redis.exceptions
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from graph_gateway._fakes import GatewayRig
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
+from graph_gateway.silent_peer import silent_peer
 from mcp.server.auth.provider import AccessToken
 from persistence.provisioned_postgres import Provisioned, provision_graph_log
 from starlette.requests import Request
@@ -1479,7 +1480,9 @@ def test_migration_runner_is_skipped_at_startup_when_postgres_is_not_configured(
         raise AssertionError(message)
 
     # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (case 3)
-    monkeypatch.setattr(main_module, "connect_passkey_signing_postgres_from_config", fail_if_called)
+    monkeypatch.setattr(
+        main_module, "connect_passkey_signing_postgres_for_migrations", fail_if_called
+    )
 
     with TestClient(app):
         pass
@@ -1630,7 +1633,7 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
         raise AssertionError(message)
 
     # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (case 3)
-    monkeypatch.setattr(main_module, "connect_state_postgres_from_config", fail_if_called)
+    monkeypatch.setattr(main_module, "connect_state_postgres_for_migrations", fail_if_called)
     # The autouse stub reports every dependency healthy; restore the real probe for this test.
     monkeypatch.setattr(
         main_module, "check_state_postgres_connectivity", check_state_postgres_connectivity
@@ -1645,6 +1648,72 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
         "unhealthy_dependencies": ["state_postgres"],
         "gated_graphs": [],
     }
+
+
+def test_startup_against_a_state_postgres_that_never_answers_fails_within_the_connect_bound(
+    tmp_path: Path, read_lines: ReadLines
+) -> None:
+    """A silent state Postgres makes startup fail fatally within the connect timeout.
+
+    The failure entry carries the exception class only, never the host or the driver text.
+    """
+    with silent_peer() as peer:
+        config = dataclasses.replace(
+            _complete_config(),
+            logging_dir=tmp_path,
+            state_postgres_host="127.0.0.1",
+            state_postgres_port=peer.port,
+            state_postgres_database="ps_state",
+            state_postgres_user="ps_state",
+            state_postgres_password="unused",
+            state_postgres_connect_timeout_seconds=2,
+        )
+        started = time.monotonic()
+        with pytest.raises(psycopg.OperationalError), TestClient(create_app(config)):
+            pass
+        elapsed = time.monotonic() - started
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    failures = [
+        line
+        for line in read_lines(tmp_path / "ps-service.jsonl")
+        if line.get("component") == "entrypoint" and line.get("outcome") == "failure"
+    ]
+    assert elapsed <= 2 + 3
+    assert len(failures) == 1
+    assert failures[0]["dependency"] == "state_postgres"
+    assert "127.0.0.1" not in str(failures[0])
+
+
+def test_startup_against_a_passkey_signing_postgres_that_never_answers_warns_and_comes_up(
+    tmp_path: Path, read_lines: ReadLines
+) -> None:
+    """A silent passkey Postgres degrades only passkey signing: startup warns and completes."""
+    with silent_peer() as peer:
+        config = dataclasses.replace(
+            _complete_config(),
+            logging_dir=tmp_path,
+            passkey_signing_postgres_host="127.0.0.1",
+            passkey_signing_postgres_port=peer.port,
+            passkey_signing_postgres_database="ps_signing",
+            passkey_signing_postgres_user="ps_signing",
+            passkey_signing_postgres_password="unused",
+            passkey_signing_postgres_connect_timeout_seconds=2,
+        )
+        started = time.monotonic()
+        with TestClient(create_app(config)) as client:
+            ready_after = time.monotonic() - started
+            assert client.get("/health").status_code == 200
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    warnings = [
+        line
+        for line in read_lines(tmp_path / "ps-service.jsonl")
+        if line.get("component") == "entrypoint" and line.get("outcome") == "warning"
+    ]
+    assert ready_after <= 2 * (2 + 2)  # the migration step and the startup probe each wait once
+    assert warnings
+    assert {line["dependency"] for line in warnings} == {"passkey_signing_postgres"}
 
 
 def _config_for_cluster(prov: Provisioned) -> ServiceConfig:
@@ -2480,7 +2549,9 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     """
     fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
 
-    def _stub_connect(host: str, port: int) -> _FakeFalkorDB:
+    def _stub_connect(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
     monkeypatch.setattr(falkordb_client, "connect", _stub_connect)
@@ -2547,7 +2618,9 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_logs_no_princ
 
     fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
 
-    def _stub_connect(host: str, port: int) -> _FakeFalkorDB:
+    def _stub_connect(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
     monkeypatch.setattr(falkordb_client, "connect", _stub_connect)
@@ -3239,7 +3312,7 @@ def test_service_ready_flow_against_real_stores(
     provision_graph_log(provisioned)
     config = _config_for_cluster(provisioned)
     host, port = falkordb_endpoint()
-    db = connect_falkordb(host=host, port=port)
+    db = connect_falkordb(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     name = f"ready_flow_{uuid.uuid4().hex[:10]}"
     store = PsycopgGraphLogStore(config)
     audit_event_id = committed_audit_event(provisioned)

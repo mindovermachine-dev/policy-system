@@ -439,7 +439,7 @@ class PsycopgAccessRoleStore:
                 conn.commit()
         except psycopg.Error as exc:
             raise AccessRoleAssignmentPersistenceError(
-                f"failed to bootstrap the first AccessRole owner: {exc}"
+                "failed to bootstrap the first AccessRole owner"
             ) from exc
         return frozenset({AccessRole.AUTHENTICATED_USER, AccessRole.SYSTEM_OWNER})
 
@@ -471,7 +471,7 @@ class PsycopgAccessRoleStore:
                 records = cur.fetchall()
         except psycopg.Error as exc:
             raise AccessRoleAssignmentPersistenceError(
-                f"failed to look up active AccessRoles for principal: {exc}"
+                "failed to look up active AccessRoles for principal"
             ) from exc
         return frozenset(_row_from_record(record).access_role for record in records)
 
@@ -526,7 +526,7 @@ class PsycopgAccessRoleStore:
                 conn.commit()
         except psycopg.Error as exc:
             raise AccessRoleAssignmentPersistenceError(
-                f"failed to grant AccessRole {access_role.value!r}: {exc}"
+                f"failed to grant AccessRole {access_role.value!r}"
             ) from exc
 
     def revoke(
@@ -585,7 +585,7 @@ class PsycopgAccessRoleStore:
                 conn.commit()
         except psycopg.Error as exc:
             raise AccessRoleAssignmentPersistenceError(
-                f"failed to revoke AccessRole {access_role.value!r}: {exc}"
+                f"failed to revoke AccessRole {access_role.value!r}"
             ) from exc
 
     def _revoke_system_owner(self, *, actor: tuple[str, str], target: tuple[str, str]) -> None:
@@ -651,7 +651,7 @@ class PsycopgAccessRoleStore:
             raise
         except psycopg.Error as exc:
             raise AccessRoleAssignmentPersistenceError(
-                f"failed to revoke AccessRole {AccessRole.SYSTEM_OWNER.value!r}: {exc}"
+                f"failed to revoke AccessRole {AccessRole.SYSTEM_OWNER.value!r}"
             ) from exc
 
     def count_active_system_owners(self) -> int:
@@ -675,7 +675,7 @@ class PsycopgAccessRoleStore:
                 record = cur.fetchone()
         except psycopg.Error as exc:
             raise AccessRoleAssignmentPersistenceError(
-                f"failed to count active SystemOwners: {exc}"
+                "failed to count active SystemOwners"
             ) from exc
         if record is None:  # pragma: no cover - COUNT(*) always yields exactly one row
             message = "COUNT(*) over access_role_assignments unexpectedly returned no row"
@@ -702,7 +702,7 @@ class PsycopgAccessRoleStore:
                 records = cur.fetchall()
         except psycopg.Error as exc:
             raise AccessRoleAssignmentPersistenceError(
-                f"failed to list AccessRole assignments: {exc}"
+                "failed to list AccessRole assignments"
             ) from exc
         return tuple(_row_from_record(record) for record in records)
 

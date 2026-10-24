@@ -14,6 +14,7 @@ Run with `uv run pytest -s -m "falkordb_live or postgres_live" <this file>`.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
 import uuid
@@ -25,13 +26,19 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
 from ps_service.export.models import SerializedGraph
 from ps_service.export.serialize import parse_serialized_graph_json
 from ps_service.graph_gateway.connection import connect, select_graph
+from ps_service.graph_gateway.default_gateway import FalkorDBGraphOpener, FalkorDBKeyPort
 from ps_service.graph_gateway.digest import canonical_digest
-from ps_service.graph_gateway.gateway import DEFAULT_BATCH_SIZE, GatewaySettings, GraphWriteGateway
+from ps_service.graph_gateway.gateway import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_REPLAY_PAGE_SIZE,
+    GatewaySettings,
+    GraphWriteGateway,
+)
 from ps_service.graph_gateway.models import MutationGroup, UpsertEdge, UpsertNode
 from ps_service.graph_gateway.replay_state import read_replay_state
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
@@ -135,7 +142,7 @@ def _statements_in_one_page(primitives: list[Primitive], batch_size: int) -> int
 @pytest.fixture(scope="module")
 def dataset(provisioned_graph_log: Provisioned) -> Iterator[_Dataset]:
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     store = PsycopgGraphLogStore(provisioned_graph_log.state_config())
     graph = f"cra_x10_{uuid.uuid4().hex[:8]}"
     data = parse_serialized_graph_json(_BASELINE.read_bytes())
@@ -305,3 +312,51 @@ def test_a_restart_resumes_an_interrupted_cra_times_ten_replay(dataset: _Dataset
     assert read_replay_state(select_graph(dataset.db, dataset.graph)) is None
     again = dataset.gateway().startup_replay()  # and a clean restart leaves it alone
     assert dataset.graph in again.untouched
+
+
+def test_a_full_replay_page_completes_at_the_default_timeouts(
+    dataset: _Dataset, provisioned_graph_log: Provisioned
+) -> None:
+    dataset.wipe()
+    host, port = falkordb_endpoint()
+    config = dataclasses.replace(
+        provisioned_graph_log.state_config(), falkordb_host=host, falkordb_port=port
+    )
+    assert config.falkordb_connect_timeout_seconds == 5.0
+    assert config.falkordb_socket_timeout_seconds == 30.0
+    assert config.state_postgres_statement_timeout_ms == 30_000
+    assert dataset.head > 4 * DEFAULT_REPLAY_PAGE_SIZE
+    opener = FalkorDBGraphOpener(config)
+    gateway = GraphWriteGateway(
+        log_store=PsycopgGraphLogStore(config),
+        graph_opener=opener,
+        key_port=FalkorDBKeyPort(opener.database),
+        settings=GatewaySettings(),
+    )
+
+    started = time.perf_counter()
+    report = gateway.replay_graph(dataset.graph)
+    replay_seconds = time.perf_counter() - started
+    started = time.perf_counter()
+    digest = canonical_digest(select_graph(opener.database(), dataset.graph))
+    digest_seconds = time.perf_counter() - started
+    staged = f"{dataset.graph}_copy"
+    started = time.perf_counter()
+    FalkorDBKeyPort(opener.database).copy(dataset.graph, staged)
+    copy_seconds = time.perf_counter() - started
+    copy_digest = canonical_digest(select_graph(opener.database(), staged))
+    opener.database().select_graph(staged).delete()
+
+    print(  # noqa: T201 - the measurement is the product of this module
+        f"\n[timeouts] default-timeout replay of {dataset.head} entries in {report.pages} pages "
+        f"{replay_seconds:.1f}s; digest {digest_seconds:.1f}s; GRAPH.COPY {copy_seconds:.2f}s "
+        "(socket 30s)"
+    )
+    assert report.pages >= 5
+    assert report.verified_position == dataset.head
+    assert digest == dataset.original_digest
+    assert copy_digest == dataset.original_digest
+    assert replay_seconds < _BUDGET_SECONDS
+    assert digest_seconds < config.falkordb_socket_timeout_seconds
+    assert copy_seconds < config.falkordb_socket_timeout_seconds
+    assert read_replay_state(select_graph(opener.database(), dataset.graph)) is None

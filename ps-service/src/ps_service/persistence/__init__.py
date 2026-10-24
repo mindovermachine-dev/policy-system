@@ -10,7 +10,11 @@ migration directories and are wired to the runner by the composition root
 
 from __future__ import annotations
 
-from ps_service.persistence.connection import check_connectivity_from_config, connect_from_config
+from ps_service.persistence.connection import (
+    check_connectivity_from_config,
+    connect_for_migrations,
+    connect_from_config,
+)
 from ps_service.persistence.errors import (
     PrivilegedMigrationMissingError,
     StatePostgresConnectionError,
@@ -29,5 +33,6 @@ __all__ = [
     "StatePostgresProvisioningError",
     "apply_pending_migrations",
     "check_connectivity_from_config",
+    "connect_for_migrations",
     "connect_from_config",
 ]

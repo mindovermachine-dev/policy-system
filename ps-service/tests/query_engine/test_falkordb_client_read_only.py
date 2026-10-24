@@ -6,6 +6,9 @@ import ast
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from graph_gateway.driver_connectors import connector_returning
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS
+
 import ps_service.query_engine as query_engine_package
 from ps_service.graph_gateway.read_only import open_read_only_database
 from ps_service.query_engine import falkordb_client
@@ -82,7 +85,12 @@ def test_the_public_names_are_still_there() -> None:
 
 def test_a_selected_graph_sends_only_ro_query_to_the_driver() -> None:
     graph = _Graph()
-    database = open_read_only_database("h", 1, connect=lambda _host, _port: _Database(graph))
+    database = open_read_only_database(
+        "h",
+        1,
+        connect=connector_returning(_Database(graph)),
+        **FALKORDB_TEST_TIMEOUTS,
+    )
 
     falkordb_client.select_graph(database, "policy_system").query("MATCH (n) RETURN n")
 

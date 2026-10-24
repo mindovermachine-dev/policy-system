@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from company_merge._resolution_fixtures import (
     AMENDED_VERSION,
@@ -155,7 +155,7 @@ def amendment_run(
     config = dataclasses.replace(
         provisioned_graph_log.state_config(), falkordb_host=host, falkordb_port=port
     )
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     suffix = uuid.uuid4().hex[:10]
     graph_name = f"resolved_amendment_{suffix}_policy_system"
     graph = select_graph(db, graph_name)

@@ -15,10 +15,12 @@ performs a real TCP and authentication round trip, so `connect_from_config` itse
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
 from typing import TYPE_CHECKING, Protocol, cast
 
 import psycopg
+from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Json
 
 from ps_service.dependency_health import PASSKEY_SIGNING_POSTGRES, mark_healthy, mark_unhealthy
@@ -206,31 +208,101 @@ WHERE id = %(id)s
 """
 
 
-def connect_from_config(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
-    """Open a new connection to the passkey-signing Postgres instance.
+def _conninfo(config: ServiceConfig, connect_timeout_s: float, options: str | None) -> str:
+    return make_conninfo(
+        host=config.passkey_signing_postgres_host,
+        port=config.passkey_signing_postgres_port,
+        dbname=config.passkey_signing_postgres_database,
+        user=config.passkey_signing_postgres_user,
+        password=config.passkey_signing_postgres_password,
+        connect_timeout=max(1, math.ceil(connect_timeout_s)),
+        options=options,
+    )
+
+
+def _connection_conninfo(
+    config: ServiceConfig,
+    *,
+    connect_timeout_s: float | None,
+    statement_timeout_ms: int | None,
+) -> str:
+    """Return the libpq connection string of a request-path connection.
+
+    An explicit bound wins; `None` falls back to the configured value, so the result always
+    carries both a connect timeout and a statement timeout.
+    """
+    connect_timeout = (
+        config.passkey_signing_postgres_connect_timeout_seconds
+        if connect_timeout_s is None
+        else connect_timeout_s
+    )
+    statement_timeout = (
+        config.passkey_signing_postgres_statement_timeout_ms
+        if statement_timeout_ms is None
+        else statement_timeout_ms
+    )
+    return _conninfo(config, connect_timeout, f"-c statement_timeout={statement_timeout}")
+
+
+def connect_from_config(
+    config: ServiceConfig,
+    *,
+    connect_timeout_s: float | None = None,
+    statement_timeout_ms: int | None = None,
+) -> psycopg.Connection[TupleRow]:
+    """Open a new bounded connection to the passkey-signing Postgres instance.
 
     Args:
         config: Service configuration; its `passkey_signing_postgres_*` host, port, database,
-            user and password are used.
+            user, password and default connect and statement timeouts are used.
+        connect_timeout_s: Longest the connection attempt may take, rounded up to whole seconds
+            (libpq's resolution); `None` uses
+            `config.passkey_signing_postgres_connect_timeout_seconds`.
+        statement_timeout_ms: Server-side limit applied to every statement on the connection,
+            passed as a connection option so it costs no round trip; `None` uses
+            `config.passkey_signing_postgres_statement_timeout_ms`.
 
     Returns:
         An open connection. There is no pool: the caller closes it, normally with a `with`
         block.
 
     Raises:
-        psycopg.Error: the connection could not be established (unreachable host, bad
-            credentials); raised unwrapped.
+        psycopg.Error: the connection could not be established within the connect timeout
+            (unreachable host, bad credentials); raised unwrapped.
 
     Side Effects:
         Opens a network connection to Postgres.
     """
     return psycopg.connect(
-        host=config.passkey_signing_postgres_host,
-        port=config.passkey_signing_postgres_port,
-        dbname=config.passkey_signing_postgres_database,
-        user=config.passkey_signing_postgres_user,
-        password=config.passkey_signing_postgres_password,
+        _connection_conninfo(
+            config, connect_timeout_s=connect_timeout_s, statement_timeout_ms=statement_timeout_ms
+        )
     )
+
+
+def _migration_conninfo(config: ServiceConfig) -> str:
+    """Return the libpq connection string of a migration connection: connect bound only."""
+    return _conninfo(config, config.passkey_signing_postgres_connect_timeout_seconds, None)
+
+
+def connect_for_migrations(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
+    """Open a connection for startup migrations: connect timeout, no statement timeout.
+
+    Args:
+        config: Service configuration; its `passkey_signing_postgres_*` coordinates and
+            `passkey_signing_postgres_connect_timeout_seconds` are used.
+
+    Returns:
+        An open connection; the caller closes it, normally with a `with` block.
+
+    Raises:
+        psycopg.Error: the connection could not be established within the connect timeout
+            (unreachable host, bad credentials); raised unwrapped.
+
+    Side Effects:
+        Opens a network connection to Postgres.
+    """
+    return psycopg.connect(_migration_conninfo(config))
 
 
 def check_connectivity_from_config(config: ServiceConfig) -> None:
@@ -249,8 +321,9 @@ def check_connectivity_from_config(config: ServiceConfig) -> None:
 
     Raises:
         PasskeySigningPostgresConnectionError: the instance is configured but unreachable (the
-            connection fails or the `SELECT 1` round trip fails). The message names the host and
-            port and includes the driver error.
+            connection fails or does not complete within the configured connect timeout, or the
+            `SELECT 1` round trip fails or exceeds the configured statement timeout). The
+            message names the host and port and includes the driver error.
 
     Side Effects:
         When configured, opens a connection and runs `SELECT 1`, then records the
@@ -378,9 +451,7 @@ class PsycopgPendingApprovalStore:
                 record = cur.fetchone()
                 conn.commit()
         except psycopg.Error as exc:
-            raise PendingApprovalPersistenceError(
-                f"failed to create a pending approval: {exc}"
-            ) from exc
+            raise PendingApprovalPersistenceError("failed to create a pending approval") from exc
         if record is None:  # pragma: no cover - INSERT...RETURNING always yields exactly one row
             message = "INSERT...RETURNING for pending_approvals unexpectedly returned no row"
             raise PendingApprovalPersistenceError(message)
@@ -408,7 +479,7 @@ class PsycopgPendingApprovalStore:
                 record = cur.fetchone()
         except psycopg.Error as exc:
             raise PendingApprovalPersistenceError(
-                f"failed to look up pending approval {pending_approval_id!r}: {exc}"
+                f"failed to look up pending approval {pending_approval_id!r}"
             ) from exc
         return _row_from_record(record) if record is not None else None
 
@@ -434,7 +505,7 @@ class PsycopgPendingApprovalStore:
                 record = cur.fetchone()
         except psycopg.Error as exc:
             raise PendingApprovalPersistenceError(
-                f"failed to look up a pending approval by code_hash: {exc}"
+                "failed to look up a pending approval by code_hash"
             ) from exc
         return _row_from_record(record) if record is not None else None
 
@@ -466,7 +537,7 @@ class PsycopgPendingApprovalStore:
                 conn.commit()
         except psycopg.Error as exc:
             raise PendingApprovalPersistenceError(
-                f"failed to mark pending approval {pending_approval_id!r} as signed: {exc}"
+                f"failed to mark pending approval {pending_approval_id!r} as signed"
             ) from exc
         return record is not None
 
@@ -497,5 +568,5 @@ class PsycopgPendingApprovalStore:
                 conn.commit()
         except psycopg.Error as exc:
             raise PendingApprovalPersistenceError(
-                f"failed to record outcome for pending approval {pending_approval_id!r}: {exc}"
+                f"failed to record outcome for pending approval {pending_approval_id!r}"
             ) from exc

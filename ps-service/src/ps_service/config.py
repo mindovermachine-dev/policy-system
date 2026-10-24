@@ -31,6 +31,12 @@ _DEFAULT_STATE_POSTGRES_PORT = 5432
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB
 _DEFAULT_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS = 300
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
+_DEFAULT_FALKORDB_CONNECT_TIMEOUT_SECONDS = 5.0
+_DEFAULT_FALKORDB_SOCKET_TIMEOUT_SECONDS = 30.0
+_DEFAULT_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS = 5.0
+_DEFAULT_STATE_POSTGRES_STATEMENT_TIMEOUT_MS = 30000
+_DEFAULT_PASSKEY_SIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS = 5.0
+_DEFAULT_PASSKEY_SIGNING_POSTGRES_STATEMENT_TIMEOUT_MS = 30000
 _DEFAULT_QUERY_ROW_CAP = 1000
 _DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS = 3600
 _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT = 1
@@ -106,6 +112,23 @@ class ServiceConfig:
             (`PS_QUERY_TIMEOUT_MS`); positive, default 5000.
         query_row_cap: Maximum rows one Cypher query returns (`PS_QUERY_ROW_CAP`); positive,
             default 1000.
+        falkordb_connect_timeout_seconds: Longest wait to establish a FalkorDB connection, in
+            seconds (`PS_FALKORDB_CONNECT_TIMEOUT_SECONDS`); positive and finite, default 5.
+        falkordb_socket_timeout_seconds: Longest wait for a FalkorDB reply on an open connection,
+            in seconds (`PS_FALKORDB_SOCKET_TIMEOUT_SECONDS`); positive, finite and greater than
+            `query_timeout_ms` converted to seconds, default 30.
+        state_postgres_connect_timeout_seconds: Longest wait to establish a state Postgres
+            connection, in seconds (`PS_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS`); positive and
+            finite, default 5.
+        state_postgres_statement_timeout_ms: Longest run time of one state Postgres statement on a
+            request-path connection, in milliseconds (`PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS`);
+            positive, default 30000. Startup migrations do not apply it.
+        passkey_signing_postgres_connect_timeout_seconds: Longest wait to establish a passkey
+            signing Postgres connection, in seconds
+            (`PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS`); positive and finite, default 5.
+        passkey_signing_postgres_statement_timeout_ms: Longest run time of one passkey signing
+            Postgres statement, in milliseconds
+            (`PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS`); positive, default 30000.
         graph_drift_check_interval_seconds: Pause between two passes of the graph write
             gateway's drift check (`PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`); zero turns
             the periodic check off, default 3600.
@@ -190,6 +213,16 @@ class ServiceConfig:
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
     query_row_cap: int = _DEFAULT_QUERY_ROW_CAP
+    falkordb_connect_timeout_seconds: float = _DEFAULT_FALKORDB_CONNECT_TIMEOUT_SECONDS
+    falkordb_socket_timeout_seconds: float = _DEFAULT_FALKORDB_SOCKET_TIMEOUT_SECONDS
+    state_postgres_connect_timeout_seconds: float = _DEFAULT_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS
+    state_postgres_statement_timeout_ms: int = _DEFAULT_STATE_POSTGRES_STATEMENT_TIMEOUT_MS
+    passkey_signing_postgres_connect_timeout_seconds: float = (
+        _DEFAULT_PASSKEY_SIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS
+    )
+    passkey_signing_postgres_statement_timeout_ms: int = (
+        _DEFAULT_PASSKEY_SIGNING_POSTGRES_STATEMENT_TIMEOUT_MS
+    )
     graph_drift_check_interval_seconds: int = _DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS
     ingestion_runs_max_in_flight: int = _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT
     auth_issuer: str | None = None
@@ -511,6 +544,137 @@ def _parse_query_timeout_ms(raw: str) -> int:
         message = f"PS_QUERY_TIMEOUT_MS must be positive, got {query_timeout_ms}"
         raise ServiceConfigurationError(message)
     return query_timeout_ms
+
+
+def _parse_positive_seconds(raw: str, *, env_var_name: str) -> float:
+    """Parse a duration in seconds, failing closed on any bad value.
+
+    Args:
+        raw: The raw environment value.
+        env_var_name: Variable name, quoted in the error message.
+
+    Returns:
+        The duration in seconds; always finite and greater than zero.
+
+    Raises:
+        ServiceConfigurationError: The value is not a number, is not finite, or is not positive.
+    """
+    try:
+        seconds = float(raw)
+    except ValueError as exc:
+        message = f"{env_var_name} must be a number of seconds, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        message = f"{env_var_name} must be a positive finite number of seconds, got {raw!r}"
+        raise ServiceConfigurationError(message)
+    return seconds
+
+
+def _parse_positive_milliseconds(raw: str, *, env_var_name: str) -> int:
+    """Parse a duration in whole milliseconds, failing closed on any bad value.
+
+    Args:
+        raw: The raw environment value.
+        env_var_name: Variable name, quoted in the error message.
+
+    Returns:
+        The duration in milliseconds; always greater than zero.
+
+    Raises:
+        ServiceConfigurationError: The value is not an integer or is not positive.
+    """
+    try:
+        milliseconds = int(raw)
+    except ValueError as exc:
+        message = f"{env_var_name} must be an integer number of milliseconds, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if milliseconds <= 0:
+        message = f"{env_var_name} must be positive, got {milliseconds}"
+        raise ServiceConfigurationError(message)
+    return milliseconds
+
+
+def _require_socket_timeout_above_query_timeout(
+    socket_timeout_seconds: float, query_timeout_ms: int
+) -> None:
+    """Reject a FalkorDB socket timeout that would cut off a healthy slow query.
+
+    Args:
+        socket_timeout_seconds: `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS`, in seconds.
+        query_timeout_ms: `PS_QUERY_TIMEOUT_MS`, in milliseconds.
+
+    Raises:
+        ServiceConfigurationError: The socket timeout does not exceed the query timeout.
+    """
+    if socket_timeout_seconds * 1000 <= query_timeout_ms:
+        message = (
+            f"PS_FALKORDB_SOCKET_TIMEOUT_SECONDS ({socket_timeout_seconds} s) must be greater "
+            f"than PS_QUERY_TIMEOUT_MS ({query_timeout_ms} ms)"
+        )
+        raise ServiceConfigurationError(message)
+
+
+@dataclass(frozen=True)
+class _ConnectionBounds:
+    """The six connect, socket and statement timeouts read from the environment."""
+
+    falkordb_connect_timeout_seconds: float
+    falkordb_socket_timeout_seconds: float
+    state_postgres_connect_timeout_seconds: float
+    state_postgres_statement_timeout_ms: int
+    passkey_signing_postgres_connect_timeout_seconds: float
+    passkey_signing_postgres_statement_timeout_ms: int
+
+
+def _load_connection_bounds(*, query_timeout_ms: int) -> _ConnectionBounds:
+    """Read and validate the six connection-bound settings from the environment.
+
+    Args:
+        query_timeout_ms: The validated `PS_QUERY_TIMEOUT_MS`, which the FalkorDB socket timeout
+            must exceed.
+
+    Returns:
+        The validated settings, defaulted where unset.
+
+    Raises:
+        ServiceConfigurationError: A value is invalid, or the socket timeout does not exceed the
+            query timeout.
+    """
+
+    def seconds(name: str, default: float) -> float:
+        return _parse_positive_seconds(os.environ.get(name, str(default)), env_var_name=name)
+
+    def milliseconds(name: str, default: int) -> int:
+        return _parse_positive_milliseconds(os.environ.get(name, str(default)), env_var_name=name)
+
+    bounds = _ConnectionBounds(
+        falkordb_connect_timeout_seconds=seconds(
+            "PS_FALKORDB_CONNECT_TIMEOUT_SECONDS", _DEFAULT_FALKORDB_CONNECT_TIMEOUT_SECONDS
+        ),
+        falkordb_socket_timeout_seconds=seconds(
+            "PS_FALKORDB_SOCKET_TIMEOUT_SECONDS", _DEFAULT_FALKORDB_SOCKET_TIMEOUT_SECONDS
+        ),
+        state_postgres_connect_timeout_seconds=seconds(
+            "PS_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS",
+            _DEFAULT_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS,
+        ),
+        state_postgres_statement_timeout_ms=milliseconds(
+            "PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS",
+            _DEFAULT_STATE_POSTGRES_STATEMENT_TIMEOUT_MS,
+        ),
+        passkey_signing_postgres_connect_timeout_seconds=seconds(
+            "PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS",
+            _DEFAULT_PASSKEY_SIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS,
+        ),
+        passkey_signing_postgres_statement_timeout_ms=milliseconds(
+            "PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS",
+            _DEFAULT_PASSKEY_SIGNING_POSTGRES_STATEMENT_TIMEOUT_MS,
+        ),
+    )
+    _require_socket_timeout_above_query_timeout(
+        bounds.falkordb_socket_timeout_seconds, query_timeout_ms
+    )
+    return bounds
 
 
 def _parse_query_row_cap(raw: str) -> int:
@@ -964,9 +1128,7 @@ def load_config() -> ServiceConfig:
     query_timeout_ms = _parse_query_timeout_ms(
         os.environ.get("PS_QUERY_TIMEOUT_MS", str(_DEFAULT_QUERY_TIMEOUT_MS))
     )
-    query_row_cap = _parse_query_row_cap(
-        os.environ.get("PS_QUERY_ROW_CAP", str(_DEFAULT_QUERY_ROW_CAP))
-    )
+    connection_bounds = _load_connection_bounds(query_timeout_ms=query_timeout_ms)
 
     auth_issuer_raw = os.environ.get("PS_AUTH_ISSUER")
     auth_issuer = (
@@ -1104,7 +1266,21 @@ def load_config() -> ServiceConfig:
         is_local_test_bypass_active=is_local_test_bypass_active,
         max_request_body_bytes=max_request_body_bytes,
         query_timeout_ms=query_timeout_ms,
-        query_row_cap=query_row_cap,
+        query_row_cap=_parse_query_row_cap(
+            os.environ.get("PS_QUERY_ROW_CAP", str(_DEFAULT_QUERY_ROW_CAP))
+        ),
+        falkordb_connect_timeout_seconds=connection_bounds.falkordb_connect_timeout_seconds,
+        falkordb_socket_timeout_seconds=connection_bounds.falkordb_socket_timeout_seconds,
+        state_postgres_connect_timeout_seconds=(
+            connection_bounds.state_postgres_connect_timeout_seconds
+        ),
+        state_postgres_statement_timeout_ms=connection_bounds.state_postgres_statement_timeout_ms,
+        passkey_signing_postgres_connect_timeout_seconds=(
+            connection_bounds.passkey_signing_postgres_connect_timeout_seconds
+        ),
+        passkey_signing_postgres_statement_timeout_ms=(
+            connection_bounds.passkey_signing_postgres_statement_timeout_ms
+        ),
         graph_drift_check_interval_seconds=_parse_graph_drift_check_interval_seconds(
             os.environ.get(
                 "PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS",

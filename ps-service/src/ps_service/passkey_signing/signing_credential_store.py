@@ -287,7 +287,7 @@ class PsycopgSigningCredentialStore:
                 conn.commit()
         except psycopg.Error as exc:
             raise SigningCredentialPersistenceError(
-                f"failed to create a signing credential: {exc}"
+                "failed to create a signing credential"
             ) from exc
         if record is None:  # pragma: no cover - INSERT...RETURNING always yields exactly one row
             message = "INSERT...RETURNING for signing_credentials unexpectedly returned no row"
@@ -329,7 +329,7 @@ class PsycopgSigningCredentialStore:
                 records = cur.fetchall()
         except psycopg.Error as exc:
             raise SigningCredentialPersistenceError(
-                f"failed to look up signing credentials for actor: {exc}"
+                "failed to look up signing credentials for actor"
             ) from exc
         return tuple(_row_from_record(record) for record in records)
 
@@ -377,7 +377,7 @@ class PsycopgSigningCredentialStore:
                 record = cur.fetchone()
         except psycopg.Error as exc:
             raise SigningCredentialPersistenceError(
-                f"failed to look up a signing credential by credential_id: {exc}"
+                "failed to look up a signing credential by credential_id"
             ) from exc
         return _row_from_record(record) if record is not None else None
 
@@ -408,5 +408,5 @@ class PsycopgSigningCredentialStore:
                 conn.commit()
         except psycopg.Error as exc:
             raise SigningCredentialPersistenceError(
-                f"failed to update sign_count for a signing credential: {exc}"
+                "failed to update sign_count for a signing credential"
             ) from exc

@@ -15,28 +15,43 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 import ps_service
+from ps_service.config import ServiceConfig
 from ps_service.dependency_health import FALKORDB, is_healthy
 from ps_service.graph_gateway.connection import (
     GraphConnectivityError,
     check_connectivity,
     connect,
+    connect_from_config,
 )
 
 if TYPE_CHECKING:
     from falkordb import FalkorDB
+    from redis.retry import Retry
 
 _GATEWAY_ROOT = Path(ps_service.__file__).parent / "graph_gateway"
 _PACKAGES_THE_GATEWAY_MUST_NOT_IMPORT = ("ps_service.ingestion", "ps_service.export")
 
 
 class _RecordingClientFactory:
-    """The driver seam: records the host and port the factory hands to the client constructor."""
+    """The driver seam: records the arguments the factory hands to the client constructor."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
+        self.timeouts: list[tuple[float, float]] = []
+        self.retries: list[Retry] = []
 
-    def __call__(self, *, host: str, port: int) -> FalkorDB:
+    def __call__(
+        self,
+        *,
+        host: str,
+        port: int,
+        socket_connect_timeout: float,
+        socket_timeout: float,
+        retry: Retry,
+    ) -> FalkorDB:
         self.calls.append((host, port))
+        self.timeouts.append((socket_connect_timeout, socket_timeout))
+        self.retries.append(retry)
         return cast("FalkorDB", object())
 
 
@@ -53,10 +68,52 @@ class _Probe:
 def test_connect_builds_the_client_with_host_and_port() -> None:
     factory = _RecordingClientFactory()
 
-    client = connect("10.1.2.3", 7001, client_factory=factory)
+    client = connect(
+        "10.1.2.3", 7001, socket_connect_timeout=3.0, socket_timeout=9.0, client_factory=factory
+    )
 
     assert factory.calls == [("10.1.2.3", 7001)]
     assert client is not None
+
+
+def test_connect_hands_both_timeouts_to_the_client_factory() -> None:
+    factory = _RecordingClientFactory()
+
+    connect(
+        "10.1.2.3", 7001, socket_connect_timeout=3.0, socket_timeout=9.0, client_factory=factory
+    )
+
+    assert factory.timeouts == [(3.0, 9.0)]
+
+
+def test_connect_disables_driver_retries_so_one_attempt_is_one_bounded_wait() -> None:
+    factory = _RecordingClientFactory()
+
+    connect(
+        "10.1.2.3", 7001, socket_connect_timeout=3.0, socket_timeout=9.0, client_factory=factory
+    )
+
+    (retry,) = factory.retries
+    assert retry.get_retries() == 0
+
+
+def test_connect_from_config_hands_the_configured_timeouts_to_the_client_factory() -> None:
+    factory = _RecordingClientFactory()
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        falkordb_host="10.9.8.7",
+        falkordb_port=7002,
+        falkordb_connect_timeout_seconds=7.5,
+        falkordb_socket_timeout_seconds=40.0,
+    )
+
+    connect_from_config(config, client_factory=factory)
+
+    assert factory.calls == [("10.9.8.7", 7002)]
+    assert factory.timeouts == [(7.5, 40.0)]
 
 
 def test_check_connectivity_marks_falkordb_healthy_on_success() -> None:

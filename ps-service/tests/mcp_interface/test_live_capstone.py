@@ -34,7 +34,7 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from ps_service.graph_gateway.connection import (
     connect as connect_writable,
@@ -78,13 +78,13 @@ def real_graph() -> Iterator[GraphHandle]:
     """
     graph_name = f"query_live_capstone_{uuid.uuid4().hex[:12]}"
     host, port = falkordb_endpoint()
-    write_db = connect_writable(host=host, port=port)
+    write_db = connect_writable(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     seed = select_writable_graph(write_db, graph_name)
     seed.query(
         "CREATE (:Capability {id: 'cap-1'}), (:Capability {id: 'cap-2'}), (:Role {id: 'r1'})"
     )
     try:
-        yield select_graph(connect(host=host, port=port), graph_name)
+        yield select_graph(connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS), graph_name)
     finally:
         write_db.select_graph(graph_name).delete()
 

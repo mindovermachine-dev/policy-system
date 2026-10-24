@@ -132,7 +132,9 @@ def test_the_production_graph_factory_selects_the_configured_graph_on_the_read_o
             selected.append(name)
             return handle
 
-    def _connect(*, host: str, port: int) -> _Database:
+    def _connect(
+        *, host: str, port: int, socket_connect_timeout: float, socket_timeout: float
+    ) -> _Database:
         connected.append((host, port))
         return _Database()
 

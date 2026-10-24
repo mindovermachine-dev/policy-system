@@ -19,7 +19,7 @@ import pytest
 import redis.exceptions
 
 from graph_gateway._fakes import InMemoryGraphLogStore
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 from ps_service.graph_gateway.gateway import GraphWriteGateway
 from ps_service.graph_gateway.graph_reader import read_nodes
@@ -74,7 +74,7 @@ class _Live:
 @pytest.fixture
 def live() -> Iterator[_Live]:
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     name = f"gateway_live_{uuid.uuid4().hex[:8]}"
     yield _Live(db, name)
     if name in db.list_graphs():

@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 
 import pytest
+from graph_gateway.driver_connectors import connector_returning
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS
 from graph_gateway.read_only_client_checks import (
     EmptyKeyDriverGraph,
     RecordingDriverDatabase,
@@ -42,7 +44,10 @@ def test_the_connection_module_offers_only_the_read_handle() -> None:
 def test_a_query_handle_sends_only_ro_query_to_the_driver() -> None:
     graph = RecordingDriverGraph()
     database = open_read_only_database(
-        "h", 1, connect=lambda _host, _port: RecordingDriverDatabase(graph)
+        "h",
+        1,
+        connect=connector_returning(RecordingDriverDatabase(graph)),
+        **FALKORDB_TEST_TIMEOUTS,
     )
 
     falkordb_connection.graph_query_handle(database, "cra_baseline").query("MATCH (n) RETURN n")
@@ -54,7 +59,7 @@ def test_serialize_graph_reads_a_missing_graph_key_as_the_empty_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     install_driver(monkeypatch, EmptyKeyDriverGraph())
-    database = open_read_only_database("h", 1)
+    database = open_read_only_database("h", 1, **FALKORDB_TEST_TIMEOUTS)
 
     graph = serialize.serialize_graph(
         falkordb_connection.graph_query_handle(database, "cra_native")
@@ -66,7 +71,9 @@ def test_serialize_graph_reads_a_missing_graph_key_as_the_empty_graph(
 @pytest.mark.falkordb_live
 def test_serialize_graph_reads_a_graph_key_that_does_not_exist_as_the_empty_graph_live() -> None:
     config = load_config()
-    database = open_read_only_database(config.falkordb_host, config.falkordb_port)
+    database = open_read_only_database(
+        config.falkordb_host, config.falkordb_port, **FALKORDB_TEST_TIMEOUTS
+    )
     name = f"s3e_never_created_{uuid.uuid4().hex}"
 
     graph = serialize.serialize_graph(falkordb_connection.graph_query_handle(database, name))

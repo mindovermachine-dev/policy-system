@@ -841,6 +841,50 @@ Deleting the key removes the graph and the progress record kept inside it; the l
 touched. If the rebuild fails again at the same position, the log itself or a checkpoint is
 wrong: keep the pod as it is and escalate with the logged position.
 
+### Dependency connection and socket timeouts
+
+PS Service bounds every wait on its three network dependencies, so a dependency that accepts a
+connection and never answers fails fast and visibly instead of hanging a request or the pod.
+Six variables set the bounds. All are optional; an invalid value makes the service refuse to
+start with a `ServiceConfigurationError` that names the variable.
+
+| Variable | Default | Applies to | Constraint |
+| --- | --- | --- | --- |
+| `PS_FALKORDB_CONNECT_TIMEOUT_SECONDS` | 5 | Establishing a FalkorDB connection | Positive number of seconds |
+| `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` | 30 | Waiting for a FalkorDB reply on an open connection | Positive number of seconds, greater than `PS_QUERY_TIMEOUT_MS` (converted to seconds); otherwise refused at start naming both variables |
+| `PS_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS` | 5 | Establishing a connection to the state Postgres (`ps_state`), at startup and per request | Positive number of seconds; libpq enforces a 2 second minimum |
+| `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` | 30000 | One statement on a request-path state Postgres connection (not startup migrations) | Positive integer number of milliseconds |
+| `PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS` | 5 | Establishing a connection to the passkey signing Postgres (`ps_signing`) | Positive number of seconds; libpq enforces a 2 second minimum |
+| `PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS` | 30000 | One statement on a request-path passkey signing Postgres connection | Positive integer number of milliseconds |
+
+The Helm chart does not expose these variables yet, so a deployment that needs a value other than
+the default sets it through the pod environment. The metrics scrape keeps its own fixed bounds
+(2 seconds to connect, 2000 ms per statement) and is not affected.
+
+What an operator sees when a bound is hit:
+
+| Dependency | What happens | Where to look |
+| --- | --- | --- |
+| FalkorDB does not answer | The call fails after the bound, the gateway retries (4 attempts), then the caller gets `GraphUnavailableError`, or the group is reported as committed but not yet applied if it was already logged | `falkordb` in `unhealthy_dependencies`, `/ready` answers `503`; a later successful call makes it healthy again |
+| State Postgres does not answer at startup | The state migration step fails within the connect timeout, which is fatal: the pod exits and restarts | Pod logs and restarts |
+| State Postgres does not answer on a request | The store raises its fixed unavailable error within the connect timeout | `state_postgres` in `unhealthy_dependencies`, `/ready` answers `503` |
+| A state Postgres statement runs past the limit | The server cancels it and the store raises its fixed error, which carries no SQL, host or driver text | `state_postgres` goes unhealthy and heals on the next successful Postgres call (see the note below) |
+| Passkey signing Postgres does not answer | Startup logs a warning and continues; approvals fail with the stores' fixed errors | `passkey_signing_postgres` in `unhealthy_dependencies` |
+
+**Tuning.** Keep `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` above `PS_QUERY_TIMEOUT_MS`: raise both
+together when a legitimately long Cypher query is needed. Raise the socket timeout alone only for a
+very large graph whose copy, digest scan or replay page takes longer than the default (a CRA-sized
+graph takes well under a second to copy, under a second to scan and a few seconds a replay page).
+Raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` if the audit chain check (`verify_chain`, run by the
+`verify-audit-log` tool) or another large scan is cancelled on a large audit table; one bound
+covers all request-path statements, so there is no per-call override.
+
+**A cancelled statement marks the dependency unhealthy.** Dependency health records whether the
+most recent call succeeded. A statement cancelled by the statement timeout therefore turns
+`state_postgres` unhealthy and `/ready` to `503` until the next successful call to the database
+clears it. If the pod has already left rotation and receives no call, restart it (see the
+troubleshooting entry for `/ready` staying 503).
+
 ### FalkorDB graph name
 
 `PS_FALKORDB_GRAPH` names the single-tenant graph that PS Service reads and writes. When it is
@@ -1591,6 +1635,11 @@ decision and not part of this procedure.
 | A restore is reported as committed but not yet applied (`committed_apply_pending` in the audit trail, `RestoreApplyPendingError`), or writes to `policy_system` or to the instrument's `_native`/`_baseline` graph are refused as blocked | The restore is recorded in the graph log, but the swap that makes it visible did not finish (FalkorDB was unreachable, or refused the swap). Until it finishes nothing of the instrument is visible, and the three graphs of the restore refuse further writes with nothing logged. Restore FalkorDB, then restart `ps-service`: startup recovery retries the swap, and finishes all three graphs together as one unit. Restoring the same instrument again is not needed. Last resort, only if the FalkorDB engine cannot perform the swap: rebuild each of the three graphs from its log in ascending graph-name order (the gateway's `replay_graph`); while they are rebuilt one by one a reader can see the three graphs in different states, so do it in a quiet window. The block lifts once every graph is at the head of its log. |
 | `/ready` stays 503 after FalkorDB or PS Postgres failed while the pod was running and then came back | After startup, readiness follows the live dependency health, which only real calls update; a pod that left rotation receives none, so it does not flip back by itself. Restart the `ps-service` pod. |
 | The pod was restarted (or received SIGTERM) while an ingestion started with `start-ingestion` was running, and `get-ingestion-status` still shows `running` | The run record stays `running` until the next `get-ingestion-status` call for it, which marks it `failed` with the message that the run was interrupted before it finished and its outcome is unknown. Start the ingestion again. |
+| Calls fail with `GraphUnavailableError`, or `falkordb` stays in `unhealthy_dependencies` and `/ready` answers 503, while FalkorDB accepts connections but does not answer | A FalkorDB that hangs fails each call after `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` (30 s by default) and the gateway makes four attempts before it reports the graph unavailable. Check the FalkorDB pod (`kubectl logs`, CPU, memory). A graph that is simply large needs a longer socket timeout, which must stay above `PS_QUERY_TIMEOUT_MS`. The service refuses to start if it is not, naming both variables. See [Dependency connection and socket timeouts](#dependency-connection-and-socket-timeouts). |
+| The `ps-service` pod fails to start and restarts, and its logs show the state migration step failing | The state Postgres did not accept a connection within `PS_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS` (5 s by default, 2 s minimum). Startup state migration is fatal by design. Check the `ps-postgres` pod and the Service and NetworkPolicy in front of it. |
+| A request fails with a store's fixed "unavailable" error and `state_postgres` is in `unhealthy_dependencies` | The state Postgres did not answer within the connect timeout, or a statement ran past `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` (30 s by default) and was cancelled. The error text carries no SQL or host by design; the pod log has the error class. A cancelled statement heals on the next successful call. If a legitimate long statement is cancelled, for example `verify-audit-log` on a large audit table, raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS`. |
+| Passkey approvals fail and `passkey_signing_postgres` is in `unhealthy_dependencies`, with only a warning at startup | The passkey signing Postgres did not answer within `PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS` (5 s by default), or a statement ran past `PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS`. Startup continues by design. Check the `ps_signing` database. |
+| The service refuses to start with an error naming `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` and `PS_QUERY_TIMEOUT_MS` | The socket timeout must be greater than the query timeout (in seconds), or a healthy slow query would be cut off on the socket. Raise the socket timeout or lower `PS_QUERY_TIMEOUT_MS`. |
 | Approving a graph cleanup edit (a near-miss merge batch included) fails or never completes (passkey signing) | Passkey signing uses its own database (`ps_signing`). When it is unreachable the signing ceremony cannot run, `passkey_signing_postgres` appears in `unhealthy_dependencies`, readiness is unaffected, and the rest of the system keeps working. Restore the database and request a new approval. |
 | Every request returns 401 although the token is fresh | The identity provider or its key set (JWKS) is unreachable from PS Service, or the token's issuer or audience does not match `PS_AUTH_ISSUER` / `PS_AUTH_AUDIENCE`. Readiness is unaffected. Check `kubectl logs` for the unauthenticated entries and their reason category. |
 | Ingestion fails at the first stage with a Cellar/ELI error | The EU publication service is unreachable or returned an unparseable document. `cellar_eli` can appear in `unhealthy_dependencies`; readiness is unaffected. Retry later. |

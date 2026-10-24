@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from ps_service.company_merge.models import BaselineGraph, BaselineNode
 from ps_service.company_merge.pending_review import choose_survivor, read_review_merge_sides
@@ -52,7 +52,7 @@ def _delete(db: FalkorDB) -> None:
 @pytest.fixture
 def graph() -> Iterator[GraphHandle]:
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     _delete(db)
     handle = select_graph(db, _GRAPH)
     handle.query(

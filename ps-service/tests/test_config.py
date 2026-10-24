@@ -1219,3 +1219,127 @@ def test_load_config_parses_discovery_retry_budget_and_rejects_bad_values(
             ServiceConfigurationError, match="PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS"
         ):
             load_config()
+
+
+_CONNECTION_BOUND_DEFAULTS = [
+    ("PS_FALKORDB_CONNECT_TIMEOUT_SECONDS", "falkordb_connect_timeout_seconds", 5.0),
+    ("PS_FALKORDB_SOCKET_TIMEOUT_SECONDS", "falkordb_socket_timeout_seconds", 30.0),
+    (
+        "PS_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS",
+        "state_postgres_connect_timeout_seconds",
+        5.0,
+    ),
+    ("PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS", "state_postgres_statement_timeout_ms", 30000),
+    (
+        "PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS",
+        "passkey_signing_postgres_connect_timeout_seconds",
+        5.0,
+    ),
+    (
+        "PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS",
+        "passkey_signing_postgres_statement_timeout_ms",
+        30000,
+    ),
+]
+
+_SECONDS_SETTINGS = [entry for entry in _CONNECTION_BOUND_DEFAULTS if not entry[0].endswith("_MS")]
+_MILLISECONDS_SETTINGS = [entry for entry in _CONNECTION_BOUND_DEFAULTS if entry[0].endswith("_MS")]
+
+
+@pytest.mark.parametrize(("variable", "field_name", "default"), _CONNECTION_BOUND_DEFAULTS)
+def test_load_config_defaults_each_connection_bound_when_unset(
+    variable: str, field_name: str, default: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unset connection-bound variable yields its documented default."""
+    monkeypatch.delenv(variable, raising=False)
+
+    assert getattr(load_config(), field_name) == default
+
+
+@pytest.mark.parametrize(("variable", "field_name", "default"), _SECONDS_SETTINGS)
+def test_load_config_honors_a_decimal_seconds_override(
+    variable: str, field_name: str, default: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decimal override of a seconds-valued connection bound takes effect."""
+    del default
+    monkeypatch.setenv(variable, "42.5")
+
+    assert getattr(load_config(), field_name) == 42.5
+
+
+@pytest.mark.parametrize(("variable", "field_name", "default"), _MILLISECONDS_SETTINGS)
+def test_load_config_honors_an_integer_milliseconds_override(
+    variable: str, field_name: str, default: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An integer override of a milliseconds-valued connection bound takes effect."""
+    del default
+    monkeypatch.setenv(variable, "1234")
+
+    assert getattr(load_config(), field_name) == 1234
+
+
+@pytest.mark.parametrize("invalid_value", ["0", "-1", "abc", "", "nan", "inf"])
+@pytest.mark.parametrize(("variable", "field_name", "default"), _CONNECTION_BOUND_DEFAULTS)
+def test_load_config_rejects_an_invalid_connection_bound_naming_the_variable(
+    variable: str,
+    field_name: str,
+    default: float,
+    invalid_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero, negative, non-numeric, empty and non-finite values fail naming the variable."""
+    del field_name, default
+    monkeypatch.setenv(variable, invalid_value)
+
+    with pytest.raises(ServiceConfigurationError, match=variable):
+        load_config()
+
+
+@pytest.mark.parametrize(("variable", "field_name", "default"), _MILLISECONDS_SETTINGS)
+def test_load_config_rejects_a_fractional_milliseconds_value_naming_the_variable(
+    variable: str, field_name: str, default: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A milliseconds-valued bound must be a whole number."""
+    del field_name, default
+    monkeypatch.setenv(variable, "1.5")
+
+    with pytest.raises(ServiceConfigurationError, match=variable):
+        load_config()
+
+
+def test_load_config_rejects_a_socket_timeout_equal_to_the_query_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A socket timeout that does not exceed the query timeout fails naming both variables."""
+    monkeypatch.setenv("PS_FALKORDB_SOCKET_TIMEOUT_SECONDS", "5")
+    monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
+
+    with pytest.raises(ServiceConfigurationError) as excinfo:
+        load_config()
+
+    assert "PS_FALKORDB_SOCKET_TIMEOUT_SECONDS" in str(excinfo.value)
+    assert "PS_QUERY_TIMEOUT_MS" in str(excinfo.value)
+
+
+def test_load_config_accepts_a_socket_timeout_just_above_the_query_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A socket timeout strictly greater than the query timeout loads."""
+    monkeypatch.setenv("PS_FALKORDB_SOCKET_TIMEOUT_SECONDS", "5.001")
+    monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
+
+    assert load_config().falkordb_socket_timeout_seconds == 5.001
+
+
+def test_load_config_rejects_a_raised_query_timeout_above_the_default_socket_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raising the query timeout past the default socket timeout is rejected too."""
+    monkeypatch.setenv("PS_QUERY_TIMEOUT_MS", "60000")
+    monkeypatch.delenv("PS_FALKORDB_SOCKET_TIMEOUT_SECONDS", raising=False)
+
+    with pytest.raises(ServiceConfigurationError) as excinfo:
+        load_config()
+
+    assert "PS_FALKORDB_SOCKET_TIMEOUT_SECONDS" in str(excinfo.value)
+    assert "PS_QUERY_TIMEOUT_MS" in str(excinfo.value)

@@ -19,6 +19,8 @@ import pytest
 import redis.exceptions
 
 from graph_gateway._fakes import Fault, GatewayRig, InMemoryGraph
+from graph_gateway.driver_connectors import connector_returning
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS
 from ps_service.dependency_health import FALKORDB, is_healthy, mark_healthy
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.gateway import GraphWriteGateway
@@ -345,7 +347,10 @@ def test_drift_digest_is_read_with_ro_query_only(logs: _Logs) -> None:
     _submit(rig, "cap-1", checkpoint=True)
     calls: list[str] = []
     database = open_read_only_database(
-        "h", 1, connect=lambda _h, _p: _RecordingDriverDatabase(rig, calls)
+        "h",
+        1,
+        connect=connector_returning(_RecordingDriverDatabase(rig, calls)),
+        **FALKORDB_TEST_TIMEOUTS,
     )
 
     result = _checking_gateway(rig, database.select_graph).check_drift(_GRAPH)

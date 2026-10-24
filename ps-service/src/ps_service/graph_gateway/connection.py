@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Protocol
 from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker; this is the one boundary import
     FalkorDB,
 )
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 from ps_service.graph_gateway.connectivity import (
     ConnectivityProbe,
@@ -65,16 +67,24 @@ class WritableGraph(Protocol):
 
 
 def connect(
-    host: str, port: int, *, client_factory: Callable[..., FalkorDB] = FalkorDB
+    host: str,
+    port: int,
+    *,
+    socket_connect_timeout: float,
+    socket_timeout: float,
+    client_factory: Callable[..., FalkorDB] = FalkorDB,
 ) -> FalkorDB:
-    """Construct a FalkorDB client for `host`/`port`.
+    """Construct a FalkorDB client for `host`/`port` whose every wait is bounded.
 
     Do not call this outside a `dependency_health`-recording boundary
-    (`check_connectivity_from_config`).
+    (`check_connectivity_from_config`). The client never retries inside the driver, so one
+    attempt waits at most one bound; callers that want retries (the graph write gateway) own them.
 
     Args:
         host: FalkorDB server host name or address.
         port: FalkorDB server TCP port.
+        socket_connect_timeout: Longest wait to establish the TCP connection, in seconds.
+        socket_timeout: Longest wait for a reply on an open connection, in seconds.
         client_factory: Constructor of the client; the driver seam for tests.
 
     Returns:
@@ -84,29 +94,50 @@ def connect(
         redis.exceptions.ConnectionError: The server is unreachable. The installed driver issues a
             real round-trip on construction (sentinel detection), so this surfaces here, before
             any probe runs.
+        redis.exceptions.TimeoutError: The server accepted the connection but did not answer
+            within a bound.
 
     Side Effects:
         Opens a network connection to the server.
     """
-    return client_factory(host=host, port=port)
+    return client_factory(
+        host=host,
+        port=port,
+        socket_connect_timeout=socket_connect_timeout,
+        socket_timeout=socket_timeout,
+        retry=Retry(NoBackoff(), 0),
+    )
 
 
-def connect_from_config(config: ServiceConfig) -> FalkorDB:
-    """Build the FalkorDB connection from `config.falkordb_host` / `config.falkordb_port`.
+def connect_from_config(
+    config: ServiceConfig, *, client_factory: Callable[..., FalkorDB] = FalkorDB
+) -> FalkorDB:
+    """Build the FalkorDB connection from the host, port and timeouts in `config`.
 
     Args:
-        config: Service configuration naming the FalkorDB host and port.
+        config: Service configuration naming the FalkorDB host and port and the connect and
+            socket timeouts (`falkordb_connect_timeout_seconds`,
+            `falkordb_socket_timeout_seconds`).
+        client_factory: Constructor of the client; the driver seam for tests.
 
     Returns:
         A connected client (see `connect`).
 
     Raises:
         redis.exceptions.ConnectionError: The server is unreachable.
+        redis.exceptions.TimeoutError: The server accepted the connection but did not answer
+            within a bound.
 
     Side Effects:
         Opens a network connection to the server.
     """
-    return connect(host=config.falkordb_host, port=config.falkordb_port)
+    return connect(
+        host=config.falkordb_host,
+        port=config.falkordb_port,
+        socket_connect_timeout=config.falkordb_connect_timeout_seconds,
+        socket_timeout=config.falkordb_socket_timeout_seconds,
+        client_factory=client_factory,
+    )
 
 
 def check_connectivity_from_config(

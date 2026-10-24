@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_graphs import AUDIT_EVENT_ID, LiveGraph, LiveGraphs
 
 from policy_lifecycle._legacy_reference import legacy_create_policy_draft
@@ -53,7 +53,7 @@ _CAPS = ("cap_live_a", "cap_live_b")
 def live() -> Iterator[LiveGraph]:
     """A throwaway real graph, with the gateway in front of it and three Capabilities."""
     host, port = falkordb_endpoint()
-    graphs = LiveGraphs(connect(host=host, port=port))
+    graphs = LiveGraphs(connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS))
     graph = graphs.new()
     graph.store.audit_rows.add(AUDIT_EVENT_ID)
     for cap_id in (*_CAPS, "cap_live_c"):

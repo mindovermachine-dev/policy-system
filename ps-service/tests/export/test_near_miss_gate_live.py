@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS
 
 from ps_service.config import load_config
 from ps_service.export.falkordb_connection import graph_query_handle
@@ -61,7 +62,9 @@ def test_only_reviews_the_merge_path_would_accept_block_an_export_live() -> None
                 },
             )
 
-        read_only = open_read_only_database(config.falkordb_host, config.falkordb_port)
+        read_only = open_read_only_database(
+            config.falkordb_host, config.falkordb_port, **FALKORDB_TEST_TIMEOUTS
+        )
         blocking = unresolved_near_miss_review_ids(
             graph_query_handle(read_only, baseline_name), select_graph(db, policy_name)
         )
@@ -123,7 +126,9 @@ def test_a_role_review_blocks_an_export_only_over_the_baselines_own_roles_live()
                 },
             )
 
-        read_only = open_read_only_database(config.falkordb_host, config.falkordb_port)
+        read_only = open_read_only_database(
+            config.falkordb_host, config.falkordb_port, **FALKORDB_TEST_TIMEOUTS
+        )
         blocking = unresolved_near_miss_review_ids(
             graph_query_handle(read_only, baseline_name), select_graph(db, policy_name)
         )

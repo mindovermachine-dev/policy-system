@@ -720,7 +720,7 @@ class PsycopgAuditStore:
             raise
         except psycopg.Error as exc:
             mark_unhealthy(STATE_POSTGRES, error=exc)
-            message = f"failed to record standalone audit event {action!r}: {exc}"
+            message = f"failed to record standalone audit event {action!r}"
             raise AuditPersistenceError(message) from exc
         mark_healthy(STATE_POSTGRES)
         return event_id

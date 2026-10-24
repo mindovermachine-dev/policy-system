@@ -109,19 +109,27 @@ class _DriverDatabase:
 
 def test_the_read_only_graph_opener_connects_on_first_use_and_reads_with_ro_query_only() -> None:
     calls: list[str] = []
-    connects: list[tuple[str, int]] = []
+    connects: list[tuple[str, int, float, float]] = []
 
-    def connect(host: str, port: int) -> _DriverDatabase:
-        connects.append((host, port))
+    def connect(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> _DriverDatabase:
+        connects.append((host, port, socket_connect_timeout, socket_timeout))
         return _DriverDatabase(calls)
 
     opener = ReadOnlyGraphOpener(
-        _config(falkordb_host="falkor", falkordb_port=7000), connect=connect
+        _config(
+            falkordb_host="falkor",
+            falkordb_port=7000,
+            falkordb_connect_timeout_seconds=7.5,
+            falkordb_socket_timeout_seconds=40.0,
+        ),
+        connect=connect,
     )
     assert connects == []  # building connects to nothing
 
     opener("compliance").query("MATCH (n) RETURN n")
     opener("compliance").query("MATCH (n) RETURN n")
 
-    assert connects == [("falkor", 7000)]  # one connection, shared
+    assert connects == [("falkor", 7000, 7.5, 40.0)]  # one connection, shared
     assert calls == ["ro_query", "ro_query"]

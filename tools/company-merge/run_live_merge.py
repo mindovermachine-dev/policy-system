@@ -120,6 +120,11 @@ from ps_service.logging import bind_run_context
 from ps_service.logging.facade import configure as configure_logging
 from ps_service.logging.facade import resolve_default_log_path
 
+# Bounds for the one-off connections these tools open; the service reads the same two
+# values from `PS_FALKORDB_CONNECT_TIMEOUT_SECONDS` / `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS`.
+_CONNECT_TIMEOUT_SECONDS = 5.0
+_SOCKET_TIMEOUT_SECONDS = 30.0
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from typing import Literal
@@ -221,7 +226,12 @@ def _default_graph_provider(host: str, port: int) -> GraphProvider:
     docstring); the first real network call this script makes is the
     precondition check's own read, deliberately AFTER the approval gate.
     """
-    db = connect(host, port)
+    db = connect(
+        host,
+        port,
+        socket_connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+        socket_timeout=_SOCKET_TIMEOUT_SECONDS,
+    )
 
     def provider(graph_name: str) -> GraphHandle:
         return select_graph(db, graph_name)

@@ -37,6 +37,7 @@ from ps_service.passkey_signing.store import (
     PendingApprovalStore,
     PsycopgPendingApprovalStore,
     check_connectivity_from_config,
+    connect_for_migrations,
     connect_from_config,
 )
 
@@ -52,5 +53,6 @@ __all__ = [
     "SigningCredentialRow",
     "SigningCredentialStore",
     "check_connectivity_from_config",
+    "connect_for_migrations",
     "connect_from_config",
 ]

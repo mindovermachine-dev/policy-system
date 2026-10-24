@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 from ps_service.ingestion.graph_writer import build_native_writes
@@ -83,12 +83,12 @@ class _Graphs(NamedTuple):
 @pytest.fixture
 def graph() -> Iterator[_Graphs]:
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     _delete(db)
     yield _Graphs(
         seed=select_graph(db, _GRAPH),
         read=query_engine_client.select_graph(
-            query_engine_client.connect(host=host, port=port), _GRAPH
+            query_engine_client.connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS), _GRAPH
         ),
     )
     _delete(db)

@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_graphs import AUDIT_EVENT_ID, LiveGraph, LiveGraphs
 
 from policy_lifecycle._legacy_reference import (
@@ -85,7 +85,7 @@ class _Pair:
 @pytest.fixture
 def pair() -> Iterator[_Pair]:
     host, port = falkordb_endpoint()
-    graphs = LiveGraphs(connect(host=host, port=port))
+    graphs = LiveGraphs(connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS))
     yield _Pair(graphs.new(), graphs.new())
     graphs.close()
 

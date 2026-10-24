@@ -448,7 +448,9 @@ def test_a_cypher_call_on_a_fail_closed_server_never_opens_a_connection(
     configure()
     opened: list[tuple[str, int]] = []
 
-    def _connect(host: str, port: int) -> object:
+    def _connect(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> object:
         opened.append((host, port))
         raise AssertionError
 

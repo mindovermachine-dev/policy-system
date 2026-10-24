@@ -637,7 +637,9 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
 
     fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
 
-    def stub_connect(host: str, port: int) -> _FakeFalkorDB:
+    def stub_connect(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
     monkeypatch.setattr(falkordb_client, "connect", stub_connect)

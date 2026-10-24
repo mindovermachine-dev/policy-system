@@ -29,7 +29,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
 
 from domain_mapper._legacy_reference import (
@@ -119,7 +119,7 @@ class _Stack:
 @pytest.fixture
 def stack(provisioned_graph_log: Provisioned) -> Iterator[_Stack]:
     host, port = falkordb_endpoint()
-    made = _Stack(provisioned_graph_log, connect(host=host, port=port))
+    made = _Stack(provisioned_graph_log, connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS))
     yield made
     made.close()
 

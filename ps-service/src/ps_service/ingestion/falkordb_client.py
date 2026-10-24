@@ -66,7 +66,9 @@ class FalkorDBConnectionError(IngestionConfigurationError):
     """
 
 
-def connect(host: str, port: int) -> ReadOnlyDatabase:
+def connect(
+    host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+) -> ReadOnlyDatabase:
     """Open a read-only FalkorDB connection (see `graph_gateway.read_only`).
 
     The driver connects eagerly, so call this only inside a boundary that records dependency
@@ -75,6 +77,8 @@ def connect(host: str, port: int) -> ReadOnlyDatabase:
     Args:
         host: FalkorDB host name or address.
         port: FalkorDB TCP port.
+        socket_connect_timeout: Longest wait to establish the TCP connection, in seconds.
+        socket_timeout: Longest wait for a reply on an open connection, in seconds.
 
     Returns:
         A `ReadOnlyDatabase` whose graphs accept only read queries.
@@ -82,7 +86,9 @@ def connect(host: str, port: int) -> ReadOnlyDatabase:
     Side Effects:
         Opens a network connection to FalkorDB.
     """
-    return open_read_only_database(host, port)
+    return open_read_only_database(
+        host, port, socket_connect_timeout=socket_connect_timeout, socket_timeout=socket_timeout
+    )
 
 
 def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
@@ -98,7 +104,12 @@ def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
     Side Effects:
         Opens a network connection to FalkorDB.
     """
-    return connect(host=config.falkordb_host, port=config.falkordb_port)
+    return connect(
+        host=config.falkordb_host,
+        port=config.falkordb_port,
+        socket_connect_timeout=config.falkordb_connect_timeout_seconds,
+        socket_timeout=config.falkordb_socket_timeout_seconds,
+    )
 
 
 def check_connectivity(db: ConnectivityProbe, host: str, port: int) -> None:

@@ -40,7 +40,9 @@ GraphHandle = ReadOnlyGraph
 """Alias of the gateway's `ReadOnlyGraph`: the `query()` surface `execute_cypher_query` needs."""
 
 
-def connect(host: str, port: int) -> ReadOnlyDatabase:
+def connect(
+    host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+) -> ReadOnlyDatabase:
     """Open a read-only FalkorDB connection for `host`/`port`.
 
     The driver constructor issues a Redis round-trip (sentinel/cluster detection), so it fails
@@ -49,6 +51,8 @@ def connect(host: str, port: int) -> ReadOnlyDatabase:
     Args:
         host: FalkorDB server host name or address.
         port: FalkorDB server TCP port.
+        socket_connect_timeout: Longest wait to establish the TCP connection, in seconds.
+        socket_timeout: Longest wait for a reply on an open connection, in seconds.
 
     Returns:
         A connection whose selected graphs run only read queries.
@@ -59,7 +63,9 @@ def connect(host: str, port: int) -> ReadOnlyDatabase:
     Side Effects:
         Opens a network connection to the server.
     """
-    return open_read_only_database(host, port)
+    return open_read_only_database(
+        host, port, socket_connect_timeout=socket_connect_timeout, socket_timeout=socket_timeout
+    )
 
 
 def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
@@ -79,7 +85,12 @@ def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
     Side Effects:
         Opens a network connection to the server.
     """
-    return connect(host=config.falkordb_host, port=config.falkordb_port)
+    return connect(
+        host=config.falkordb_host,
+        port=config.falkordb_port,
+        socket_connect_timeout=config.falkordb_connect_timeout_seconds,
+        socket_timeout=config.falkordb_socket_timeout_seconds,
+    )
 
 
 def select_graph(db: ReadOnlyDatabase, name: str) -> GraphHandle:

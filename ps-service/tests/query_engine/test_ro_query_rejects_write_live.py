@@ -20,7 +20,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from ps_service.graph_gateway.connection import connect as connect_writable
 from ps_service.graph_gateway.connection import select_graph as select_writable
@@ -51,7 +51,7 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
 @pytest.fixture
 def database() -> FalkorDB:
     host, port = falkordb_endpoint()
-    return connect_writable(host, port)
+    return connect_writable(host, port, **FALKORDB_TEST_TIMEOUTS)
 
 
 @pytest.fixture
@@ -85,7 +85,9 @@ def test_the_read_only_path_rejects_the_evading_write_and_creates_no_index(
     database: FalkorDB, seeded_graph_name: str, emitter: LogEmitter
 ) -> None:
     host, port = falkordb_endpoint()
-    read_only = open_read_only_database(host, port).select_graph(seeded_graph_name)
+    read_only = open_read_only_database(host, port, **FALKORDB_TEST_TIMEOUTS).select_graph(
+        seeded_graph_name
+    )
 
     with pytest.raises(QueryEngineExecutionError) as raised:
         execute_cypher_query(
@@ -101,7 +103,7 @@ def test_a_missing_graph_key_is_unseeded_not_an_execution_error(
 ) -> None:
     missing = f"ro_query_missing_{uuid.uuid4().hex[:10]}"
     host, port = falkordb_endpoint()
-    read_only = open_read_only_database(host, port).select_graph(missing)
+    read_only = open_read_only_database(host, port, **FALKORDB_TEST_TIMEOUTS).select_graph(missing)
 
     with pytest.raises(GraphUnseededError):
         execute_cypher_query(

@@ -73,7 +73,9 @@ class _ConnectivityProbe(Protocol):
     def list_graphs(self) -> list[str]: ...
 
 
-def connect(host: str, port: int) -> ReadOnlyDatabase:
+def connect(
+    host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+) -> ReadOnlyDatabase:
     """Open a read-only FalkorDB connection: every graph it selects sends `GRAPH.RO_QUERY` only.
 
     Does not itself verify connectivity; call `check_connectivity()` against the result to
@@ -82,11 +84,15 @@ def connect(host: str, port: int) -> ReadOnlyDatabase:
     Args:
         host: FalkorDB host name or address.
         port: FalkorDB TCP port.
+        socket_connect_timeout: Longest wait to establish the TCP connection, in seconds.
+        socket_timeout: Longest wait for a reply on an open connection, in seconds.
 
     Returns:
         The read-only database handle.
     """
-    return open_read_only_database(host, port)
+    return open_read_only_database(
+        host, port, socket_connect_timeout=socket_connect_timeout, socket_timeout=socket_timeout
+    )
 
 
 def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
@@ -101,7 +107,12 @@ def connect_from_config(config: ServiceConfig) -> ReadOnlyDatabase:
     Returns:
         The read-only database handle; connectivity is not verified.
     """
-    return connect(host=config.falkordb_host, port=config.falkordb_port)
+    return connect(
+        host=config.falkordb_host,
+        port=config.falkordb_port,
+        socket_connect_timeout=config.falkordb_connect_timeout_seconds,
+        socket_timeout=config.falkordb_socket_timeout_seconds,
+    )
 
 
 def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:

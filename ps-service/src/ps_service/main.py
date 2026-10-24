@@ -87,7 +87,7 @@ from ps_service.passkey_signing.store import (
     check_connectivity_from_config as check_passkey_signing_postgres_connectivity,
 )
 from ps_service.passkey_signing.store import (
-    connect_from_config as connect_passkey_signing_postgres_from_config,
+    connect_for_migrations as connect_passkey_signing_postgres_for_migrations,
 )
 from ps_service.persistence import PrivilegedMigrationMissingError
 from ps_service.persistence import (
@@ -97,7 +97,7 @@ from ps_service.persistence import (
     check_connectivity_from_config as check_state_postgres_connectivity,
 )
 from ps_service.persistence import (
-    connect_from_config as connect_state_postgres_from_config,
+    connect_for_migrations as connect_state_postgres_for_migrations,
 )
 from ps_service.persistence.privileged_migration_runner import (
     verify_privileged_migrations_applied,
@@ -399,7 +399,7 @@ def _apply_passkey_signing_migrations_at_startup(config: ServiceConfig) -> None:
     if config.passkey_signing_postgres_host is None:
         return
     try:
-        with connect_passkey_signing_postgres_from_config(config) as conn:
+        with connect_passkey_signing_postgres_for_migrations(config) as conn:
             apply_pending_migrations(conn)
     except Exception as exc:  # noqa: BLE001 - a migration failure must never crash the process (see docstring)
         emit_log_entry(
@@ -447,7 +447,7 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
     if config.state_postgres_host is None:
         return
     try:
-        with connect_state_postgres_from_config(config) as conn:
+        with connect_state_postgres_for_migrations(config) as conn:
             apply_state_migrations(
                 conn,
                 sources=ORDINARY_STATE_MIGRATION_SOURCES,

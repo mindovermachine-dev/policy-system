@@ -25,10 +25,15 @@ from typing import TYPE_CHECKING
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.read_only import open_read_only_database
 
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+# Bounds for the one-off connections these tools open; the service reads the same two
+# values from `PS_FALKORDB_CONNECT_TIMEOUT_SECONDS` / `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS`.
+_CONNECT_TIMEOUT_SECONDS = 5.0
+_SOCKET_TIMEOUT_SECONDS = 30.0
 
-    from ps_service.graph_gateway.read_only import DriverDatabase, ReadOnlyDatabase
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ps_service.graph_gateway.read_only import DriverConnector, ReadOnlyDatabase
 
 EXIT_FAILURE = 1
 DEFAULT_HOST = "localhost"
@@ -39,20 +44,27 @@ def open_database(
     host: str,
     port: int,
     *,
-    connect: Callable[[str, int], DriverDatabase] | None = None,
+    connect: DriverConnector | None = None,
 ) -> ReadOnlyDatabase:
     """Open FalkorDB through the read-only handle, which cannot write.
 
     Args:
         host: FalkorDB host name or address.
         port: FalkorDB TCP port.
-        connect: Optional driver factory taking `(host, port)`; `None` uses the real driver.
+        connect: Optional driver factory taking `(host, port)` and both timeouts; `None` uses the
+            real driver.
             Tests pass a fake here.
 
     Returns:
         A read-only database handle bound to `host`/`port`.
     """
-    return open_read_only_database(host, port, connect=connect)
+    return open_read_only_database(
+        host,
+        port,
+        connect=connect,
+        socket_connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+        socket_timeout=_SOCKET_TIMEOUT_SECONDS,
+    )
 
 
 def snapshot_digests(database: ReadOnlyDatabase, graphs: Sequence[str]) -> dict[str, str]:
@@ -119,7 +131,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(
     argv: Sequence[str] | None = None,
     *,
-    connect: Callable[[str, int], DriverDatabase] | None = None,
+    connect: DriverConnector | None = None,
 ) -> int:
     """Run the `snapshot` or `compare` command.
 

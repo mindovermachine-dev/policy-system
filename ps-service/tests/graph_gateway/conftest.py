@@ -12,7 +12,7 @@ from persistence.provisioned_postgres import (  # pytest discovers these by name
 )
 
 from graph_gateway._fakes import close_all_rigs
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_graphs import LiveGraphs
 from ps_service.graph_gateway.connection import connect
 
@@ -26,7 +26,7 @@ __all__ = ["close_gateway_rigs", "fresh_provisioned", "provisioned", "provisione
 def live_graphs() -> Iterator[LiveGraphs]:
     """Throwaway real FalkorDB graphs (used only by `falkordb_live` tests), deleted afterwards."""
     host, port = falkordb_endpoint()
-    graphs = LiveGraphs(connect(host=host, port=port))
+    graphs = LiveGraphs(connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS))
     yield graphs
     graphs.close()
 

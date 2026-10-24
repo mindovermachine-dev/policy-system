@@ -93,7 +93,9 @@ def install_driver(
     """Replace the gateway's driver connect so every package opener reaches `graph` instead."""
     database = RecordingDriverDatabase(graph)
 
-    def _connect(host: str, port: int) -> RecordingDriverDatabase:
+    def _connect(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> RecordingDriverDatabase:
         return database
 
     monkeypatch.setattr(driver_connection, "connect", _connect)

@@ -51,6 +51,11 @@ from ps_service.company_merge.preconditions import (
 )
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
 
+# Bounds for the one-off connections these tools open; the service reads the same two
+# values from `PS_FALKORDB_CONNECT_TIMEOUT_SECONDS` / `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS`.
+_CONNECT_TIMEOUT_SECONDS = 5.0
+_SOCKET_TIMEOUT_SECONDS = 30.0
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -106,7 +111,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 def _default_graph_provider(host: str, port: int) -> Callable[[str], GraphHandle]:
     """Real connection: one FalkorDB client, one `select_graph` per short name."""
-    db = connect(host, port)
+    db = connect(
+        host,
+        port,
+        socket_connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+        socket_timeout=_SOCKET_TIMEOUT_SECONDS,
+    )
 
     def provider(short_name: str) -> GraphHandle:
         return select_graph(db, baseline_graph_name(short_name))

@@ -655,6 +655,8 @@ class InMemoryGraph:
     """Labels whose `CREATE INDEX` is answered `already indexed` (another writer won the race)."""
     read_fault: Fault | None = None
     write_fault: Fault | None = None
+    ambiguous_write_fault: Fault | None = None
+    """Raised by a write after the write took effect (the reply was lost, not the request)."""
     index_fault: Fault | None = None
     replay_state: tuple[int, str, str, int] | None = None
     """The replay-progress sentinel as `(position, state, kind, verified)`; wiped with the graph.
@@ -702,6 +704,14 @@ class InMemoryGraph:
         """Make write queries raise `error` for `times` calls; reads and index calls still work."""
         self.write_fault = Fault(error, times)
 
+    def apply_then_raise(self, error: Exception, times: int | None = 1) -> None:
+        """Make write queries take effect and then raise `error` for `times` calls.
+
+        Models a client timeout where the server still ran the write: the caller cannot tell it
+        from a request that never arrived.
+        """
+        self.ambiguous_write_fault = Fault(error, times)
+
     def fail_on_index(self, error: Exception, times: int | None = None) -> None:
         """Make `CREATE INDEX` raise `error` for `times` calls."""
         self.index_fault = Fault(error, times)
@@ -717,6 +727,7 @@ class InMemoryGraph:
         self.write_error = None
         self.read_fault = None
         self.write_fault = None
+        self.ambiguous_write_fault = None
         self.index_fault = None
 
     def clone(self) -> InMemoryGraph:
@@ -748,7 +759,10 @@ class InMemoryGraph:
         for name, pattern in self._templates.items():
             match = pattern.match(q)
             if match is not None:
-                return self._run(name, match.groupdict(), _rows(params), q, params or {})
+                result = self._run(name, match.groupdict(), _rows(params), q, params or {})
+                if _kind_of(name) == "write" and self.ambiguous_write_fault is not None:
+                    self.ambiguous_write_fault.trigger()
+                return result
         message = f"the fake graph interprets only gateway templates, got: {q}"
         raise AssertionError(message)
 
@@ -1146,6 +1160,9 @@ class InMemoryKeyPort:
         if self.copy_fault is not None:
             self.copy_fault.trigger()
         with self.mutex:
+            if destination in self.graphs.graphs:
+                message = "Target key name is already in use"
+                raise redis.exceptions.ResponseError(message)
             twin = self.graphs.graphs[source].clone() if source in self.graphs.graphs else None
             staged = twin if twin is not None else InMemoryGraph(events=self.graphs.events)
             staged.on_write = self._staged_write

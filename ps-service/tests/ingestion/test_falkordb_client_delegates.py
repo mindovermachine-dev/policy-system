@@ -21,7 +21,9 @@ if TYPE_CHECKING:
 def test_the_connectivity_probe_still_raises_the_ingestion_error_with_the_same_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _unreachable(host: str, port: int) -> object:
+    def _unreachable(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> object:
         raise ConnectionRefusedError("refused")
 
     monkeypatch.setattr(falkordb_client, "connect", _unreachable)

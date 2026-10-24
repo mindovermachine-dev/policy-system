@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         _WatchablePipeline,  # pyright: ignore[reportPrivateUsage]
     )
     from ps_service.graph_gateway.read_only import (
-        DriverDatabase,
+        DriverConnector,
         ReadOnlyDatabase,
         ReadOnlyGraph,
     )
@@ -103,13 +103,14 @@ class ReadOnlyGraphOpener:
         self,
         config: ServiceConfig,
         *,
-        connect: Callable[[str, int], DriverDatabase] | None = None,
+        connect: DriverConnector | None = None,
     ) -> None:
         """Remember `config` (and the driver seam `connect`); nothing is connected yet.
 
         Args:
             config: Service configuration naming the FalkorDB host and port.
-            connect: Driver constructor taking `(host, port)`; `None` uses the real driver.
+            connect: Driver constructor taking `(host, port)` and both timeouts; `None` uses
+                the real driver.
         """
         self._config = config
         self._connect = connect

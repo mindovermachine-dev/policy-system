@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
 from ps_service.graph_gateway.connection import connect, select_graph
 from ps_service.graph_gateway.cypher import GRAPH_HOLDS_A_NODE
@@ -120,7 +120,7 @@ class _Rig:
 def live_graphs_db() -> FalkorDB:
     """A connection to the live FalkorDB for the module-level cleanup."""
     host, port = falkordb_endpoint()
-    return connect(host=host, port=port)
+    return connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
 
 
 @pytest.fixture

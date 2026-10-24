@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from ps_service.change_monitor import falkordb_client as falkordb_client_module
 from ps_service.change_monitor.errors import ChangeMonitorConfigurationError
@@ -110,12 +110,18 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
     assert env_port != ServiceConfig.falkordb_port
     monkeypatch.setenv("PS_FALKORDB_HOST", env_host)
     monkeypatch.setenv("PS_FALKORDB_PORT", str(env_port))
+    monkeypatch.setenv("PS_FALKORDB_CONNECT_TIMEOUT_SECONDS", "7.5")
+    monkeypatch.setenv("PS_FALKORDB_SOCKET_TIMEOUT_SECONDS", "41")
     captured: dict[str, object] = {}
     sentinel = cast("FalkorDB", object())
 
-    def _fake_connect(host: str, port: int) -> FalkorDB:
+    def _fake_connect(
+        host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> FalkorDB:
         captured["host"] = host
         captured["port"] = port
+        captured["socket_connect_timeout"] = socket_connect_timeout
+        captured["socket_timeout"] = socket_timeout
         return sentinel
 
     monkeypatch.setattr(falkordb_client_module, "connect", _fake_connect)
@@ -123,7 +129,12 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
     config = load_config()
     result = connect_from_config(config)
 
-    assert captured == {"host": env_host, "port": env_port}
+    assert captured == {
+        "host": env_host,
+        "port": env_port,
+        "socket_connect_timeout": 7.5,
+        "socket_timeout": 41.0,
+    }
     assert result is sentinel
 
 
@@ -133,6 +144,6 @@ def test_check_connectivity_succeeds_against_real_falkordb_instance() -> None:
     instance.
     """
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
 
     check_connectivity(db, host=host, port=port)

@@ -78,7 +78,9 @@ class _Driver:
         self.log: list[str] = []
         self.connected: list[tuple[str, int]] = []
 
-    def connect(self, host: str, port: int) -> _Driver:
+    def connect(
+        self, host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> _Driver:
         self.connected.append((host, port))
         return self
 

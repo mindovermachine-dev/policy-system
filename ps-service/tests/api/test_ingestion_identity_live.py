@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from ps_service.api.ingestion_orchestration import (
     _find_instrument_id_by_celex,  # pyright: ignore[reportPrivateUsage] -- the real CELEX query under test
@@ -51,7 +51,7 @@ def _delete(db: FalkorDB) -> None:
 def seed() -> Iterator[Seed]:
     """A factory seeding ``RegulatoryInstrument`` nodes into a fresh throwaway graph."""
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     _delete(db)
     handle: GraphHandle = select_graph(db, _GRAPH)
 

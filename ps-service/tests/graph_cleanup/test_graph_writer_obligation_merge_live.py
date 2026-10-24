@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from graph_cleanup._legacy_reference import run_frozen_merge_obligations
 from ps_service.graph_cleanup.errors import GraphCleanupStaleStateError
@@ -58,7 +58,7 @@ def _delete(db: FalkorDB) -> None:
 @pytest.fixture
 def graph() -> Iterator[GraphHandle]:
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     _delete(db)
     handle = select_graph(db, _GRAPH)
     handle.query(

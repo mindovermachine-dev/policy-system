@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
 
 from ps_service.dependency_health import FALKORDB, is_healthy
@@ -247,7 +247,7 @@ def test_graph_writer_functions_work_against_real_falkordb(
     Postgres for the log. Uses a dedicated, test-only graph name, deleted before and after.
     """
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     _delete_graph_if_exists(db, _LIVE_TEST_GRAPH_NAME)
     graph = select_graph(db, _LIVE_TEST_GRAPH_NAME)
 

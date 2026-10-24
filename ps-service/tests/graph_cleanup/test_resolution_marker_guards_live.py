@@ -19,7 +19,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merged,
@@ -44,7 +44,7 @@ _ABSORBED = "cap_absorbed"
 @pytest.fixture
 def graph() -> Iterator[GraphHandle]:
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     name = f"graph_cleanup_resolution_marker_live_{uuid.uuid4().hex[:8]}"
     handle = select_graph(db, name)
     handle.query(

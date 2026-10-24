@@ -22,11 +22,10 @@ from redis.exceptions import ResponseError
 from ps_service.graph_gateway import connection as driver_connection
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ps_service.config import ServiceConfig
 
 __all__ = [
+    "DriverConnector",
     "DriverDatabase",
     "DriverGraph",
     "ReadOnlyDatabase",
@@ -198,11 +197,23 @@ class _RoDatabase:
         return self._database.list_graphs()
 
 
+class DriverConnector(Protocol):
+    """The driver seam: opens a bounded connection to FalkorDB at `host`/`port`."""
+
+    def __call__(
+        self, host: str, port: int, *, socket_connect_timeout: float, socket_timeout: float
+    ) -> DriverDatabase:
+        """Open the connection, waiting at most the given seconds to connect and to read."""
+        ...
+
+
 def open_read_only_database(
     host: str,
     port: int,
     *,
-    connect: Callable[[str, int], DriverDatabase] | None = None,
+    socket_connect_timeout: float,
+    socket_timeout: float,
+    connect: DriverConnector | None = None,
 ) -> ReadOnlyDatabase:
     """Connect to FalkorDB at `host`/`port`; every graph it selects is read-only.
 
@@ -212,33 +223,59 @@ def open_read_only_database(
     Args:
         host: FalkorDB server host name or address.
         port: FalkorDB server TCP port.
-        connect: Driver constructor taking `(host, port)`; `None` uses the gateway's own.
+        socket_connect_timeout: Longest wait to establish the TCP connection, in seconds.
+        socket_timeout: Longest wait for a reply on an open connection, in seconds.
+        connect: Driver constructor taking `(host, port)` and both timeouts; `None` uses the
+            gateway's own.
 
     Returns:
         A connection whose selected graphs run only read queries.
+
+    Raises:
+        redis.exceptions.TimeoutError: The server accepted the connection but did not answer
+            within a bound.
 
     Side Effects:
         Opens a network connection to the server.
     """
     opener = connect if connect is not None else driver_connection.connect
-    return _RoDatabase(opener(host, port))
+    return _RoDatabase(
+        opener(
+            host,
+            port,
+            socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_timeout,
+        )
+    )
 
 
 def open_read_only_database_from_config(
     config: ServiceConfig,
     *,
-    connect: Callable[[str, int], DriverDatabase] | None = None,
+    connect: DriverConnector | None = None,
 ) -> ReadOnlyDatabase:
-    """Connect using `config.falkordb_host` / `config.falkordb_port`; graphs are read-only.
+    """Connect using the host, port and timeouts in `config`; graphs are read-only.
 
     Args:
-        config: Service configuration naming the FalkorDB host and port.
-        connect: Driver constructor taking `(host, port)`; `None` uses the gateway's own.
+        config: Service configuration naming the FalkorDB host and port and the connect and
+            socket timeouts.
+        connect: Driver constructor taking `(host, port)` and both timeouts; `None` uses the
+            gateway's own.
 
     Returns:
         A connection whose selected graphs run only read queries.
 
+    Raises:
+        redis.exceptions.TimeoutError: The server accepted the connection but did not answer
+            within a bound.
+
     Side Effects:
         Opens a network connection to the server.
     """
-    return open_read_only_database(config.falkordb_host, config.falkordb_port, connect=connect)
+    return open_read_only_database(
+        config.falkordb_host,
+        config.falkordb_port,
+        socket_connect_timeout=config.falkordb_connect_timeout_seconds,
+        socket_timeout=config.falkordb_socket_timeout_seconds,
+        connect=connect,
+    )

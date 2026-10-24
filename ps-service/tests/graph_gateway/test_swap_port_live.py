@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from graph_gateway._fakes import InMemoryGraphLogStore
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from graph_gateway.live_postgres import committed_audit_event
 from ps_service.graph_gateway.connection import FalkorDB, connect, select_graph
 from ps_service.graph_gateway.default_gateway import FalkorDBKeyPort
@@ -84,7 +84,7 @@ class _Keys:
 @pytest.fixture
 def keys() -> Iterator[_Keys]:
     host, port = falkordb_endpoint()
-    holder = _Keys(connect(host=host, port=port))
+    holder = _Keys(connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS))
     yield holder
     holder.close()
 

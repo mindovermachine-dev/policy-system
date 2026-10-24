@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from graph_gateway._fakes import InMemoryGraph, InMemoryGraphLogStore
-from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoint
 from ps_service.graph_gateway.connection import connect, select_graph
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.graph_gateway.gateway import GraphWriteGateway
@@ -39,7 +39,7 @@ class _Live:
         self.db = db
         self.name = f"drift_live_{uuid.uuid4().hex[:8]}"
         self.store = InMemoryGraphLogStore()
-        reader = open_read_only_database(host, port)
+        reader = open_read_only_database(host, port, **FALKORDB_TEST_TIMEOUTS)
         self.gateway = GraphWriteGateway(
             log_store=self.store,
             graph_opener=lambda graph: select_graph(db, graph),
@@ -61,7 +61,7 @@ class _Live:
 @pytest.fixture
 def live() -> Iterator[_Live]:
     host, port = falkordb_endpoint()
-    db = connect(host=host, port=port)
+    db = connect(host=host, port=port, **FALKORDB_TEST_TIMEOUTS)
     scenario = _Live(db)
     yield scenario
     if scenario.name in db.list_graphs():
@@ -92,6 +92,8 @@ def test_a_graph_key_that_does_not_exist_digests_as_the_empty_graph_through_ro_q
     live: _Live,
 ) -> None:
     host, port = falkordb_endpoint()
-    missing = open_read_only_database(host, port).select_graph(f"absent_{uuid.uuid4().hex[:8]}")
+    missing = open_read_only_database(host, port, **FALKORDB_TEST_TIMEOUTS).select_graph(
+        f"absent_{uuid.uuid4().hex[:8]}"
+    )
 
     assert canonical_digest(missing) == canonical_digest(InMemoryGraph())
