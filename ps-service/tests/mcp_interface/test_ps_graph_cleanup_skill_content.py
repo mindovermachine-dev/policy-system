@@ -19,6 +19,7 @@ _REFS = _SKILL.parent / "references"
 _REFERENCES = {
     "release-governance.md": "when the user wants to release a capability",
     "unmerge.md": "when the user wants to reverse a capability, obligation or role merge",
+    "split.md": "when the user wants to review automatic resolutions or split one",
     "merge-case-reference.md": "when explaining what a merge involves per governance case",
     "error-reference.md": "when a tool returns an error",
     "known-limitation.md": "when two capabilities are governed by two approved policies",
@@ -383,6 +384,8 @@ def test_skill_has_one_consolidated_error_reference_for_every_tool() -> None:
         "merge-obligations",
         "release-capability-governance",
         "unmerge-entities",
+        "list-capability-resolutions",
+        "split-capability",
         "check-cleanup-approval",
     ):
         assert f"`{tool}`" in section, tool
@@ -555,3 +558,85 @@ def test_unmerge_reference_says_a_resolution_marker_cannot_be_unmerged() -> None
 
     assert "`ResolvedCapability`" in section
     assert "is not a merge and cannot be unmerged" in section
+    assert "`split-capability`" in section
+    assert "`references/split.md`" in section
+
+
+# --- Reviewing and splitting automatic resolutions -----------------------------------
+
+
+def _split_section() -> str:
+    text = _text()
+    start = text.index("### Reviewing and splitting automatic resolutions")
+    following = text.find(" ### ", start + 1)
+    return text[start : following if following != -1 else len(text)]
+
+
+def test_split_section_orders_list_preview_ack_before_url() -> None:
+    section = _split_section()
+
+    steps = (
+        "**List.**",
+        "**Choose.**",
+        "**Preview.**",
+        "**Acknowledge.**",
+        "**Passkey.**",
+        "**Result.**",
+    )
+    positions = [section.index(step) for step in steps]
+    assert positions == sorted(positions)
+    bodies = {
+        step: section[start:end]
+        for step, start, end in zip(steps, positions, [*positions[1:], len(section)], strict=True)
+    }
+    assert "`list-capability-resolutions`" in bodies["**List.**"]
+    assert "never choose for the user" in bodies["**Choose.**"].lower()
+    assert "`split-capability`" in bodies["**Preview.**"]
+    assert "`x_id`" in bodies["**Preview.**"]
+    acknowledge = bodies["**Acknowledge.**"]
+    assert "`acknowledgment_required: true`" in acknowledge
+    assert "explicit" in acknowledge.lower()
+    assert "`acknowledge_governance_change`" in acknowledge
+    assert "no approval" in acknowledge.lower()
+    assert "`approval_url`" not in bodies["**List.**"] + bodies["**Preview.**"] + acknowledge
+    assert "`approval_url`" in bodies["**Passkey.**"]
+    assert "`check-cleanup-approval`" in bodies["**Result.**"]
+    assert "`split: true`" in bodies["**Result.**"]
+
+
+def test_split_section_says_what_the_list_shows_and_that_it_changes_nothing() -> None:
+    section = _split_section()
+
+    for field in ("`x_id`", "`a_id`", "`governing_policy`", "`similarity`", "`instruments`"):
+        assert field in section, field
+    assert "`obligation_count`" in section
+    assert "read-only" in section
+    assert "never acknowledge" in section.lower()
+
+
+def test_split_reference_states_the_edge_rule_the_result_and_the_reversal() -> None:
+    section = _ref("split.md")
+
+    for bucket in ("`moves`", "`shared`", "`added`", "`stays`"):
+        assert bucket in section, bucket
+    assert "`capability.split`" in section
+    assert "no governing policy" in section.lower()
+    assert "`merge-capabilities`" in section
+    assert "`split: true`" in section
+    assert "`ResolvedCapability`" in section
+    assert "`references/error-reference.md`" in section
+
+
+def test_skill_scope_guardrails_and_description_cover_the_split() -> None:
+    raw = _SKILL.read_text(encoding="utf-8")
+    description = " ".join(raw.split("---\n")[1].split())
+    text = _text()
+    guardrails = text[text.index("## Guardrails") :]
+
+    assert "list the Capabilities the pipeline resolved automatically" in description
+    assert "split one back out" in description
+    assert "`list-capability-resolutions`" in text[: text.index("## On Load")]
+    assert "`split-capability`" in text[: text.index("## On Load")]
+    assert "`split-capability`" in guardrails
+    readme = (_REPO / "ps-skills" / "readme.md").read_text(encoding="utf-8")
+    assert "splits a Capability the pipeline resolved automatically" in readme

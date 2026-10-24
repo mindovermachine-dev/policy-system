@@ -43,6 +43,19 @@ def _approval_executor_registry_restored() -> Iterator[None]:  # pyright: ignore
 
 
 @pytest.fixture(autouse=True)
+def _signing_refusal_recorder_registry_restored() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """Put the signing-refusal recorder registry back after a test that replaced a recorder."""
+    from ps_service.passkey_signing import executors
+
+    snapshot = dict(executors._REFUSAL_RECORDERS)  # pyright: ignore[reportPrivateUsage]
+    try:
+        yield
+    finally:
+        executors._REFUSAL_RECORDERS.clear()  # pyright: ignore[reportPrivateUsage]
+        executors._REFUSAL_RECORDERS.update(snapshot)  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture(autouse=True)
 def _no_postgres_audit_store(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]  # autouse
     """Give `provide_audit_store` an in-memory store so no ceremony test reaches Postgres.
 

@@ -2,9 +2,9 @@
 """Fail-closed and sanitised failure over HTTP for EVERY cleanup executor.
 
 If the audit row cannot be written, there is no graph edit. If a graph write fails,
-no partial change is reported and the error carries no internal detail. The five signing
-worlds (capability merge, obligation merge, release, capability unmerge, obligation unmerge)
-are driven through the real signing router, executor registry and executors.
+no partial change is reported and the error carries no internal detail. The six signing
+worlds (capability merge, obligation merge, release, capability unmerge, obligation unmerge,
+capability split) are driven through the real signing router, executor registry and executors.
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, Protocol
 
 import pytest
 import redis.exceptions
+from graph_cleanup.test_execute_capability_split import (
+    world as capability_split_world,
+)
 
 # Each module's own `world` fixture (monkeypatches the executor dependencies for that flow).
 from passkey_signing.test_graph_cleanup_obligation_signing_to_merge import (
@@ -39,6 +42,7 @@ if TYPE_CHECKING:
 
 __all__ = [  # the imported `world` fixtures are used by name through `flow`
     "capability_merge_world",
+    "capability_split_world",
     "capability_unmerge_world",
     "obligation_merge_world",
     "obligation_unmerge_world",
@@ -51,6 +55,7 @@ _FLOWS = [
     ("release_world", "capability.release_governance"),
     ("capability_unmerge_world", "capability.unmerge"),
     ("obligation_unmerge_world", "obligation.unmerge"),
+    ("capability_split_world", "capability.split"),
 ]
 _LEAKS = ("10.1.2.3", "6379", "relation", "refused")
 
@@ -96,7 +101,7 @@ def _fail_graph_write(world: _World, error: Exception) -> None:
 def flow(request: pytest.FixtureRequest) -> tuple[_World, str]:
     name, action = request.param
     getter: Callable[[str], object] = request.getfixturevalue
-    return getter(name), action  # pyright: ignore[reportReturnType]  -- the five worlds share the Protocol shape
+    return getter(name), action  # pyright: ignore[reportReturnType]  -- the six worlds share the Protocol shape
 
 
 def test_audit_outage_means_no_graph_write_and_no_leak(flow: tuple[_World, str]) -> None:

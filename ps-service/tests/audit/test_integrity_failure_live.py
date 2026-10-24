@@ -2,7 +2,7 @@
 
 The trigger is made to fail without any production hook. A superuser session holds `FOR UPDATE`
 on the chain head, so the writer's insert blocks, and one of two timeouts ends the wait: the
-application role's `statement_timeout` (SQLSTATE 57014) or the chain function's own
+connection's `statement_timeout` from `ServiceConfig` (SQLSTATE 57014) or the chain function's own
 `lock_timeout` (55P03). A raw insert with `occurred_at = 'infinity'` covers the failure that
 comes from inside the trigger. Each real caller must roll back its state change together with
 the audit row and raise the error it already documents; `AuditStore.record` must let the raw
@@ -14,6 +14,7 @@ Deselected by default -- run with `uv run pytest -m postgres_live` (see
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from typing import TYPE_CHECKING
 
@@ -34,7 +35,6 @@ from audit._integrity_support import (
     head,
     head_row_locked,
     register_test_key,
-    role_statement_timeout,
 )
 from ps_service.audit import AuditStore, PsycopgAuditStore
 from ps_service.audit.errors import AuditPersistenceError, AuditTrailUnavailableError
@@ -48,12 +48,14 @@ from ps_service.runtime_config import PsycopgRuntimeConfigStore, RuntimeConfigPe
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from contextlib import AbstractContextManager
+
+    from ps_service.config import ServiceConfig
 
 pytestmark = pytest.mark.postgres_live
 
 _ACTOR = ("failure-actor", ISSUER)
 _RESULT: dict[str, object] = {"summary": "ok"}
+_STATEMENT_TIMEOUT_MS = 500
 
 
 @pytest.fixture
@@ -66,7 +68,11 @@ def prov(fresh_provisioned: Provisioned) -> Provisioned:
 
 
 def _standalone(prov: Provisioned, resource_id: str) -> None:
-    PsycopgAuditStore(prov.state_config()).record_standalone(
+    _standalone_with(prov.state_config(), resource_id)
+
+
+def _standalone_with(config: ServiceConfig, resource_id: str) -> None:
+    PsycopgAuditStore(config).record_standalone(
         actor_subject=_ACTOR[0],
         actor_issuer=_ACTOR[1],
         action="access_role.grant",
@@ -77,22 +83,33 @@ def _standalone(prov: Provisioned, resource_id: str) -> None:
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class _BlockedChain:
+    """The config every caller under test uses, and the driver error its blocked insert raises."""
+
+    config: ServiceConfig
+    expected: type[Exception]
+
+
 @pytest.fixture(params=["statement_timeout", "lock_timeout"])
-def blocked_chain(request: pytest.FixtureRequest, prov: Provisioned) -> Iterator[type[Exception]]:
+def blocked_chain(request: pytest.FixtureRequest, prov: Provisioned) -> Iterator[_BlockedChain]:
     """Make every audit insert fail by name: the head is locked and a timeout ends the wait.
 
-    Yields the exception class the blocked insert raises: `QueryCanceled` for the role's
-    `statement_timeout`, `LockNotAvailable` for the chain function's own `lock_timeout`.
+    `statement_timeout`: the config's statement timeout is shorter than the chain function's
+    10s `lock_timeout`, so the blocked insert raises `QueryCanceled`. `lock_timeout`: the chain
+    function's `lock_timeout` is shortened below the config's statement timeout, so it raises
+    `LockNotAvailable`.
     """
     mode: str = request.param
     if mode == "statement_timeout":
-        timeout: AbstractContextManager[None] = role_statement_timeout(prov, "500ms")
-        expected: type[Exception] = psycopg.errors.QueryCanceled
+        config = dataclasses.replace(
+            prov.state_config(), state_postgres_statement_timeout_ms=_STATEMENT_TIMEOUT_MS
+        )
+        with head_row_locked(prov):
+            yield _BlockedChain(config, psycopg.errors.QueryCanceled)
     else:
-        timeout = chain_function_lock_timeout(prov, "300ms")
-        expected = psycopg.errors.LockNotAvailable
-    with timeout, head_row_locked(prov):
-        yield expected
+        with chain_function_lock_timeout(prov, "300ms"), head_row_locked(prov):
+            yield _BlockedChain(prov.state_config(), psycopg.errors.LockNotAvailable)
 
 
 def _assert_chain_untouched_then_continues(prov: Provisioned) -> None:
@@ -108,29 +125,27 @@ def _assert_chain_untouched_then_continues(prov: Provisioned) -> None:
 
 
 def test_record_standalone_raises_audit_persistence_error_and_writes_nothing(
-    prov: Provisioned, blocked_chain: type[Exception]
+    blocked_chain: _BlockedChain,
 ) -> None:
     with pytest.raises(AuditPersistenceError) as raised:
-        _standalone(prov, "blocked")
+        _standalone_with(blocked_chain.config, "blocked")
 
-    assert isinstance(raised.value.__cause__, blocked_chain)
+    assert isinstance(raised.value.__cause__, blocked_chain.expected)
 
 
-def test_record_system_audit_raises_audit_trail_unavailable(
-    prov: Provisioned, blocked_chain: type[Exception]
-) -> None:
-    recorder = build_system_audit_recorder(prov.state_config())
+def test_record_system_audit_raises_audit_trail_unavailable(blocked_chain: _BlockedChain) -> None:
+    recorder = build_system_audit_recorder(blocked_chain.config)
 
     with pytest.raises(AuditTrailUnavailableError) as raised:
         recorder(action="ingestion.system", resource_type="run", resource_id="r", details={})
 
-    assert isinstance(raised.value.__cause__, blocked_chain)
+    assert isinstance(raised.value.__cause__, blocked_chain.expected)
 
 
 def test_record_called_directly_lets_the_raw_driver_error_through(
-    prov: Provisioned, blocked_chain: type[Exception]
+    blocked_chain: _BlockedChain,
 ) -> None:
-    config = prov.state_config()
+    config = blocked_chain.config
     with connect_from_config(config) as conn, conn.cursor() as cur:
         with pytest.raises(psycopg.Error) as raised:
             PsycopgAuditStore(config).record(
@@ -145,20 +160,20 @@ def test_record_called_directly_lets_the_raw_driver_error_through(
             )
         conn.rollback()
 
-    assert type(raised.value) is blocked_chain
+    assert type(raised.value) is blocked_chain.expected
 
 
 def test_a_runtime_config_set_rolls_back_the_state_change_with_the_audit_row(
-    prov: Provisioned, blocked_chain: type[Exception]
+    prov: Provisioned, blocked_chain: _BlockedChain
 ) -> None:
-    config = prov.state_config()
+    config = blocked_chain.config
     key = register_test_key()
     store = PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config))
 
     with pytest.raises(RuntimeConfigPersistenceError) as raised:
         store.set(key, "value", actor=_ACTOR)
 
-    assert isinstance(raised.value.__cause__, blocked_chain)
+    assert isinstance(raised.value.__cause__, blocked_chain.expected)
     with prov.superuser_connect(prov.state_db) as conn:
         assert conn.execute(
             "SELECT count(*) FROM runtime_config WHERE key = %s", (key,)
@@ -166,9 +181,9 @@ def test_a_runtime_config_set_rolls_back_the_state_change_with_the_audit_row(
 
 
 def test_an_access_role_grant_rolls_back_the_assignment_with_the_audit_row(
-    prov: Provisioned, blocked_chain: type[Exception]
+    prov: Provisioned, blocked_chain: _BlockedChain
 ) -> None:
-    config = prov.state_config()
+    config = blocked_chain.config
     store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
 
     with pytest.raises(AccessRoleAssignmentPersistenceError) as raised:
@@ -176,15 +191,15 @@ def test_an_access_role_grant_rolls_back_the_assignment_with_the_audit_row(
             actor=_ACTOR, target=("grant-target", ISSUER), access_role=AccessRole.SYSTEM_ADMIN
         )
 
-    assert isinstance(raised.value.__cause__, blocked_chain)
+    assert isinstance(raised.value.__cause__, blocked_chain.expected)
     with prov.superuser_connect(prov.state_db) as conn:
         assert conn.execute("SELECT count(*) FROM access_role_assignments").fetchone() == (0,)
 
 
 def test_an_ingestion_run_create_rolls_back_the_run_with_the_audit_row(
-    prov: Provisioned, blocked_chain: type[Exception]
+    prov: Provisioned, blocked_chain: _BlockedChain
 ) -> None:
-    config = prov.state_config()
+    config = blocked_chain.config
     store = PsycopgIngestionRunStore(config, audit_store=PsycopgAuditStore(config))
 
     with pytest.raises(IngestionRunPersistenceError) as raised:
@@ -192,7 +207,7 @@ def test_an_ingestion_run_create_rolls_back_the_run_with_the_audit_row(
             run_id=str(uuid.uuid4()), celex="32024R2847", short_name="cra", actor=_ACTOR
         )
 
-    assert isinstance(raised.value.__cause__, blocked_chain)
+    assert isinstance(raised.value.__cause__, blocked_chain.expected)
     with prov.superuser_connect(prov.state_db) as conn:
         assert conn.execute("SELECT count(*) FROM ingestion_runs").fetchone() == (0,)
 

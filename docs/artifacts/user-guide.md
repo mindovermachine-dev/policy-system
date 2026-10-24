@@ -338,6 +338,29 @@ Requirements. Use it to check if the regulation really states the duty twice.
 Identical wording under two different Roles is two duties. The tool never offers
 such a pair. Neither tool changes anything.
 
+**Automatic resolutions (read-only).** When an ingest finds an incoming Capability that is
+very similar to an existing one, Company Merge resolves the incoming Capability onto the
+existing one without asking. A `ResolvedCapability` marker records that decision, and every
+later ingest, amendment and restore follows it. `list-capability-resolutions` returns one
+entry per such resolution. Each entry shows the resolved Capability (its id and its name from
+the ingested baseline), the existing Capability it now points to (its id, name and governing
+policy, or none), their similarity from the embeddings already stored, the instruments whose
+baseline holds the resolved Capability, and how many Obligations rely on it. Those
+Obligations count as covered by the existing Capability's policy. Check whether the
+resolved Capability really describes the same duty. The tool changes nothing.
+
+**Splitting an automatic resolution.** If a resolution is wrong, `split-capability` splits
+the resolved Capability back out as its own Capability. The tool shows a preview first. Per
+edge type it lists the edges that move to the split Capability, the edges that stay on the
+existing Capability, and the existing Capability's governing policy. An edge moves when an
+ingested baseline links it to the resolved Capability. It stays on the existing Capability
+when a baseline also links it there. The split Capability starts with no governing policy,
+so the Obligations that move to it show up as a gap. When the existing Capability is
+governed, you must acknowledge that change before the tool creates the approval. Sign the
+approval with your passkey as for a merge. The split is recorded in the audit trail as
+`capability.split`, and later ingests keep the split Capability. If the split was a mistake,
+merge the split Capability back into the existing one with `merge-capabilities`.
+
 **Merging two Capabilities.** Pick which Capability survives and which one the merge
 absorbs. The tool shows a preview of the edges that move to the survivor, the
 obligations that the merge affects, and the policy case. It creates a passkey approval
@@ -413,6 +436,13 @@ The graph and the audit trail are separate stores. A graph failure after the aud
 record leaves an `applied` row and then a `failed` row for the same approval id. That
 pair means that no edit occurred.
 
+**An approval signed by someone else.** Only the person who asked for a change can
+approve it. If another person signs the approval with their own registered passkey, the
+change does not happen and the approval can no longer be used. The system records a
+`failed` row for the change, with that person as the actor and the reason
+`signer_not_bound_actor`. A near-miss batch gets one such row for each merge. Ask for a
+new approval. A signature that does not verify records nothing.
+
 Sometimes the run is interrupted after you sign, before the system records the outcome.
 Ask the skill to check the approval again. When it is more than five minutes past
 expiry, the check looks for the change in the graph. If the change is there, the check
@@ -420,7 +450,7 @@ records it as applied. If the change is not there, the check records a `failed` 
 (`interrupted_no_effect`). Read the records with [Review the audit
 trail](#review-the-audit-trail). Filter by the actions `capability.merge`,
 `obligation.merge`, `role.merge`, `capability.release_governance`,
-`capability.unmerge`, `obligation.unmerge` and `role.unmerge`.
+`capability.unmerge`, `obligation.unmerge`, `role.unmerge` and `capability.split`.
 
 **Known limitation.** You cannot yet merge two Capabilities that two **approved**
 policies govern. The policies are different. Releasing works only on a draft. You amend

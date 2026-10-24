@@ -1213,3 +1213,256 @@ class ObligationUnmergePlan(BaseModel):
     after: GraphSnapshot
     state_digest: str
     inputs: ObligationUnmergeInputs
+
+
+class CapabilityResolution(BaseModel):
+    """One `ResolvedCapability` marker of the single-tenant graph, with its chain followed.
+
+    Attributes:
+        x_id: Id of the Capability the marker resolved (the marker's own id).
+        marker_resolves_to: The id the marker names in `resolves_to`.
+        a_id: The terminal of the marker chain; differs from `marker_resolves_to` when that
+            Capability was later absorbed by a cleanup merge.
+        a_aliases: A and every other marked id whose chain ends at A, X excluded, sorted: the
+            ids a baseline may use for A.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    x_id: str
+    marker_resolves_to: str
+    a_id: str
+    a_aliases: tuple[str, ...]
+
+
+class BaselineCapability(BaseModel):
+    """One Capability node as a `{short}_baseline` graph holds it.
+
+    Attributes:
+        id: Capability id.
+        name: Capability name.
+        confidence: Extraction confidence; None when the node carries none.
+        description: Capability description; None when the node carries none.
+        embedding: Cached embedding vector; None when none is cached on this node.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    name: str
+    confidence: float | None = None
+    description: str | None = None
+    embedding: tuple[float, ...] | None = None
+
+
+class CapabilityResolutionEntry(BaseModel):
+    """One automatic Capability resolution as `list-capability-resolutions` reports it.
+
+    Attributes:
+        x_id: Id of the resolved Capability, which exists only as a marker.
+        x_name: Name of X in the source baseline (the first holding baseline, by graph name,
+            whose X carries an embedding, else the first holding baseline); None when no
+            baseline holds X.
+        a_id: Id of the terminal Capability X resolves to.
+        a_name: Name of that Capability.
+        marker_resolves_to: The id the marker itself names.
+        governing_policy: The Policy governing A; None when A is ungoverned.
+        similarity: Cosine similarity of X's cached embedding in the source baseline and A's
+            cached embedding; None when either is missing or the pair cannot be scored.
+        instruments: The `RegulatoryInstrument` ids of every baseline holding X, sorted.
+        obligation_count: The existing single-tenant Obligations some baseline links to X by
+            `REQUIRES`, counted once each after following `MergedObligation` chains: the
+            Obligations a split puts on X.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    x_id: str
+    x_name: str | None
+    a_id: str
+    a_name: str
+    marker_resolves_to: str
+    governing_policy: GoverningPolicy | None
+    similarity: float | None
+    instruments: tuple[str, ...]
+    obligation_count: int
+
+
+class ListCapabilityResolutionsResult(BaseModel):
+    """`list-capability-resolutions` result.
+
+    Attributes:
+        resolutions: One entry per `ResolvedCapability`, sorted by `x_id`; empty when there is
+            none.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    resolutions: tuple[CapabilityResolutionEntry, ...]
+
+
+class ResolutionTerminal(BaseModel):
+    """The terminal Capability of a resolution chain, as the single-tenant graph holds it.
+
+    Attributes:
+        id: Capability id.
+        name: Capability name.
+        embedding: Cached embedding vector; None when none is cached.
+        governing_policy: The Policy governing the Capability; None when ungoverned.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    name: str
+    embedding: tuple[float, ...] | None
+    governing_policy: GoverningPolicy | None
+
+
+class SplitEdgeSet(BaseModel):
+    """The sources of one incoming edge type, by what a split does to their edge.
+
+    Attributes:
+        moves: Sources whose edge leaves A for X: a baseline holds it with X and none with A.
+        shared: Sources that keep their edge on A and gain one on X: baselines hold both.
+        added: Sources a baseline links to X that have no edge on A today; they gain one on X.
+        stays: Sources whose edge on A no baseline holds with X; it stays on A only.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    moves: tuple[str, ...]
+    shared: tuple[str, ...]
+    added: tuple[str, ...]
+    stays: tuple[str, ...]
+
+
+class SplitEdges(BaseModel):
+    """Per incoming edge type, what a split does to each source's edge.
+
+    Attributes:
+        requires: `REQUIRES` edges from Obligations.
+        covers: `COVERS` edges from PracticeAreas.
+        mitigated_by: `MITIGATED_BY` edges from RiskPaths.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requires: SplitEdgeSet
+    covers: SplitEdgeSet
+    mitigated_by: SplitEdgeSet
+
+
+class SplitGovernance(BaseModel):
+    """What a split does to the Policy governing A.
+
+    A keeps its `GOVERNED_BY` edge and X starts with none, so the Obligations whose `REQUIRES`
+    edge moves to X are no longer covered by that Policy.
+
+    Attributes:
+        policy: The Policy governing A.
+        acknowledgment_required: Always True: no approval is created without the officer's
+            explicit acknowledgment.
+        acknowledgment_text: The text the officer must accept; shown with the preview.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy: GoverningPolicy
+    acknowledgment_required: bool
+    acknowledgment_text: str
+
+
+class CapabilitySplitPreview(BaseModel):
+    """What a Compliance Officer is shown before approving the split of a resolved Capability.
+
+    Attributes:
+        x_id: Id of the resolved Capability that the split mints.
+        x_name: Its name in the source baseline.
+        a_id: Id of the terminal Capability X resolves to today.
+        a_name: Name of that Capability.
+        marker_resolves_to: The id the `ResolvedCapability` marker itself names.
+        source_baseline: Graph name of the baseline X is minted from: the first holding baseline,
+            by graph name, whose X carries an embedding, else the first holding baseline.
+        source_instruments: The `RegulatoryInstrument` ids that baseline holds.
+        embedding_available: True when the source baseline's X carries a cached embedding.
+        edges: Per edge type, the sources whose edge moves, is shared, is added or stays.
+        governance: Effect on the Policy governing A; None when A is ungoverned.
+        obligations_moving: Count of Obligations whose `REQUIRES` edge leaves A for X.
+        skipped_missing_endpoints: Count of sources a baseline links to X that have no node in the
+            policy graph; they get no edge.
+        state_digest: sha256 of the previewed state; binds an approval to what was shown.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    x_id: str
+    x_name: str
+    a_id: str
+    a_name: str
+    marker_resolves_to: str
+    source_baseline: str
+    source_instruments: tuple[str, ...]
+    embedding_available: bool
+    edges: SplitEdges
+    governance: SplitGovernance | None
+    obligations_moving: int
+    skipped_missing_endpoints: int
+    state_digest: str
+
+
+class SplitMarkers(BaseModel):
+    """What the Capability markers say about one id that is asked to be split.
+
+    Attributes:
+        x_marker_label: The marker label holding the id (`ResolvedCapability` or
+            `MergedCapability`); None when no marker holds it.
+        marker_resolves_to: The id the marker names; None when no marker holds it.
+        chain: The ids from X along its marker chain to the terminal, both included; empty when
+            no marker holds it.
+        a_aliases: The terminal and every other marked id whose chain ends at it, X excluded,
+            sorted; empty when no marker holds it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    x_marker_label: str | None
+    marker_resolves_to: str | None
+    chain: tuple[str, ...]
+    a_aliases: tuple[str, ...]
+
+
+class SplitTerminalState(BaseModel):
+    """The terminal Capability A of a split as the policy graph holds it.
+
+    Attributes:
+        node: A's node; None when no Capability has the terminal id.
+        policies: The Policies governing A.
+        edges: Every `REQUIRES` / `COVERS` / `MITIGATED_BY` edge into A.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    node: CapabilityNodeState | None
+    policies: tuple[GoverningPolicy, ...]
+    edges: tuple[EdgeRecord, ...]
+
+
+class CapabilitySplitPlan(BaseModel):
+    """Pure result of planning the split of one resolved Capability.
+
+    Attributes:
+        preview: What the officer is shown.
+        minted: The source baseline's X node, whose properties the minted Capability copies.
+        before: Snapshot of the touched nodes and edges before the split (no embeddings).
+        after: Snapshot after the split (no embeddings).
+        state_digest: sha256 of the previewed state.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    preview: CapabilitySplitPreview
+    minted: BaselineCapability
+    before: GraphSnapshot
+    after: GraphSnapshot
+    state_digest: str

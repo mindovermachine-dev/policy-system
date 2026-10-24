@@ -35,13 +35,13 @@ from graph_cleanup._fakes import (
     SURVIVOR_SOURCE_REF,
     RecordingAuditStore,
 )
-from ps_service.company_merge import pending_review
-from ps_service.graph_cleanup import graph_reader
+from ps_service.company_merge import pending_review, redirects
+from ps_service.graph_cleanup import baseline_reader, graph_reader
 from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
 from ps_service.graph_gateway.models import MutationGroup, UpsertNode
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from ps_service.authz.store import AccessRoleStore
     from ps_service.config import ServiceConfig
@@ -54,6 +54,12 @@ POLICY_SYSTEM = "policy_system"
 OTHER_CAPABILITY = "cap_other"
 POLICY = "pol_1"
 """The draft Policy `SURVIVOR` and `OTHER_CAPABILITY` are governed by in the default fixture."""
+SPLIT_X = "cap_x_vuln_patch"
+"""The `ResolvedCapability` of the split fixture."""
+SPLIT_A = "cap_a_vuln_remediation"
+"""The Capability `SPLIT_X` resolves to in the split fixture."""
+SPLIT_POLICY = "pol_patching"
+"""The approved Policy governing `SPLIT_A` when the split fixture is seeded governed."""
 
 _ENDPOINT_LABELS = {"REQUIRES": "Obligation", "COVERS": "PracticeArea", "MITIGATED_BY": "RiskPath"}
 """The node label each capability-unmerge endpoint read looks for."""
@@ -104,6 +110,7 @@ class CleanupReadGraph:
             graph_reader._INSTRUMENT_EXISTS_QUERY: self._instrument_exists,
             graph_reader._REQUIREMENTS_EXIST_QUERY: self._requirements_exist,
             graph_reader._CAPABILITIES_EXIST_QUERY: self._capabilities_exist,
+            graph_reader._CAPABILITY_EMBEDDINGS_QUERY: self._capability_embeddings,
             pending_review._REVIEW_KIND_QUERY: self._pending_review,
             pending_review._GET_REVIEW_QUERY: self._get_review,
         }
@@ -118,6 +125,7 @@ class CleanupReadGraph:
         for query, id_param in (
             (graph_reader._CAPABILITY_ANY_MARKER_QUERY, "capability_id"),
             (graph_reader._OBLIGATION_ANY_MARKER_QUERY, "obligation_id"),
+            (graph_reader._RESOLVED_CAPABILITY_PRESENT_QUERY, "capability_id"),
         ):
             self._reads[query] = self._any_marker(_marker_label(query), id_param)
         for query in (
@@ -126,6 +134,15 @@ class CleanupReadGraph:
             graph_reader._ROLE_MARKERS_QUERY,
         ):
             self._reads[query] = self._markers(_marker_label(query))
+        # Company Merge's per-label marker reads, answered from the label and target property
+        # its own marker sources name, so the double reads what the production read names.
+        for source in (
+            *redirects._KINDS["Capability"].markers,
+            *redirects._KINDS["Obligation"].markers,
+        ):
+            self._reads[source.query] = self._every_marker(
+                _marker_label(source.query), source.target_property
+            )
         self._flips: list[tuple[str, int, Callable[[], None]]] = []
         self._seen: dict[str, int] = {}
 
@@ -317,6 +334,28 @@ class CleanupReadGraph:
 
         return read
 
+    def _every_marker(
+        self, label: str, target_property: str
+    ) -> Callable[[dict[str, object]], list[object]]:
+        """`[id, target]` of every `label` marker, with no id filter."""
+
+        def read(_params: dict[str, object]) -> list[object]:
+            return [
+                [node_id, props.get(target_property)]
+                for (node_label, node_id), props in self._graph.nodes.items()
+                if node_label == label
+            ]
+
+        return read
+
+    def _capability_embeddings(self, params: dict[str, object]) -> list[object]:
+        wanted = set(cast("list[str]", params["ids"]))
+        return [
+            [node_id, props.get("name"), props.get("embedding")]
+            for (label, node_id), props in self._graph.nodes.items()
+            if label == "Capability" and node_id in wanted
+        ]
+
     def _capability_present(self, params: dict[str, object]) -> list[object]:
         present = ("Capability", cast("str", params["capability_id"])) in self._graph.nodes
         return [[1 if present else 0]]
@@ -451,6 +490,75 @@ class CleanupReadGraph:
 
     def _capabilities_exist(self, params: dict[str, object]) -> list[object]:
         return self._existing_nodes("Capability")(params)
+
+
+class BaselineReadGraph:
+    """A read-only `GraphHandle` over one rig graph seeded as a `{short}_baseline` graph.
+
+    It answers only the `baseline_reader` statements and refuses a write keyword or any read it
+    was not taught, as `CleanupReadGraph` does for the single-tenant graph.
+    """
+
+    def __init__(self, graph: InMemoryGraph) -> None:
+        self._graph = graph
+        self.statements: list[str] = []
+        """Every statement received, in order."""
+        self._reads: dict[str, Callable[[dict[str, object]], list[object]]] = {
+            baseline_reader._CAPABILITY_QUERY: self._capabilities,
+            baseline_reader._INSTRUMENT_QUERY: self._instruments,
+        }
+        for rel_type, query in baseline_reader._INCOMING_EDGE_QUERIES.items():
+            self._reads[query] = self._incoming(rel_type, _ENDPOINT_LABELS[rel_type])
+
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> FakeQueryResult:
+        """Answer one fixed baseline read from the rig graph (`timeout` is accepted, ignored)."""
+        del timeout
+        self.statements.append(q)
+        if _WRITE_KEYWORD.search(q):
+            raise AssertionError(f"the baseline read double refuses a write statement: {q}")
+        read = self._reads.get(q)
+        if read is None:
+            raise AssertionError(f"not a baseline read statement the double was taught: {q}")
+        return FakeQueryResult(read(params or {}))
+
+    def _capabilities(self, params: dict[str, object]) -> list[object]:
+        wanted = set(cast("list[str]", params["ids"]))
+        return [
+            [
+                node_id,
+                props.get("name"),
+                props.get("confidence"),
+                props.get("description"),
+                props.get("embedding"),
+            ]
+            for (label, node_id), props in self._graph.nodes.items()
+            if label == "Capability" and node_id in wanted
+        ]
+
+    def _incoming(
+        self, rel_type: str, source_label: str
+    ) -> Callable[[dict[str, object]], list[object]]:
+        """`[source id, target id]` of each `source_label -[rel_type]-> Capability` edge."""
+
+        def read(params: dict[str, object]) -> list[object]:
+            wanted = set(cast("list[str]", params["ids"]))
+            return [
+                [key[2], key[4]]
+                for key in self._graph.edges
+                if key[0] == rel_type
+                and key[1] == source_label
+                and key[3] == "Capability"
+                and key[4] in wanted
+            ]
+
+        return read
+
+    def _instruments(self, _params: dict[str, object]) -> list[object]:
+        return [
+            [node_id] for (label, node_id) in self._graph.nodes if label == "RegulatoryInstrument"
+        ]
 
 
 class CleanupGraphSeeder:
@@ -800,8 +908,9 @@ class _RigGateway:
 class CleanupRig(GatewayRig, CleanupGraphSeeder):
     """A gateway rig that also hands out `policy_system`, its read handle and an audit store."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, swap: bool = False) -> None:
+        """Open `policy_system`; `swap` wires the key space in, as a restore's graph swap needs."""
+        super().__init__(swap=swap)
         CleanupGraphSeeder.__init__(self, self.graphs.open(POLICY_SYSTEM))
         self.read = CleanupReadGraph(self.graph)
         self.audit = RecordingAuditStore(
@@ -809,6 +918,100 @@ class CleanupRig(GatewayRig, CleanupGraphSeeder):
         )
         self.hooked = HookedSubmitter(self.gateway)
         """The gateway behind a one-shot `before_submit` hook (the stale-injection seam)."""
+        self.baselines: dict[str, BaselineReadGraph] = {}
+        """The read handle of every `{short}_baseline` graph seeded, by graph name."""
+
+    def seed_baseline(
+        self,
+        name: str,
+        *,
+        instrument_id: str,
+        capabilities: Mapping[str, Mapping[str, object]],
+    ) -> InMemoryGraph:
+        """Seed the baseline graph `name`: its RegulatoryInstrument and Capability nodes by id."""
+        graph = self.graphs.open(name)
+        graph.seed_node(("RegulatoryInstrument",), instrument_id, {})
+        for capability_id, properties in capabilities.items():
+            graph.seed_node(("Capability",), capability_id, dict(properties))
+        self.baselines[name] = BaselineReadGraph(graph)
+        return graph
+
+    def seed_baseline_requires(self, name: str, edges: Sequence[tuple[str, str]]) -> None:
+        """Seed `(Obligation)-[:REQUIRES]->(Capability)` edges, with the Obligations, in `name`."""
+        self.seed_baseline_edges(name, "REQUIRES", edges)
+
+    def seed_baseline_edges(
+        self, name: str, rel_type: str, edges: Sequence[tuple[str, str]]
+    ) -> None:
+        """Seed incoming `rel_type` Capability edges, with their source nodes, in `name`."""
+        graph = self.graphs.open(name)
+        source_label = _ENDPOINT_LABELS[rel_type]
+        for source_id, capability_id in edges:
+            graph.seed_node((source_label,), source_id, {})
+            identity = f"{rel_type}:{source_id}->{capability_id}"
+            key = (rel_type, source_label, source_id, "Capability", capability_id, identity)
+            graph.edges[key] = {"identity": identity}
+            graph.edge_internal_id(key)
+
+    def seed_capability_split_world(self, *, governed: bool = False, legacy: bool = False) -> None:
+        """`SPLIT_X` resolved onto `SPLIT_A`, with an edge in every role the split tells apart.
+
+        REQUIRES: `obl_moves` is held on X only and sits on A today (moves); `obl_shared` is held
+        on X and on A (shared); `obl_stays` is on A and held on X by no baseline (stays);
+        `obl_added` is held on X but not on A today (added); `obl_gone` is held on X but has no
+        single-tenant node (skipped). COVERS: `pa_moves` moves. MITIGATED_BY: `rp_stays` stays.
+        `governed` puts A under `SPLIT_POLICY`; `legacy` leaves A's edges without an identity, as
+        a pre-gateway writer did.
+        """
+        self.seed_capability(SPLIT_A, name="Vulnerability remediation", status="active")
+        if governed:
+            self.seed_policy(SPLIT_POLICY, title="Patch Management Policy", status="approved")
+            self.seed_governs(SPLIT_A, SPLIT_POLICY)
+        self.graph.seed_node(("ResolvedCapability",), SPLIT_X, {"resolves_to": SPLIT_A})
+        for obligation in ("obl_moves", "obl_shared", "obl_stays", "obl_added"):
+            self.seed_endpoint("Obligation", obligation, text=obligation)
+        self.seed_endpoint("PracticeArea", "pa_moves", name="pa_moves")
+        self.seed_endpoint("RiskPath", "rp_stays", name="rp_stays")
+        for source_label, source, rel_type in (
+            ("Obligation", "obl_moves", "REQUIRES"),
+            ("Obligation", "obl_shared", "REQUIRES"),
+            ("Obligation", "obl_stays", "REQUIRES"),
+            ("PracticeArea", "pa_moves", "COVERS"),
+            ("RiskPath", "rp_stays", "MITIGATED_BY"),
+        ):
+            self.seed_edge((rel_type, source_label, source, "Capability", SPLIT_A), legacy=legacy)
+        self.seed_baseline(
+            "dora_baseline",
+            instrument_id="32022R2554",
+            capabilities={SPLIT_A: {"name": "Vulnerability remediation"}},
+        )
+        self.seed_baseline_edges("dora_baseline", "REQUIRES", (("obl_shared", SPLIT_A),))
+        self.seed_baseline(
+            "nis2_baseline",
+            instrument_id="32022L2555",
+            capabilities={
+                SPLIT_X: {
+                    "name": "Vulnerability patching",
+                    "confidence": 0.9,
+                    "embedding": [1.0, 0.0],
+                }
+            },
+        )
+        self.seed_baseline_edges(
+            "nis2_baseline",
+            "REQUIRES",
+            (
+                ("obl_moves", SPLIT_X),
+                ("obl_shared", SPLIT_X),
+                ("obl_added", SPLIT_X),
+                ("obl_gone", SPLIT_X),
+            ),
+        )
+        self.seed_baseline_edges("nis2_baseline", "COVERS", (("pa_moves", SPLIT_X),))
+
+    def baseline_graphs(self) -> tuple[tuple[str, BaselineReadGraph], ...]:
+        """Every seeded baseline as `(graph name, read handle)`, sorted by graph name."""
+        return tuple(sorted(self.baselines.items()))
 
     def dependencies(
         self,
@@ -827,6 +1030,7 @@ class CleanupRig(GatewayRig, CleanupGraphSeeder):
             audit_store=lambda _config: self.audit,
             access_role_store=lambda _config: roles,
             graph_write_gateway=_gateway,  # pyright: ignore[reportArgumentType] -- the rig gateway satisfies `CleanupSubmitter` structurally
+            open_baseline_graphs=lambda _config: self.baseline_graphs(),
         )
 
     def order(self) -> list[str]:

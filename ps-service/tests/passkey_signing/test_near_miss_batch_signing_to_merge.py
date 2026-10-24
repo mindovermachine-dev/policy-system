@@ -306,7 +306,7 @@ def _graph_state(world: _World) -> object:
     return copy.deepcopy(dict(world.rig.graph.nodes)), set(world.rig.graph.edges)
 
 
-def test_a_credential_of_another_actor_cannot_sign_and_gets_the_unknown_id_response(
+def test_a_credential_of_another_actor_cannot_sign_gets_the_unknown_id_response_and_is_audited(
     world: _World,
 ) -> None:
     row, code = world.approve()
@@ -327,10 +327,17 @@ def test_a_credential_of_another_actor_cannot_sign_and_gets_the_unknown_id_respo
     assert foreign.status_code == unknown.status_code == 404
     assert foreign.json() == unknown.json()
     assert _graph_state(world) == before
-    assert world.audit.rows == []
+    [refused] = world.audit.rows
+    assert (refused.action, refused.outcome) == ("capability.merge", "failed")
+    assert (refused.actor_subject, refused.details["reason_code"]) == (
+        "someone-else",
+        "signer_not_bound_actor",
+    )
     stored = world.pending.get_by_id(row.id)
     assert stored is not None
-    assert stored.status == "pending"
+    assert stored.status == "signed"
+    assert world.sign(row, code).status_code == 404
+    assert _graph_state(world) == before
 
 
 def _tampered(item: dict[str, object], field: str) -> dict[str, object]:

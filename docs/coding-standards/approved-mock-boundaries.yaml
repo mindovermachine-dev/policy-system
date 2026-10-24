@@ -28,6 +28,10 @@ falkordb:
   # Graph-opener-only accessor that `build_default_graph_cleanup_dependencies` delegates to:
   # zero business logic, sole FalkorDB connection surface of `ps_service.graph_cleanup`.
   - ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener
+  # Baseline-graph-opener-only accessor that `build_default_graph_cleanup_dependencies` delegates
+  # to: zero business logic, sole FalkorDB connection surface of `ps_service.graph_cleanup` for
+  # the read-only `{short}_baseline` graphs.
+  - ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_baseline_opener
   # Fetch / effective-source / FalkorDB-opener accessor that
   # `build_default_restore_from_catalog_dependencies` delegates to; the only piece of it a caller
   # may substitute. Its boundary is mixed HTTP and FalkorDB (`CatalogRestoreInfra`) because the

@@ -66,6 +66,7 @@ _ROLE_TOOLS: dict[str, tuple[dict[str, object], str]] = {
     "verify-audit-log": ({}, _ROLE_MANAGEMENT_UNAUTHENTICATED),
     "find-capability-merge-candidates": ({}, _CLEANUP_UNAUTHENTICATED),
     "find-duplicate-obligations": ({}, _CLEANUP_UNAUTHENTICATED),
+    "list-capability-resolutions": ({}, _CLEANUP_UNAUTHENTICATED),
     "merge-capabilities": (
         {"survivor_id": "cap_a", "absorbed_id": "cap_b"},
         _CLEANUP_UNAUTHENTICATED,
@@ -79,6 +80,7 @@ _ROLE_TOOLS: dict[str, tuple[dict[str, object], str]] = {
         _CLEANUP_UNAUTHENTICATED,
     ),
     "release-capability-governance": ({"capability_id": "cap_a"}, _CLEANUP_UNAUTHENTICATED),
+    "split-capability": ({"x_id": "cap_x"}, _CLEANUP_UNAUTHENTICATED),
     "unmerge-entities": ({"merged_id": "cap_b"}, _CLEANUP_UNAUTHENTICATED),
     "check-cleanup-approval": ({"pending_approval_id": "approval-1"}, _CLEANUP_UNAUTHENTICATED),
     "merge-near-misses": ({"review_ids": ["review_a"]}, _CLEANUP_UNAUTHENTICATED),

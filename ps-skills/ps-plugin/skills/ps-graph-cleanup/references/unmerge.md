@@ -8,7 +8,8 @@ recorded. It takes only `merged_id`: the id that was absorbed (a deleted Capabil
 `MergedCapability` marker, a deleted Obligation with a `MergedObligation` marker, or a deleted
 Role with a `MergedRole` marker). A `ResolvedCapability` marker, which Company Merge leaves when
 it resolves an incoming Capability onto an existing one by similarity, is not a merge and cannot
-be unmerged.
+be unmerged: a wrong automatic resolution is undone with `split-capability` (see
+`references/split.md`).
 The tool works out which kind it is from the audit trail; `preview.kind` says so. The flow is
 locate -> preview -> confirm -> passkey -> result; never skip a step.
 

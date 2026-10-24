@@ -1,8 +1,8 @@
 """Executors run when a signed passkey approval is verified.
 
-`execute_capability_merge`, `execute_obligation_merge` and `execute_role_merge` are the
-post-signature steps of `merge-capabilities`, `merge-obligations` and `merge-roles` (audit-first
-and fail-closed). Order:
+`execute_capability_merge`, `execute_obligation_merge`, `execute_role_merge` and
+`execute_capability_split` are the post-signature steps of `merge-capabilities`,
+`merge-obligations`, `merge-roles` and `split-capability` (audit-first and fail-closed). Order:
 
 1. re-check the approving actor still holds `ComplianceOfficer` (a store outage denies);
 2. re-read the graph, re-validate, and compare the state digest bound into the signed args;
@@ -15,9 +15,10 @@ and fail-closed). Order:
    miss or failure records a `failed` row with the same `approval_id` (best effort) and returns a
    generic error.
 
-A Capability merge refused at step 1 or 2 records a `failed` `capability.merge` row too (best
-effort, no snapshots), with a `reason_code` naming the refusal, so the refusal is on the audit
-trail even though nothing was written. Other tools' refusals before the write record no row.
+A Capability merge, Role merge or Capability split refused at step 1 or 2 records a `failed` row
+of its action too (best effort, no snapshots), with a `reason_code` naming the refusal, so the
+refusal is on the audit trail even though nothing was written. Other tools' refusals before the
+write record no row.
 
 The function never raises for an expected failure; every error outcome is a short message
 with no internal detail. The module registers its executor and effect verifier with
@@ -27,6 +28,7 @@ with no internal detail. The module registers its executor and effect verifier w
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, cast
 
 from ps_service.api.errors import AuthorizationStoreUnavailableError
@@ -42,6 +44,7 @@ from ps_service.authz.service import check_role
 from ps_service.graph_cleanup.audit_actions import (
     CAPABILITY_MERGE_ACTION,
     CAPABILITY_RELEASE_GOVERNANCE_ACTION,
+    CAPABILITY_SPLIT_ACTION,
     CAPABILITY_UNMERGE_ACTION,
     OBLIGATION_MERGE_ACTION,
     OBLIGATION_UNMERGE_ACTION,
@@ -49,6 +52,7 @@ from ps_service.graph_cleanup.audit_actions import (
     ROLE_UNMERGE_ACTION,
     CapabilityMergeDetails,
     CapabilityReleaseGovernanceDetails,
+    CapabilitySplitDetails,
     CapabilityUnmergeDetails,
     CleanupFailedReason,
     ObligationMergeDetails,
@@ -65,6 +69,7 @@ from ps_service.graph_cleanup.errors import (
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
     read_capability_merged,
+    read_capability_present,
     read_capability_present_without_marker,
     read_governed_by_edge_present,
     read_obligation_marker,
@@ -73,6 +78,7 @@ from ps_service.graph_cleanup.graph_reader import (
     read_obligation_present,
     read_pending_review,
     read_release_state,
+    read_resolved_capability_present,
     read_role_merge_state,
     read_role_merged,
     read_role_present_without_marker,
@@ -80,6 +86,7 @@ from ps_service.graph_cleanup.graph_reader import (
 from ps_service.graph_cleanup.graph_submission import graph_write_target
 from ps_service.graph_cleanup.group_builders import (
     write_capability_merge,
+    write_capability_split,
     write_capability_unmerge,
     write_obligation_merge,
     write_obligation_unmerge,
@@ -87,10 +94,13 @@ from ps_service.graph_cleanup.group_builders import (
     write_role_merge,
     write_role_unmerge,
 )
-from ps_service.graph_cleanup.merge_planner import plan_capability_merge
+from ps_service.graph_cleanup.merge_planner import EDGE_CLASSES, plan_capability_merge
+from ps_service.graph_cleanup.models import EdgeRecord
 from ps_service.graph_cleanup.obligation_planner import plan_obligation_merge
 from ps_service.graph_cleanup.release_planner import plan_release_governance
 from ps_service.graph_cleanup.role_planner import plan_role_merge, validate_role_review
+from ps_service.graph_cleanup.split_planner import plan_capability_split, preview_policy_id
+from ps_service.graph_cleanup.split_reader import read_capability_split_state
 from ps_service.graph_cleanup.unmerge import plan_unmerge
 from ps_service.logging import emit_log_entry
 from ps_service.passkey_signing.executors import (
@@ -107,6 +117,7 @@ if TYPE_CHECKING:
     from ps_service.graph_cleanup.graph_submission import GraphWriteTarget
     from ps_service.graph_cleanup.models import (
         CapabilityMergePlan,
+        CapabilitySplitPlan,
         CapabilityUnmergePlan,
         MergeCase,
         ObligationMergePlan,
@@ -119,17 +130,21 @@ if TYPE_CHECKING:
     from ps_service.passkey_signing.models import PendingApprovalRow
 
 __all__ = [
+    "CLEANUP_TOOL_NAMES",
     "TOOL_MERGE_CAPABILITIES",
     "TOOL_MERGE_OBLIGATIONS",
     "TOOL_MERGE_ROLES",
     "TOOL_RELEASE_GOVERNANCE",
+    "TOOL_SPLIT_CAPABILITY",
     "TOOL_UNMERGE",
     "execute_capability_merge",
+    "execute_capability_split",
     "execute_obligation_merge",
     "execute_release_governance",
     "execute_role_merge",
     "execute_unmerge",
     "verify_capability_merge_effect",
+    "verify_capability_split_effect",
     "verify_obligation_merge_effect",
     "verify_release_governance_effect",
     "verify_role_merge_effect",
@@ -140,7 +155,19 @@ TOOL_MERGE_CAPABILITIES = "merge-capabilities"
 TOOL_MERGE_OBLIGATIONS = "merge-obligations"
 TOOL_MERGE_ROLES = "merge-roles"
 TOOL_RELEASE_GOVERNANCE = "release-capability-governance"
+TOOL_SPLIT_CAPABILITY = "split-capability"
 TOOL_UNMERGE = "unmerge-entities"
+# Every passkey-approved cleanup tool this module executes.
+CLEANUP_TOOL_NAMES = frozenset(
+    {
+        TOOL_MERGE_CAPABILITIES,
+        TOOL_MERGE_OBLIGATIONS,
+        TOOL_MERGE_ROLES,
+        TOOL_RELEASE_GOVERNANCE,
+        TOOL_SPLIT_CAPABILITY,
+        TOOL_UNMERGE,
+    }
+)
 _COMPONENT = "graph_cleanup"
 _AUDIT_ERRORS = (
     AuditPostgresUnavailableError,
@@ -174,6 +201,12 @@ _AUDIT_UNREADABLE = "the audit trail could not be read; nothing was changed"
 _UNMERGE_NOT_AUDITED = (
     "the unmerge was not performed because it could not be audited; nothing was changed"
 )
+_SPLIT_NOT_AUDITED = (
+    "the split was not performed because it could not be audited; nothing was changed"
+)
+_SPLIT_WRITE_FAILED = (
+    "the split could not be completed; check its status with check-cleanup-approval before retrying"
+)
 _UNMERGE_WRITE_FAILED = (
     "the unmerge could not be completed; "
     "check its status with check-cleanup-approval before retrying"
@@ -192,6 +225,7 @@ def _log(row: PendingApprovalRow, outcome: str, reason: str | None = None) -> No
         TOOL_MERGE_OBLIGATIONS: "execute_obligation_merge",
         TOOL_MERGE_ROLES: "execute_role_merge",
         TOOL_RELEASE_GOVERNANCE: "execute_release_governance",
+        TOOL_SPLIT_CAPABILITY: "execute_capability_split",
         TOOL_UNMERGE: "execute_unmerge",
     }.get(row.tool_name, "execute_capability_merge")
     emit_log_entry(component=_COMPONENT, action=action, outcome=outcome, extra=extra)
@@ -1832,3 +1866,288 @@ def _execute_unmerge_registered(
 
 register_approval_executor(TOOL_UNMERGE, _execute_unmerge_registered)
 register_effect_verifier(TOOL_UNMERGE, verify_unmerge_effect)
+
+
+def _split_edges(plan: CapabilitySplitPlan) -> dict[str, tuple[EdgeRecord, ...]]:
+    """The moved, shared and added edges of a split plan, as audit `EdgeRecord`s."""
+    preview = plan.preview
+    by_type = {
+        "REQUIRES": preview.edges.requires,
+        "COVERS": preview.edges.covers,
+        "MITIGATED_BY": preview.edges.mitigated_by,
+    }
+
+    def records(field: str, target_id: str) -> tuple[EdgeRecord, ...]:
+        return tuple(
+            EdgeRecord(
+                rel_type=rel_type,
+                source_label=source_label,
+                source_id=source_id,
+                target_label="Capability",
+                target_id=target_id,
+            )
+            for rel_type, source_label in EDGE_CLASSES
+            for source_id in getattr(by_type[rel_type], field)
+        )
+
+    return {
+        "moved_edges": records("moves", preview.a_id),
+        "shared_edges": records("shared", preview.a_id),
+        "added_edges": records("added", preview.x_id),
+    }
+
+
+def _split_details(
+    row: PendingApprovalRow,
+    *,
+    plan: CapabilitySplitPlan,
+    failed_reason: Literal["graph_guard_missed", "graph_write_failed"] | None = None,
+) -> dict[str, object]:
+    preview = plan.preview
+    governance = preview.governance
+    return CapabilitySplitDetails(
+        x_id=preview.x_id,
+        a_id=preview.a_id,
+        approval_id=row.id,
+        acknowledged=row.normalized_args.get("acknowledge_governance_change") is True,
+        marker_resolves_to=preview.marker_resolves_to,
+        policy_id=governance.policy.id if governance else None,
+        policy_status=governance.policy.status if governance else None,
+        source_baseline=preview.source_baseline,
+        **_split_edges(plan),
+        before=plan.before,
+        after=plan.after,
+        reason_code=failed_reason,
+    ).model_dump()
+
+
+def _split_refusal_details(
+    row: PendingApprovalRow,
+    *,
+    survivor_id: str,
+    absorbed_id: str,
+    reason: CleanupFailedReason,
+) -> dict[str, object]:
+    """Details of a `failed` `capability.split` row for a refusal made before any plan exists.
+
+    `absorbed_id` is X and `survivor_id` is A as signed; no plan means no snapshots, edges or
+    baseline, and the Policy is the one the preview put in the approval's display summary.
+    """
+    return CapabilitySplitDetails(
+        x_id=absorbed_id,
+        a_id=survivor_id,
+        approval_id=row.id,
+        acknowledged=row.normalized_args.get("acknowledge_governance_change") is True,
+        policy_id=preview_policy_id(row.display_summary),
+        reason_code=reason,
+    ).model_dump()
+
+
+_SPLIT_REFUSAL = _RefusalKind(CAPABILITY_SPLIT_ACTION, "capability", _split_refusal_details)
+
+
+def _refuse_split(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    *,
+    x_id: str,
+    a_id: str,
+    refusal: _Refusal,
+) -> dict[str, object]:
+    """Refuse a split before the audit-first write: a `failed` `capability.split` row."""
+    return _refuse_as(
+        _SPLIT_REFUSAL,
+        row,
+        dependencies,
+        config,
+        survivor_id=a_id,
+        absorbed_id=x_id,
+        refusal=refusal,
+    )
+
+
+type _SplitGraphs = tuple[GraphHandle, tuple[tuple[str, GraphHandle], ...]]
+
+
+def _replan_capability_split(
+    row: PendingApprovalRow,
+    config: ServiceConfig,
+    dependencies: GraphCleanupDependencies,
+    *,
+    x_id: str,
+    a_id: str,
+    digest: str,
+) -> tuple[_SplitGraphs, CapabilitySplitPlan] | dict[str, object]:
+    """Step 2 for a split: re-read the graph and the baselines, re-validate, compare the digest.
+
+    Returns the graphs and the plan, or the error outcome to return. Every refusal here records a
+    `failed` `capability.split` row.
+    """
+
+    def _refused(refusal: _Refusal) -> dict[str, object]:
+        return _refuse_split(row, dependencies, config, x_id=x_id, a_id=a_id, refusal=refusal)
+
+    try:
+        graph = dependencies.open_single_tenant_graph(config)
+        baselines = dependencies.open_baseline_graphs(config)
+        plan = plan_capability_split(read_capability_split_state(graph, baselines, x_id))
+    except GraphCleanupValidationError as exc:
+        return _refused(_Refusal("revalidation_rejected", str(exc)))
+    except Exception as exc:  # noqa: BLE001 -- opening/reading the graphs may fail in driver-specific ways; the message returned never carries them
+        return _refused(
+            _Refusal("graph_unavailable", _UNAVAILABLE, f"graph_unavailable:{type(exc).__name__}")
+        )
+    governance = plan.preview.governance
+    if (
+        governance is not None
+        and governance.acknowledgment_required
+        and row.normalized_args.get("acknowledge_governance_change") is not True
+    ):
+        # Defence in depth: the approval flow never creates such a row.
+        return _refused(_Refusal("acknowledgment_missing", _ACK_REQUIRED))
+    if plan.state_digest != digest or plan.preview.a_id != a_id:
+        return _refused(_Refusal("state_digest_mismatch", _STALE))
+    return (graph, baselines), plan
+
+
+def _write_split_after_audit(
+    row: PendingApprovalRow,
+    dependencies: GraphCleanupDependencies,
+    config: ServiceConfig,
+    graphs: _SplitGraphs,
+    *,
+    plan: CapabilitySplitPlan,
+) -> dict[str, object]:
+    """Steps 3-4 for a split: record `applied`, then one gateway group; `failed` on error.
+
+    The group carries the `applied` row's id as its audit link. A group committed but not applied
+    yet is a success (no `failed` row).
+    """
+    x_id, a_id = plan.preview.x_id, plan.preview.a_id
+    try:
+        audit_event_id = _record_applied(
+            row,
+            dependencies,
+            config,
+            absorbed_id=x_id,
+            details=_split_details(row, plan=plan),
+            action=CAPABILITY_SPLIT_ACTION,
+        )
+    except _AUDIT_ERRORS as exc:
+        _log(row, "failed", f"audit_unavailable:{type(exc).__name__}")
+        return _error(_SPLIT_NOT_AUDITED)
+    graph, baselines = graphs
+    reason: Literal["graph_guard_missed", "graph_write_failed"]
+    try:
+        write_capability_split(
+            graph,
+            baselines,
+            graph_write_target(dependencies, config),
+            audit_event_id=audit_event_id,
+            x_id=x_id,
+            state_digest=plan.state_digest,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+    except GraphCleanupStaleStateError:
+        reason, message = "graph_guard_missed", _STALE
+    except GraphCleanupPersistenceError:
+        reason, message = "graph_write_failed", _SPLIT_WRITE_FAILED
+    else:
+        _log(row, "succeeded")
+        return {"x_id": x_id, "a_id": a_id, "split": True}
+    _log(row, "failed", reason)
+    try:
+        _record(
+            row,
+            dependencies,
+            config,
+            outcome="failed",
+            absorbed_id=x_id,
+            details=_split_details(row, plan=plan, failed_reason=reason),
+            action=CAPABILITY_SPLIT_ACTION,
+        )
+    except _AUDIT_ERRORS as exc:
+        _log(row, "failed", f"failed_row_not_recorded:{type(exc).__name__}")
+    return _error(message)
+
+
+def execute_capability_split(
+    row: PendingApprovalRow, config: ServiceConfig, dependencies: GraphCleanupDependencies
+) -> dict[str, object]:
+    """Execute one signed `split-capability` approval; return its outcome dict.
+
+    Follows the same fail-closed order as `execute_capability_merge`: authority re-check, re-read
+    of the policy graph and the baselines with the state-digest comparison (a governed A also
+    needs the signed acknowledgment), `applied` audit row, then one guarded gateway group.
+
+    Args:
+        row: The verified approval; its `normalized_args` carry the signed arguments (`x_id`,
+            `a_id`, `acknowledge_governance_change`, `state_digest`) and its actor identifies who
+            approved.
+        config: Service configuration used to open the graphs and the stores.
+        dependencies: Factories for the graphs, audit store, access-role store and gateway.
+
+    Returns:
+        On success `{"x_id", "a_id", "split": True}`. On any expected failure
+        `{"error": <short message without internal detail>}`; this function does not raise for
+        them (malformed arguments, lost authority, drift, unavailable graph or audit, failed
+        write).
+
+    Side Effects:
+        Writes an `applied` `capability.split` audit row, then one gateway group that mints X
+        from the source baseline, moves the baseline-justified edges from A to X and deletes the
+        `ResolvedCapability` marker. When the guard or the write fails, or the split is refused
+        before the write (lost authority, drift, a marker that no longer validates, an
+        unreachable graph), records a `failed` row with the same `approval_id` (best effort).
+        Emits a structured log entry.
+    """
+    x_id = _string_arg(row, "x_id")
+    a_id = _string_arg(row, "a_id")
+    digest = _string_arg(row, "state_digest")
+    if x_id is None or a_id is None or digest is None:
+        _log(row, "failed", "malformed_normalized_args")
+        return _error(_BAD_APPROVAL)
+    if not _actor_is_still_authorised(row, dependencies, config):
+        return _refuse_split(
+            row,
+            dependencies,
+            config,
+            x_id=x_id,
+            a_id=a_id,
+            refusal=_Refusal("actor_not_authorised", _NOT_AUTHORISED),
+        )
+    replanned = _replan_capability_split(
+        row, config, dependencies, x_id=x_id, a_id=a_id, digest=digest
+    )
+    if isinstance(replanned, dict):
+        return replanned
+    graphs, plan = replanned
+    return _write_split_after_audit(row, dependencies, config, graphs, plan=plan)
+
+
+def verify_capability_split_effect(row: PendingApprovalRow, graph: GraphHandle) -> bool:
+    """Report whether the approved split is present in the graph.
+
+    Args:
+        row: The approval; needs a string `x_id` in `normalized_args`.
+        graph: Handle on the single-tenant graph, read only.
+
+    Returns:
+        True when a Capability with X's id exists and no `ResolvedCapability` marker with it
+        remains; False otherwise, or when `x_id` is missing from the arguments.
+    """
+    x_id = _string_arg(row, "x_id")
+    if x_id is None:
+        return False
+    return read_capability_present(
+        graph, capability_id=x_id
+    ) and not read_resolved_capability_present(graph, capability_id=x_id)
+
+
+def _execute_split_registered(row: PendingApprovalRow, config: ServiceConfig) -> dict[str, object]:
+    return execute_capability_split(row, config, build_default_graph_cleanup_dependencies())
+
+
+register_approval_executor(TOOL_SPLIT_CAPABILITY, _execute_split_registered)
+register_effect_verifier(TOOL_SPLIT_CAPABILITY, verify_capability_split_effect)

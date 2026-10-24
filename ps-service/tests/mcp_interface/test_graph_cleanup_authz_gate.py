@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 _TOOLS: list[tuple[str, dict[str, object]]] = [
     ("find-capability-merge-candidates", {}),
     ("find-duplicate-obligations", {}),
+    ("list-capability-resolutions", {}),
     ("merge-capabilities", {"survivor_id": "cap_a", "absorbed_id": "cap_b"}),
     (
         "merge-capabilities",
@@ -45,6 +46,7 @@ _TOOLS: list[tuple[str, dict[str, object]]] = [
     ("merge-obligations", {"survivor_id": "obl_a", "absorbed_id": "obl_b"}),
     ("merge-roles", {"survivor_id": "role_a", "absorbed_id": "role_b"}),
     ("release-capability-governance", {"capability_id": "cap_a"}),
+    ("split-capability", {"x_id": "cap_x"}),
     ("unmerge-entities", {"merged_id": "cap_b"}),
     ("check-cleanup-approval", {"pending_approval_id": "approval-1"}),
     ("merge-near-misses", {"review_ids": ["review_a"]}),

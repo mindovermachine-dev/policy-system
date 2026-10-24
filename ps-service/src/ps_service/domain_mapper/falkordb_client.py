@@ -188,3 +188,17 @@ def baseline_graph_name(short_name: str) -> str:
         The lower-cased baseline graph name.
     """
     return f"{short_name.lower()}{_BASELINE_GRAPH_SUFFIX}"
+
+
+def is_baseline_graph_name(name: str) -> bool:
+    """Return whether `name` is a per-regulation baseline graph name.
+
+    A baseline graph name is what `baseline_graph_name` builds: a short name and the suffix.
+
+    Args:
+        name: A graph name, as the server lists it.
+
+    Returns:
+        True when `name` ends with the baseline suffix after a non-empty short name.
+    """
+    return len(name) > len(_BASELINE_GRAPH_SUFFIX) and name.endswith(_BASELINE_GRAPH_SUFFIX)

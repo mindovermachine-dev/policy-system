@@ -741,10 +741,12 @@ def test_the_lifecycle_role_enforcer_refuses_a_gate_that_is_not_a_lifecycle_body
 _GRAPH_CLEANUP_TOOLS = (
     "find-capability-merge-candidates",
     "find-duplicate-obligations",
+    "list-capability-resolutions",
     "merge-capabilities",
     "merge-obligations",
     "merge-roles",
     "release-capability-governance",
+    "split-capability",
     "unmerge-entities",
     "check-cleanup-approval",
 )
@@ -786,7 +788,9 @@ def _role_factory_for(store: FakeAccessRoleStore) -> Callable[..., FakeAccessRol
     [
         ("find-capability-merge-candidates", {}),
         ("find-duplicate-obligations", {}),
+        ("list-capability-resolutions", {}),
         ("merge-capabilities", {"survivor_id": "cap-a", "absorbed_id": "cap-b"}),
+        ("split-capability", {"x_id": "cap-x"}),
         ("merge-obligations", {"survivor_id": "obl-a", "absorbed_id": "obl-b"}),
         ("merge-roles", {"survivor_id": "role-a", "absorbed_id": "role-b"}),
     ],

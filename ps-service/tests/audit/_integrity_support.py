@@ -90,19 +90,6 @@ def head_row_locked(prov: Provisioned) -> Generator[None]:
 
 
 @contextmanager
-def role_statement_timeout(prov: Provisioned, value: str) -> Generator[None]:
-    """Give the application role a `statement_timeout`, restored afterwards (scratch cluster)."""
-    role = sql.Identifier(prov.state_user)
-    with prov.superuser_connect() as conn:
-        conn.execute(sql.SQL("ALTER ROLE {} SET statement_timeout = {}").format(role, value))
-    try:
-        yield
-    finally:
-        with prov.superuser_connect() as conn:
-            conn.execute(sql.SQL("ALTER ROLE {} RESET statement_timeout").format(role))
-
-
-@contextmanager
 def chain_function_lock_timeout(prov: Provisioned, value: str) -> Generator[None]:
     """Shorten the chain trigger's function-level `lock_timeout`, restored to 10s afterwards."""
     with prov.superuser_connect(prov.state_db) as conn:

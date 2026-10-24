@@ -1,7 +1,8 @@
 """Graph-cleanup tools of the PS MCP server.
 
-Registers `find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`,
-`merge-obligations`, `merge-roles`, `release-capability-governance`, `unmerge-entities` and
+Registers `find-capability-merge-candidates`, `find-duplicate-obligations`,
+`list-capability-resolutions`, `merge-capabilities`, `merge-obligations`, `merge-roles`,
+`release-capability-governance`, `split-capability`, `unmerge-entities` and
 `check-cleanup-approval`; `register_graph_cleanup_tools` registers them on a server built by
 `mcp_server.build_server`. Each tool delegates to `ps_service.graph_cleanup.service`, which owns the
 behaviour, and builds its graph opener and stores through the `GateEnvironment` it is bound to. This
@@ -10,8 +11,8 @@ module imports only `tool_core` and `tool_gates` (never another tool group).
 Business Rules:
     - Every cleanup tool needs an explicit `ComplianceOfficer` grant on a real authenticated
       session; there is no admin override and no local-test bypass.
-    - A merge, release or unmerge creates a pending approval and changes nothing in the graph until
-      the human approval is settled.
+    - A merge, release, split or unmerge creates a pending approval and changes nothing in the
+      graph until the human approval is settled.
 """
 
 from __future__ import annotations
@@ -21,23 +22,27 @@ from typing import TYPE_CHECKING, Annotated
 from mcp.server.mcpserver import Context
 from pydantic import Field
 
+import ps_service.graph_cleanup.signing_refusals  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import: registers the signing-refusal recorder of every cleanup tool
 from ps_service.audit.errors import AuditPersistenceError, AuditPostgresUnavailableError
 from ps_service.config import load_config
 from ps_service.graph_cleanup.discovery import resolve_min_similarity
 from ps_service.graph_cleanup.errors import (
     GraphCleanupAcknowledgmentRequiredError,
     GraphCleanupPersistenceError,
+    GraphCleanupSplitAcknowledgmentRequiredError,
     GraphCleanupValidationError,
 )
 from ps_service.graph_cleanup.service import (
     check_cleanup_approval,
     create_capability_merge_approval,
+    create_capability_split_approval,
     create_obligation_merge_approval,
     create_release_governance_approval,
     create_role_merge_approval,
     create_unmerge_approval,
     find_capability_merge_candidates,
     find_duplicate_obligations,
+    list_capability_resolutions,
 )
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import (
@@ -180,6 +185,58 @@ def find_duplicate_obligations_tool(  # noqa: D417  # `environment` is injected 
     return _run_mcp_action("find_duplicate_obligations", _body)
 
 
+@_gated_tool("list-capability-resolutions", _CLEANUP_GATE)
+def list_capability_resolutions_tool(environment: GateEnvironment) -> dict[str, object] | str:
+    """List the Capabilities the pipeline resolved automatically onto an existing Capability.
+
+    This is a read-only graph cleanup aid. When Company Merge judges an incoming Capability X to be
+    the same duty as an existing Capability, it never creates X and records the resolution
+    instead; every later ingest follows it. Nothing is changed and no approval is created.
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override; never available under the local-test bypass). No embedding is fetched or computed.
+
+    Returns:
+        `{"resolutions": [{"x_id", "x_name", "a_id", "a_name", "marker_resolves_to",
+        "governing_policy", "similarity", "instruments", "obligation_count"}, ...]}`, sorted by
+        `x_id`. `a_id` is the Capability X
+        ends up on today (it differs from `marker_resolves_to` when that Capability was later
+        merged away); `governing_policy` is `{"id", "title", "status"}` of A's Policy or `null`;
+        `x_name` is X's name in a regulation baseline that holds it (`null` when none does);
+        `instruments` are the instrument ids whose baseline holds X. `similarity` is the cosine
+        similarity of X's and A's cached embeddings (`null` when either is missing);
+        `obligation_count` is the number of Obligations a baseline links to X.
+
+    Errors (returned as a string beginning `error: `, never raised):
+        - The caller has no real authenticated session or lacks the `ComplianceOfficer` role.
+        - A resolution chain in the graph is corrupt (a cycle, an id held by two markers, or a
+          chain that ends on no Capability); the whole list is refused.
+        - The authorization store or the policy graph cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph, the regulation baseline graphs and the authorization store;
+        nothing is written. The call is logged.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
+    """
+    config = load_config()
+
+    def _body() -> dict[str, object] | str:
+        dependencies = _cleanup_dependencies(environment)
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            baselines = _sanitize_graph_open(dependencies.open_baseline_graphs)(config)
+            result = list_capability_resolutions(graph, baselines)
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return result.model_dump(mode="json")
+
+    return _run_mcp_action("list_capability_resolutions", _body)
+
+
 @_gated_tool("merge-capabilities", _CLEANUP_GATE)
 def merge_capabilities_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
     environment: GateEnvironment,
@@ -290,6 +347,106 @@ def merge_capabilities_tool(  # noqa: D417  # `environment` is injected by the s
         }
 
     return _run_mcp_action("merge_capabilities", _body)
+
+
+@_gated_tool("split-capability", _CLEANUP_GATE)
+def split_capability_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
+    x_id: Annotated[str, Field(min_length=1)],
+    ctx: Context,
+    *,
+    acknowledge_governance_change: bool = False,
+) -> dict[str, object] | str:
+    """Preview splitting an automatically resolved Capability back out and request an approval.
+
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override; never available under the local-test bypass). `x_id` is a Capability the pipeline
+    resolved onto an existing Capability A (see `list-capability-resolutions`). This call never
+    edits the graph: it returns a preview and creates a pending passkey approval bound to `x_id`,
+    A and the state previewed. The split runs only when the officer opens `approval_url` in a
+    browser and signs with a passkey; `check-cleanup-approval` reports the outcome.
+
+    On execution X is minted as its own Capability from a regulation baseline that holds it, with
+    no governing Policy. Per edge type, every edge a baseline holds with X is put on X; its edge on
+    A is removed (`moves`) unless a baseline also holds it with A (`shared`); a source with no edge
+    on A today gains one on X only (`added`); every other edge of A stays (`stays`). The
+    resolution is removed. The change is one all-or-nothing graph write that is audited first
+    (`capability.split`). A wrong split is reversed with `merge-capabilities` (X into A).
+
+    When A has a governing Policy, the first call, without `acknowledge_governance_change`,
+    returns the preview with `acknowledgment_required: true` and a `message`, and creates no
+    approval: the Obligations moving to X leave that Policy's coverage. Repeat the call with
+    `acknowledge_governance_change=true` once the officer has explicitly accepted that change; the
+    acknowledgment becomes part of the signed approval.
+
+    Args:
+        x_id: Id of the automatically resolved Capability; at least 1 character.
+        acknowledge_governance_change: Set to `true` to accept the governance change when A is
+            governed; default `false`. It has no effect when A is ungoverned.
+        ctx: Supplied by the server, not the client; used to build the base of `approval_url`.
+
+    Returns:
+        `{"preview": {"x_id", "x_name", "a_id", "a_name", "marker_resolves_to",
+        "source_baseline", "source_instruments", "embedding_available", "edges": {"requires",
+        "covers", "mitigated_by"} (each `{"moves", "shared", "added", "stays"}` lists of ids),
+        "governance", "obligations_moving", "skipped_missing_endpoints", "state_digest"},
+        "pending_approval_id", "approval_url", "expires_at"}`. `governance` is `null` when A is
+        ungoverned, else `{"policy": {"id", "title", "status"}, "acknowledgment_required",
+        "acknowledgment_text"}`. When A is governed and the acknowledgment is missing it returns
+        `{"preview", "acknowledgment_required": true, "message"}` instead.
+
+    Errors (returned as a string beginning `error: `, never raised; no approval is created on any
+    error):
+        - The caller is not an authenticated Compliance Officer.
+        - There is no automatic resolution of `x_id`, `x_id` already exists as a Capability, or it
+          was merged by a cleanup merge.
+        - A resolution chain is corrupt or ends on no Capability, or no regulation baseline holds
+          `x_id`.
+        - The policy graph database or the approval store cannot be reached.
+        - Any other unexpected failure (a fixed generic message).
+
+    Side Effects:
+        Reads the policy graph and the regulation baseline graphs, creates one pending approval
+        row with an expiry and writes one log entry; the graph is not changed.
+        A caller refused by the role gate gets the unchanged `error: ` string and one
+        best-effort `access.gate` audit row for this operation; no row is written for a caller
+        with no verified identity.
+    """
+    config = load_config()
+
+    def _body() -> dict[str, object] | str:
+        actor = _gated_actor(config)
+        dependencies = _cleanup_dependencies(environment)
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            baselines = _sanitize_graph_open(dependencies.open_baseline_graphs)(config)
+            approval = create_capability_split_approval(
+                graph,
+                baselines,
+                x_id=x_id,
+                acknowledge_governance_change=acknowledge_governance_change,
+                actor=actor,
+                base_url=_resolve_base_url(ctx),
+                store=environment.pending_approval_store_factory(config),
+            )
+        except GraphCleanupSplitAcknowledgmentRequiredError as exc:
+            return {
+                "preview": exc.preview.model_dump(mode="json"),
+                "acknowledgment_required": True,
+                "message": str(exc),
+            }
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {
+            "preview": approval.preview.model_dump(mode="json"),
+            "pending_approval_id": approval.pending_approval_id,
+            "approval_url": approval.approval_url,
+            "expires_at": approval.expires_at,
+        }
+
+    return _run_mcp_action("split_capability", _body)
 
 
 @_gated_tool("merge-obligations", _CLEANUP_GATE)
@@ -695,7 +852,8 @@ def check_cleanup_approval_tool(  # noqa: D417  # `environment` is injected by t
         `{"merged_id", "survivor_id", "unmerged": true, "survivor_added_edges"}` for an unmerge of
         a capability or obligation merge,
         `{"merged_id", "survivor_id", "unmerged": true, "survivor_obligations_added_since_merge"}`
-        for an unmerge of a role merge), `{"error": <message>}`, or `{"reconciled": "applied"}`. An
+        for an unmerge of a role merge, `{"x_id", "a_id", "split": true}` for a split),
+        `{"error": <message>}`, or `{"reconciled": "applied"}`. An
         `applied` audit row followed by
         a `failed` row for the same approval id means no edit occurred.
 
@@ -767,10 +925,12 @@ def register_graph_cleanup_tools(
         (
             find_capability_merge_candidates_tool,
             find_duplicate_obligations_tool,
+            list_capability_resolutions_tool,
             merge_capabilities_tool,
             merge_obligations_tool,
             merge_roles_tool,
             release_capability_governance_tool,
+            split_capability_tool,
             unmerge_tool,
             check_cleanup_approval_tool,
         ),

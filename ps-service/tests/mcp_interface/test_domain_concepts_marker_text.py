@@ -79,5 +79,5 @@ def test_capability_lifecycle_documents_the_resolved_capability_marker() -> None
     assert "`ResolvedCapability`" in text
     assert "`resolves_to`" in text
     assert "never a semantic-match candidate" in text
-    assert "only an explicit Compliance Officer cleanup merge changes" in text
+    assert "only an explicit Compliance Officer split or cleanup merge changes" in text
     assert "is not a merge" in text

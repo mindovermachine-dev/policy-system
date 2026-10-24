@@ -8,6 +8,9 @@ ps-cli/logs/
 # Spikes
 spikes/
 
+# Plugin eval run results (written by `claude plugin eval`)
+ps-skills/ps-plugin/evals/results/
+
 # Fetched Helm chart dependency archives (Chart.lock is committed; the
 # archives themselves are re-fetched via `helm dependency build`).
 charts/policy-system/charts/*.tgz

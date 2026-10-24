@@ -49,6 +49,7 @@ __all__ = [
     "compose_with_resolutions",
     "follow_markers",
     "read_markers",
+    "read_markers_with_labels",
     "resolve_redirects",
 ]
 
@@ -192,6 +193,29 @@ def read_markers(graph: GraphHandle, kind: MergeableKind) -> dict[str, str]:
             one marker.
     """
     return _read_kind_markers(graph, kind)[0]
+
+
+def read_markers_with_labels(
+    graph: GraphHandle, kind: MergeableKind
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Read every marker of `kind` with the label that holds each marked id.
+
+    Runs the same reads and the same corrupt-graph checks as `read_markers`; a caller that must
+    tell a `ResolvedCapability` from a `MergedCapability` uses the second map.
+
+    Args:
+        graph: Read handle on the single-tenant graph.
+        kind: The mergeable kind whose markers are read.
+
+    Returns:
+        `({marked_id: target}, {marked_id: marker label})`; both empty when no marker exists.
+        Chains are not followed here.
+
+    Raises:
+        CompanyMergeValidationError: a marker carries no target, or one id is held by more than
+            one marker.
+    """
+    return _read_kind_markers(graph, kind)
 
 
 def follow_markers(start_id: str, markers: Mapping[str, str], kind: MergeableKind) -> str:

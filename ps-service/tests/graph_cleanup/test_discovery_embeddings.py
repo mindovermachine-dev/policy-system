@@ -174,4 +174,6 @@ def test_graph_cleanup_never_imports_an_llm_or_embedding_router() -> None:
         "ps_service.company_merge.errors.StalePendingReviewError",
         "ps_service.company_merge.reviewable_kinds.CAPABILITY",
         "ps_service.company_merge.reviewable_kinds.ROLE",
+        "ps_service.company_merge.redirects.read_markers_with_labels",
+        "ps_service.company_merge.redirects.follow_markers",
     }

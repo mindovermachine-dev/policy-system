@@ -21,3 +21,6 @@ ps-service/tests/export/fixtures/**/*.json
 ps-service/tests/graph_gateway/fixtures/**/*.json
 # Vendored upstream manifest; a test pins its bytes to the upstream checksum.
 deploy/kind/ingress-nginx.yaml
+# Plugin-eval mock bodies are canned MCP tool responses (raw JSON under YAML
+# frontmatter); Markdown formatting would reflow the payload as prose.
+ps-skills/*/evals/**/mocks/**

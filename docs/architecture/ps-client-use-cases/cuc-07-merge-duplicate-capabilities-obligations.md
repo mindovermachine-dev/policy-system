@@ -6,8 +6,8 @@
 SystemOwner/SystemAdmin get no override, and the gate fails closed
 **Goal:** Pipeline-made duplicates cleaned up by human judgement: near-duplicate
 Capabilities and same-Role duplicate Obligations found, previewed, and merged — and two
-Roles of one instrument merged — or released, or unmerged — each write behind its own
-passkey approval.
+Roles of one instrument merged — or released, or unmerged — and a wrong automatic Capability
+resolution split back out, each write behind its own passkey approval.
 **Realizes:** —
 **Interaction class:** Review/resolve
 **v1:** yes
@@ -76,26 +76,40 @@ the direction*.
    a merge of one of the Obligations it moved, or of the surviving Role — and the refusal
    names that later merge's audit event, which has to be reversed first. Obligations the
    survivor gained after the merge stay on it, and the preview counts them.
+7. **Split an automatic resolution.** Company Merge can resolve an incoming Capability onto
+   an existing one by similarity; the read-only `list-capability-resolutions` report shows
+   each such resolution with both Capabilities, the governing Policy of the one it resolved
+   onto, their similarity, the instruments that hold the incoming Capability and how many
+   Obligations rely on it. The officer judges a resolution wrong and `split-capability`
+   previews the split: per edge type, what moves to the recreated Capability and what stays.
+   When the Capability it resolved onto is governed, the response carries
+   `acknowledgment_required` and the officer acknowledges, before any approval exists, that
+   the moving Obligations leave that Policy's coverage. Then the same passkey ceremony and
+   outcome read-back as a merge. The recreated Capability starts with no governing Policy, so
+   the gap shows; the change is audited as `capability.split`, and a wrong split is undone by
+   absorbing it again with `merge-capabilities`.
 
 ## Artifacts
 
-- Discovery reports (read-only), one per sweep.
+- Discovery reports (read-only), one per sweep, and the automatic-resolution report.
 - One **comparison artifact** per pair taken up: fate statement, effect preview,
   governance block when applicable, decision controls, resolved record.
 
 ## Approvals & notifications
 
-- **One passkey ceremony per write** — merge, release, unmerge alike — against PS
+- **One passkey ceremony per write** — merge, release, unmerge, split alike — against PS
   Service's own RP, each bound to its exact pair and previewed state. Discovery never
   creates an approval.
-- The case-2 governance acknowledgment is an additional, distinct acknowledgment *inside*
+- The case-2 governance acknowledgment, and the split's acknowledgment when the Capability
+  resolved onto is governed, is an additional, distinct acknowledgment *inside*
   the flow, captured before any approval exists.
 - No Inbox items or notifications today; discovery is on-demand.
 
 ## Contracts touched
 
 - **H-1 Tool loop** — discovery, preview, approval-status reads as client tool calls;
-  pending approvals resumable across conversations.
+  pending approvals resumable across conversations. `list-capability-resolutions` is a
+  further read-only report and `split-capability` a further preview-then-approval call.
 - **H-4 Permissions & approvals** — this flow is the contract's stress test: effect
   preview, free-text acknowledgment, and confirm-in-own-words layered before the
   ceremony.
@@ -107,6 +121,8 @@ the direction*.
 
 ## Open points
 
+- A correction of a pipeline decision could instead follow CUC-06's review/resolve shape or
+  have its own use case; it is kept here because it is undone by a cleanup merge.
 - Whether periodic duplicate sweeps should mint system-generated Inbox items (parity
   with CUC-06's near-misses) or stay on-demand — if they do, Q-12 governs them too.
 - The "in their own words" acknowledgments: H-4 covers previews and acknowledgments, but

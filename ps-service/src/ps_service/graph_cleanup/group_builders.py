@@ -9,7 +9,9 @@ failed guard raises `GraphCleanupStaleStateError` with nothing logged, and the g
 with `ExpectedPosition(P0 + stamped)`, so a write that lands between the guard read and the
 append is refused rather than missed.
 
-One function set per cleanup action lives here; `executors` records the `applied` audit row first
+The split guard re-reads the baselines too and compares the previewed state digest, because the
+split's edge rule depends on what the baselines hold. One function set per cleanup action lives
+here; `executors` records the `applied` audit row first
 and passes its id in as `audit_event_id`.
 """
 
@@ -17,7 +19,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ps_service.graph_cleanup.errors import GraphCleanupStaleStateError
+from ps_service.graph_cleanup.errors import (
+    GraphCleanupStaleStateError,
+    GraphCleanupValidationError,
+)
 from ps_service.graph_cleanup.graph_reader import (
     read_capability_merge_state,
     read_capability_unmerge_state,
@@ -37,6 +42,8 @@ from ps_service.graph_cleanup.graph_submission import (
     submit_cleanup_group,
 )
 from ps_service.graph_cleanup.merge_planner import EDGE_CLASSES
+from ps_service.graph_cleanup.split_planner import plan_capability_split
+from ps_service.graph_cleanup.split_reader import read_capability_split_state
 from ps_service.graph_gateway.models import (
     DeleteEdge,
     DeleteNode,
@@ -47,8 +54,11 @@ from ps_service.graph_gateway.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.graph_cleanup.models import (
+        CapabilitySplitPlan,
         CapabilityUnmergePlan,
         CapabilityUnmergeState,
         CapabilityUnmergeWrite,
@@ -66,11 +76,14 @@ if TYPE_CHECKING:
         RoleUnmergePlan,
         RoleUnmergeState,
         RoleUnmergeWrite,
+        SplitEdgeSet,
     )
+    from ps_service.graph_cleanup.split_planner import CapabilitySplitState
     from ps_service.graph_gateway.models import Primitive
 
 __all__ = [
     "build_capability_merge_group",
+    "build_capability_split_group",
     "build_capability_unmerge_group",
     "build_obligation_merge_group",
     "build_obligation_unmerge_group",
@@ -78,6 +91,7 @@ __all__ = [
     "build_role_merge_group",
     "build_role_unmerge_group",
     "capability_merge_guard_holds",
+    "capability_split_guard_holds",
     "capability_unmerge_guard_holds",
     "obligation_merge_guard_holds",
     "obligation_unmerge_guard_holds",
@@ -85,6 +99,7 @@ __all__ = [
     "role_merge_guard_holds",
     "role_unmerge_guard_holds",
     "write_capability_merge",
+    "write_capability_split",
     "write_capability_unmerge",
     "write_obligation_merge",
     "write_obligation_unmerge",
@@ -104,6 +119,9 @@ _ROLE_MERGE_STALE_MESSAGE = "the roles changed since the preview; nothing was wr
 _CAPABILITY_UNMERGE_STALE_MESSAGE = _CAPABILITY_MERGE_STALE_MESSAGE
 _OBLIGATION_UNMERGE_STALE_MESSAGE = _OBLIGATION_MERGE_STALE_MESSAGE
 _ROLE_UNMERGE_STALE_MESSAGE = _ROLE_MERGE_STALE_MESSAGE
+_CAPABILITY_SPLIT_STALE_MESSAGE = (
+    "the resolved capability or its terminal changed since the preview; nothing was written"
+)
 
 
 def release_guard_holds(state: ReleaseState, *, policy_id: str) -> bool:
@@ -1075,5 +1093,146 @@ def write_obligation_unmerge(
         primitives,
         audit_event_id=audit_event_id,
         stale_message=_OBLIGATION_UNMERGE_STALE_MESSAGE,
+        preconditions=(ExpectedPosition(position=expected_position + stamped),),
+    )
+
+
+# -- split-capability ------------------------------------------------------------------------
+
+
+def capability_split_guard_holds(state: CapabilitySplitState, *, state_digest: str) -> bool:
+    """Whether a fresh read still matches the split state the Compliance Officer previewed.
+
+    The state digest covers the marker and its chain, A's status and governance, whether X exists
+    as a Capability or a `MergedCapability`, the held and current edge sets and the source
+    baseline's X, so an equal digest of a state that still plans is the previewed state.
+
+    Args:
+        state: Fresh split state from `read_capability_split_state`.
+        state_digest: The digest bound into the signed approval.
+
+    Returns:
+        True when the guard holds and the split may proceed; False when the state moved or no
+        longer plans (the marker is gone, X exists, A is gone).
+    """
+    try:
+        plan = plan_capability_split(state)
+    except GraphCleanupValidationError:
+        return False
+    return plan.state_digest == state_digest
+
+
+def _split_sources(edge_set: SplitEdgeSet) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The sources that get an edge on X, and those whose edge on A is deleted."""
+    return (*edge_set.moves, *edge_set.shared, *edge_set.added), edge_set.moves
+
+
+def build_capability_split_group(
+    plan: CapabilitySplitPlan, *, created_at: str
+) -> tuple[Primitive, ...]:
+    """The edit: mint X, give it its edges, take the moved ones off A, delete the marker.
+
+    In order: X is upserted as a Capability with the source baseline's properties, its embedding
+    and `created_at`; every source of the moves, shared and added sets gets an edge on X; every
+    source of the moves set loses its edge on A (by identity); the `ResolvedCapability` marker is
+    deleted last, in the same group, so a minted X without the marker removal cannot be logged.
+    `GOVERNED_BY` is never named: A keeps its Policy and X starts ungoverned.
+
+    Args:
+        plan: The approved split plan.
+        created_at: ISO 8601 time recorded on the minted Capability.
+
+    Returns:
+        The ordered primitives of the group.
+    """
+    x_id, a_id = plan.preview.x_id, plan.preview.a_id
+    minted = plan.minted
+    properties: dict[str, object] = {"name": minted.name, "created_at": created_at}
+    if minted.confidence is not None:
+        properties["confidence"] = minted.confidence
+    if minted.description is not None:
+        properties["description"] = minted.description
+    x_ref = NodeRef(label="Capability", id=x_id)
+    a_ref = NodeRef(label="Capability", id=a_id)
+    edges = plan.preview.edges
+    by_type = {
+        "REQUIRES": edges.requires,
+        "COVERS": edges.covers,
+        "MITIGATED_BY": edges.mitigated_by,
+    }
+    primitives: list[Primitive] = [
+        UpsertNode(label="Capability", id=x_id, properties=properties, embedding=minted.embedding)
+    ]
+    for rel_type, source_label in EDGE_CLASSES:
+        on_x, _off_a = _split_sources(by_type[rel_type])
+        primitives.extend(
+            UpsertEdge(
+                type=rel_type,
+                identity=edge_identity(rel_type, source_id, x_id),
+                source=NodeRef(label=source_label, id=source_id),
+                target=x_ref,
+            )
+            for source_id in on_x
+        )
+    for rel_type, source_label in EDGE_CLASSES:
+        _on_x, off_a = _split_sources(by_type[rel_type])
+        primitives.extend(
+            DeleteEdge(
+                type=rel_type,
+                identity=edge_identity(rel_type, source_id, a_id),
+                source=NodeRef(label=source_label, id=source_id),
+                target=a_ref,
+            )
+            for source_id in off_a
+        )
+    primitives.append(DeleteNode(label="ResolvedCapability", id=x_id))
+    return tuple(primitives)
+
+
+def write_capability_split(
+    graph: GraphHandle,
+    baselines: Sequence[tuple[str, GraphHandle]],
+    target: GraphWriteTarget,
+    *,
+    audit_event_id: str,
+    x_id: str,
+    state_digest: str,
+    created_at: str,
+) -> None:
+    """Split the resolved Capability `x_id` out of its terminal as one gateway group.
+
+    Args:
+        graph: Handle on the single-tenant graph, used for the guard read.
+        baselines: `(graph name, read handle)` of every `{short}_baseline` graph, read only.
+        target: Gateway and graph the group goes to.
+        audit_event_id: Id of the `applied` audit row the group is linked to.
+        x_id: Id of the `ResolvedCapability` to split.
+        state_digest: The digest bound into the signed approval.
+        created_at: ISO 8601 time recorded on the minted Capability.
+
+    Side Effects:
+        May log an edge-identity stamp group, then submits one group through the gateway.
+
+    Raises:
+        GraphCleanupStaleStateError: the guard did not hold (the marker, X, A, its Policy, an edge
+            set or the source baseline differs from the previewed state) or the log position
+            moved; nothing of the split group was logged.
+        GraphCleanupPersistenceError: a graph could not be read or the gateway failed.
+    """
+    require_caught_up(target)
+    expected_position = read_log_position(target)
+    state = read_capability_split_state(graph, baselines, x_id)
+    if not capability_split_guard_holds(state, state_digest=state_digest):
+        raise GraphCleanupStaleStateError(_CAPABILITY_SPLIT_STALE_MESSAGE)
+    with refuse_unstorable_values():
+        primitives = build_capability_split_group(
+            plan_capability_split(state), created_at=created_at
+        )
+    stamped = ensure_stamped(target, audit_event_id)
+    submit_cleanup_group(
+        target,
+        primitives,
+        audit_event_id=audit_event_id,
+        stale_message=_CAPABILITY_SPLIT_STALE_MESSAGE,
         preconditions=(ExpectedPosition(position=expected_position + stamped),),
     )

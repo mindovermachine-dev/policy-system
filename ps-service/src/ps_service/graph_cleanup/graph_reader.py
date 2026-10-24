@@ -9,16 +9,20 @@ missing node as `None` or absent.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import redis.exceptions
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.graph_cleanup.capability_status import active_capability_status
-from ps_service.graph_cleanup.errors import GraphCleanupPersistenceError
+from ps_service.graph_cleanup.errors import (
+    GraphCleanupPersistenceError,
+    GraphCleanupValidationError,
+)
 from ps_service.graph_cleanup.models import (
     CapabilityNodeState,
     CapabilityRecord,
+    CapabilityResolution,
     CapabilityUnmergeInputs,
     CapabilityUnmergeState,
     EdgeRecord,
@@ -33,15 +37,20 @@ from ps_service.graph_cleanup.models import (
     PropertyValue,
     ReleaseState,
     RequirementSourceRef,
+    ResolutionTerminal,
     RoleDefines,
     RoleMergeState,
     RoleRef,
     RoleState,
     RoleUnmergeInputs,
     RoleUnmergeState,
+    SplitMarkers,
+    SplitTerminalState,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from ps_service.company_merge.falkordb_client import GraphHandle
 
 __all__ = [
@@ -49,21 +58,29 @@ __all__ = [
     "read_active_capabilities",
     "read_capability_merge_state",
     "read_capability_merged",
+    "read_capability_present",
     "read_capability_present_without_marker",
+    "read_capability_resolutions",
+    "read_capability_split_markers",
     "read_capability_unmerge_state",
+    "read_existing_sources",
     "read_governed_by_edge_present",
     "read_obligation_marker",
     "read_obligation_marker_present",
+    "read_obligation_merge_markers",
     "read_obligation_merge_state",
     "read_obligation_present",
     "read_obligation_unmerge_state",
     "read_obligations_by_role",
     "read_pending_review",
     "read_release_state",
+    "read_resolution_terminals",
+    "read_resolved_capability_present",
     "read_role_merge_state",
     "read_role_merged",
     "read_role_present_without_marker",
     "read_role_unmerge_state",
+    "read_split_terminal",
 ]
 
 # `deprecated` Capabilities are not merge candidates; a node with no `status` property counts as
@@ -203,6 +220,14 @@ def read_active_capabilities(graph: GraphHandle) -> tuple[CapabilityRecord, ...]
     return tuple(records.values())
 
 
+_RESOLVED_CAPABILITY_LABEL = "ResolvedCapability"
+# The terminal of a resolution is read with its cached embedding, which the list compares with X's
+# baseline embedding; the merge-state reads below never read it.
+_CAPABILITY_EMBEDDINGS_QUERY = (
+    "MATCH (c:Capability) WHERE c.id IN $ids RETURN c.id, c.name, c.embedding"
+)
+
+
 # Merge-state reads: one literal, parameterised read per concern. Property names are the
 # scalar Capability properties of the Domain Concepts document; `embedding` is deliberately
 # not read (it is large, derived, and never part of an audit snapshot).
@@ -241,6 +266,9 @@ _CAPABILITY_MARKER_QUERY = (
 )
 _CAPABILITY_ANY_MARKER_QUERY = "MATCH (m:MergedCapability {id: $capability_id}) RETURN count(m)"
 _CAPABILITY_PRESENT_QUERY = "MATCH (c:Capability {id: $capability_id}) RETURN count(c)"
+_RESOLVED_CAPABILITY_PRESENT_QUERY = (
+    "MATCH (m:ResolvedCapability {id: $capability_id}) RETURN count(m)"
+)
 _NODE_PROPERTY_NAMES = ("description", "type", "confidence", "created_at")
 
 
@@ -1006,3 +1034,290 @@ def read_obligation_unmerge_state(
         },
         survivor_edges=tuple(survivor_edges),
     )
+
+
+def _read_markers_with_labels(
+    graph: GraphHandle, kind: Literal["Capability", "Obligation"]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Company Merge's marker reads for `kind`, with its corrupt-graph and health handling.
+
+    Raises:
+        GraphCleanupValidationError: a marker has no target or an id is held by both labels.
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    from ps_service.company_merge.errors import (  # noqa: PLC0415 -- function-local keeps graph_cleanup off Company Merge at import
+        CompanyMergeValidationError,
+    )
+    from ps_service.company_merge.redirects import (  # noqa: PLC0415 -- function-local, as above
+        read_markers_with_labels,
+    )
+
+    try:
+        markers = read_markers_with_labels(graph, kind)
+    except CompanyMergeValidationError as exc:
+        raise GraphCleanupValidationError(str(exc)) from exc
+    except redis.exceptions.RedisError as exc:
+        mark_unhealthy(FALKORDB, error=exc)
+        message = "the policy graph database could not be read"
+        raise GraphCleanupPersistenceError(message) from exc
+    mark_healthy(FALKORDB)
+    return markers
+
+
+def _capability_marker_chains(
+    graph: GraphHandle,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Every Capability marker's target, label and chain terminal, by marked id.
+
+    Raises:
+        GraphCleanupValidationError: a marker has no target, an id is held by both labels, or a
+            chain contains a cycle.
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    from ps_service.company_merge.errors import (  # noqa: PLC0415 -- function-local keeps graph_cleanup off Company Merge at import
+        CompanyMergeValidationError,
+    )
+    from ps_service.company_merge.redirects import (  # noqa: PLC0415 -- function-local, as above
+        follow_markers,
+    )
+
+    targets, labels = _read_markers_with_labels(graph, "Capability")
+    try:
+        terminals = {marked: follow_markers(marked, targets, "Capability") for marked in targets}
+    except CompanyMergeValidationError as exc:
+        raise GraphCleanupValidationError(str(exc)) from exc
+    return targets, labels, terminals
+
+
+def _aliases(x_id: str, terminals: dict[str, str]) -> tuple[str, ...]:
+    """The terminal of `x_id` and every other marked id whose chain ends there, sorted."""
+    terminal = terminals[x_id]
+    return tuple(
+        sorted(
+            {terminal}
+            | {marked for marked, end in terminals.items() if end == terminal and marked != x_id}
+        )
+    )
+
+
+def read_capability_resolutions(graph: GraphHandle) -> tuple[CapabilityResolution, ...]:
+    """Read every `ResolvedCapability` marker and follow its chain to the terminal id.
+
+    The markers and their chains are read and followed by Company Merge's own redirect reads, so a
+    chain may pass through `MergedCapability` markers and the corrupt-graph checks are the ones
+    every later ingest applies.
+
+    Args:
+        graph: Handle for the policy graph.
+
+    Returns:
+        One resolution per `ResolvedCapability`, sorted by its id, with the aliases of its
+        terminal; empty when there is none. Whether the terminal exists is not checked here.
+
+    Raises:
+        GraphCleanupValidationError: a marker has no target, an id is held by both marker labels,
+            or a chain contains a cycle.
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    targets, labels, terminals = _capability_marker_chains(graph)
+    return tuple(
+        CapabilityResolution(
+            x_id=x_id,
+            marker_resolves_to=targets[x_id],
+            a_id=terminals[x_id],
+            a_aliases=_aliases(x_id, terminals),
+        )
+        for x_id in sorted(labels)
+        if labels[x_id] == _RESOLVED_CAPABILITY_LABEL
+    )
+
+
+def read_capability_split_markers(graph: GraphHandle, x_id: str) -> SplitMarkers:
+    """Read what the Capability markers say about `x_id`: its label, target, chain and aliases.
+
+    Every Capability marker is read and every chain followed, so a corrupt chain anywhere refuses
+    the split, as it refuses every later ingest.
+
+    Args:
+        graph: Handle for the policy graph.
+        x_id: The id asked to be split.
+
+    Returns:
+        The marker label holding `x_id` and, when one does, its target, its chain to the terminal
+        and the terminal's aliases; all empty when no marker holds `x_id`.
+
+    Raises:
+        GraphCleanupValidationError: a marker has no target, an id is held by both marker labels,
+            or a chain contains a cycle.
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    targets, labels, terminals = _capability_marker_chains(graph)
+    if x_id not in labels:
+        return SplitMarkers(x_marker_label=None, marker_resolves_to=None, chain=(), a_aliases=())
+    chain = [x_id]
+    while chain[-1] in targets:
+        chain.append(targets[chain[-1]])
+    return SplitMarkers(
+        x_marker_label=labels[x_id],
+        marker_resolves_to=targets[x_id],
+        chain=tuple(chain),
+        a_aliases=_aliases(x_id, terminals),
+    )
+
+
+def read_capability_present(graph: GraphHandle, *, capability_id: str) -> bool:
+    """Whether a `Capability` node with `capability_id` exists.
+
+    Args:
+        graph: Handle for the policy graph.
+        capability_id: The Capability id.
+
+    Returns:
+        True when the node exists, False otherwise.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    return _capability_present(graph, capability_id=capability_id)
+
+
+def read_resolved_capability_present(graph: GraphHandle, *, capability_id: str) -> bool:
+    """Whether a `ResolvedCapability` marker with `capability_id` exists.
+
+    Args:
+        graph: Handle for the policy graph.
+        capability_id: The resolved Capability id.
+
+    Returns:
+        True when the marker exists, False otherwise.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    rows = query_rows(graph, _RESOLVED_CAPABILITY_PRESENT_QUERY, {"capability_id": capability_id})
+    return bool(rows) and cast("int", rows[0][0]) > 0
+
+
+def read_split_terminal(graph: GraphHandle, a_id: str) -> SplitTerminalState:
+    """Read the terminal Capability of a split: its node, governing Policies and incoming edges.
+
+    A pure read of the same literal queries the Capability merge state uses, for one id.
+
+    Args:
+        graph: Handle for the policy graph.
+        a_id: The terminal Capability id.
+
+    Returns:
+        A's node (None when absent), the Policies governing it and every `REQUIRES` / `COVERS` /
+        `MITIGATED_BY` edge into it.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    params: dict[str, object] = {"ids": [a_id]}
+    nodes = [_node_state(row) for row in query_rows(graph, _CAPABILITY_NODES_QUERY, params)]
+    edges = [
+        EdgeRecord(
+            rel_type=rel_type,
+            source_label=source_label,
+            source_id=cast("str", row[0]),
+            target_label="Capability",
+            target_id=cast("str", row[1]),
+        )
+        for rel_type, source_label, query in _INCOMING_EDGE_QUERIES
+        for row in query_rows(graph, query, params)
+    ]
+    policies = tuple(
+        GoverningPolicy(
+            id=cast("str", row[1]), title=cast("str", row[2]), status=cast("str", row[3])
+        )
+        for row in query_rows(graph, _CAPABILITY_GOVERNORS_QUERY, params)
+    )
+    return SplitTerminalState(
+        node=nodes[0] if nodes else None, policies=policies, edges=tuple(edges)
+    )
+
+
+def read_obligation_merge_markers(graph: GraphHandle) -> dict[str, str]:
+    """Read every `MergedObligation` marker as `{absorbed id: merged_into}`, chains not followed.
+
+    Args:
+        graph: Handle for the policy graph.
+
+    Returns:
+        The marker targets; empty when no Obligation was merged.
+
+    Raises:
+        GraphCleanupValidationError: a marker has no target.
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    return _read_markers_with_labels(graph, "Obligation")[0]
+
+
+def read_existing_sources(
+    graph: GraphHandle, rel_type: str, ids: Collection[str]
+) -> frozenset[str]:
+    """Which of `ids` exist as nodes of the source label of the incoming edge type `rel_type`.
+
+    Args:
+        graph: Handle for the policy graph.
+        rel_type: `REQUIRES` (Obligation), `COVERS` (PracticeArea) or `MITIGATED_BY` (RiskPath).
+        ids: Candidate source ids.
+
+    Returns:
+        The ids that exist; empty when none does (no read is made when `ids` is empty).
+
+    Raises:
+        KeyError: `rel_type` is not an incoming Capability edge type.
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    query = dict(_ENDPOINT_QUERIES)[rel_type]
+    if not ids:
+        return frozenset()
+    return frozenset(cast("str", row[0]) for row in query_rows(graph, query, {"ids": sorted(ids)}))
+
+
+def read_resolution_terminals(
+    graph: GraphHandle, ids: Collection[str]
+) -> dict[str, ResolutionTerminal]:
+    """Read the name, cached embedding and governing Policy of each terminal Capability.
+
+    Args:
+        graph: Handle for the policy graph.
+        ids: Terminal Capability ids.
+
+    Returns:
+        The Capabilities that exist, by id; an id with no `Capability` node is absent. A
+        Capability with several `GOVERNED_BY` edges (which the model forbids) reports the Policy
+        with the lowest id.
+
+    Raises:
+        GraphCleanupPersistenceError: the graph database could not be read.
+    """
+    if not ids:
+        return {}
+    params: dict[str, object] = {"ids": sorted(ids)}
+    nodes = {
+        cast("str", row[0]): (
+            cast("str", row[1]),
+            tuple(cast("list[float]", row[2])) if row[2] is not None else None,
+        )
+        for row in query_rows(graph, _CAPABILITY_EMBEDDINGS_QUERY, params)
+    }
+    governors: dict[str, GoverningPolicy] = {}
+    for row in query_rows(graph, _CAPABILITY_GOVERNORS_QUERY, params):
+        policy = GoverningPolicy(
+            id=cast("str", row[1]), title=cast("str", row[2]), status=cast("str", row[3])
+        )
+        current = governors.get(cast("str", row[0]))
+        if current is None or policy.id < current.id:
+            governors[cast("str", row[0])] = policy
+    return {
+        capability_id: ResolutionTerminal(
+            id=capability_id,
+            name=name,
+            embedding=embedding,
+            governing_policy=governors.get(capability_id),
+        )
+        for capability_id, (name, embedding) in nodes.items()
+    }

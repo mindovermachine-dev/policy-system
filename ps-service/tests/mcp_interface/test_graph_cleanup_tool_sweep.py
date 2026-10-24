@@ -43,10 +43,12 @@ CLEANUP_TOOLS = frozenset(
     {
         "find-capability-merge-candidates",
         "find-duplicate-obligations",
+        "list-capability-resolutions",
         "merge-capabilities",
         "merge-obligations",
         "merge-roles",
         "release-capability-governance",
+        "split-capability",
         "unmerge-entities",
         "check-cleanup-approval",
         "merge-near-misses",
@@ -114,7 +116,7 @@ def test_exactly_the_documented_tools_sit_behind_the_cleanup_gate() -> None:
     }
 
     assert gated == CLEANUP_TOOLS
-    assert len(gated) == 9
+    assert len(gated) == 11
 
 
 def test_the_authz_gate_sweep_covers_every_cleanup_tool() -> None:
@@ -141,10 +143,12 @@ def test_an_unreachable_graph_never_leaks_internals_from_any_tool(
     args: dict[str, object] = {
         "find-capability-merge-candidates": {},
         "find-duplicate-obligations": {},
+        "list-capability-resolutions": {},
         "merge-capabilities": {"survivor_id": "cap_a", "absorbed_id": "cap_b"},
         "merge-obligations": {"survivor_id": "obl_a", "absorbed_id": "obl_b"},
         "merge-roles": {"survivor_id": "role_a", "absorbed_id": "role_b"},
         "release-capability-governance": {"capability_id": "cap_a"},
+        "split-capability": {"x_id": "cap_x"},
         "unmerge-entities": {"merged_id": "cap_b"},
         "check-cleanup-approval": {"pending_approval_id": "unknown"},
         "merge-near-misses": {"review_ids": ["review_a"]},

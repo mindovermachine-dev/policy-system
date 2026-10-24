@@ -38,7 +38,10 @@ from ps_service.logging import configure
 from ps_service.main import create_app
 from ps_service.passkey_signing.executors import (
     _EXECUTORS,  # pyright: ignore[reportPrivateUsage]  -- the test replaces the one registered executor
+    _REFUSAL_RECORDERS,  # pyright: ignore[reportPrivateUsage]  -- the test replaces the one registered recorder
+    SignerIdentity,
     register_approval_executor,
+    register_signing_refusal_recorder,
 )
 from ps_service.passkey_signing.router import provide_signing_credential_store
 from ps_service.passkey_signing.service import (
@@ -331,32 +334,102 @@ def test_valid_signature_executes_the_merge_and_reports_it() -> None:
     assert updated_credential.sign_count == 1
 
 
-def test_a_different_actors_credential_is_rejected_before_verification(
+def _bogus_assertion(authenticator: _Authenticator) -> dict[str, object]:
+    """A syntactically valid assertion shape naming `authenticator`'s credential, unsigned."""
+    return {
+        "id": bytes_to_base64url(authenticator.credential_id),
+        "rawId": bytes_to_base64url(authenticator.credential_id),
+        "type": "public-key",
+        "response": {"clientDataJSON": "", "authenticatorData": "", "signature": ""},
+    }
+
+
+@dataclass
+class _RefusalCall:
+    approval_id: str
+    signer: SignerIdentity
+
+
+def _register_refusal_recorder(tool_name: str) -> list[_RefusalCall]:
+    """Replace `tool_name`'s signing-refusal recorder with one that records its calls.
+
+    The registry is process-global; `conftest.py` restores it after every test.
+    """
+    calls: list[_RefusalCall] = []
+
+    def _record(row: PendingApprovalRow, config: ServiceConfig, signer: SignerIdentity) -> None:
+        del config
+        calls.append(_RefusalCall(row.id, signer))
+
+    _REFUSAL_RECORDERS.pop(tool_name, None)
+    register_signing_refusal_recorder(tool_name, _record)
+    return calls
+
+
+_TOOL_WITHOUT_RECORDER = "test-tool-without-refusal-recorder"
+
+
+def test_another_actors_credential_for_a_tool_without_a_refusal_recorder_is_never_verified(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A credential belonging to a different actor is rejected even
-    if presented against this approval -- and never even reaches
-    `verify_authentication_response`, proven by making that call raise if
-    it is ever reached at all (mirrors `test_enrollment_ceremony.py`'s
-    identical proof technique).
-    `configure()` installs the default emitter this
-    rejection path now logs to (`error_handlers.reject`).
+    """A tool with no signing-refusal recorder rejects another actor's credential before any
+    WebAuthn verification, proven by making the verification raise if it is reached at all; the
+    approval stays pending.
+
+    `configure()` installs the default emitter the rejection logs to (`error_handlers.reject`).
     """
     configure()
 
     def _fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError(
-            "verify_authentication must not be called for a wrong-actor credential"
+            "verify_authentication must not be called for a tool without a refusal recorder"
         )
 
-    # Ordering proof via raise, not assert_called the raise fires only if
-    # the actor-binding check failed to reject this credential before verification.
-    # detroit-exception: wrong-actor credential never reaches verify_authentication
+    # detroit-exception: another actor's credential never reaches verify_authentication
     monkeypatch.setattr("ps_service.passkey_signing.router.verify_authentication", _fail_if_called)
 
     pending_store = FakePendingApprovalStore()
     credential_store = FakeSigningCredentialStore()
-    row, code = _seed_pending_approval(pending_store, actor_subject=_ACTOR_SUBJECT)
+    row, code = pending_store.create_pending_approval(
+        tool_name=_TOOL_WITHOUT_RECORDER,
+        normalized_args={"target": "x"},
+        actor_subject=_ACTOR_SUBJECT,
+        actor_issuer=_ACTOR_ISSUER,
+        display_summary={"kind": "test"},
+    )
+    other_authenticator = _Authenticator()
+    _enroll(credential_store, other_authenticator, actor_subject=_OTHER_ACTOR_SUBJECT)
+    client = _client(pending_store=pending_store, credential_store=credential_store)
+    executed: list[str] = []
+
+    def _execute(signed: PendingApprovalRow, config: ServiceConfig) -> dict[str, object]:
+        del config
+        executed.append(signed.id)
+        return {}
+
+    register_approval_executor(_TOOL_WITHOUT_RECORDER, _execute)
+
+    response = client.post(
+        f"/approvals/{row.id}/sign/verify",
+        json={"code": code, "credential": _bogus_assertion(other_authenticator)},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == _INVALID_ERROR_CODE
+    assert executed == []
+    stored = pending_store.get_by_id(row.id)
+    assert stored is not None
+    assert stored.status == "pending"
+
+
+def test_another_actors_unverifiable_assertion_is_rejected_without_a_refusal_record() -> None:
+    """An assertion naming another actor's credential that does not verify is rejected like any
+    invalid signature: the refusal recorder is not called and the approval stays pending.
+    """
+    configure()
+    pending_store = FakePendingApprovalStore()
+    credential_store = FakeSigningCredentialStore()
+    row, code = _seed_pending_approval(pending_store)
     other_authenticator = _Authenticator()
     _enroll(credential_store, other_authenticator, actor_subject=_OTHER_ACTOR_SUBJECT)
     recorded_calls: list[_MergeCall] = []
@@ -365,24 +438,146 @@ def test_a_different_actors_credential_is_rejected_before_verification(
         credential_store=credential_store,
         recorded_calls=recorded_calls,
     )
-
-    # A syntactically valid assertion shape naming the *other* actor's
-    # credential id -- its signature is never even checked, since the
-    # binding check must reject it first.
-    bogus_assertion = {
-        "id": bytes_to_base64url(other_authenticator.credential_id),
-        "rawId": bytes_to_base64url(other_authenticator.credential_id),
-        "type": "public-key",
-        "response": {"clientDataJSON": "", "authenticatorData": "", "signature": ""},
-    }
+    refusals = _register_refusal_recorder(_TOOL_NAME)
 
     response = client.post(
-        f"/approvals/{row.id}/sign/verify", json={"code": code, "credential": bogus_assertion}
+        f"/approvals/{row.id}/sign/verify",
+        json={"code": code, "credential": _bogus_assertion(other_authenticator)},
     )
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == _INVALID_ERROR_CODE
+    assert refusals == []
     assert recorded_calls == []
+    stored = pending_store.get_by_id(row.id)
+    assert stored is not None
+    assert stored.status == "pending"
+    assert stored.outcome is None
+
+
+def test_another_actors_verified_assertion_voids_the_approval_and_is_recorded() -> None:
+    """A valid assertion from another enrolled actor is rejected, but only after it verifies:
+    the approval is consumed with a fixed error outcome, the refusal recorder is called once with
+    the verified signer, the signer's sign count is not advanced, and the bound actor can no
+    longer sign the approval, so the action never runs.
+    """
+    configure()
+    pending_store = FakePendingApprovalStore()
+    credential_store = FakeSigningCredentialStore()
+    row, code = _seed_pending_approval(pending_store)
+    bound_authenticator = _Authenticator()
+    _enroll(credential_store, bound_authenticator)
+    other_authenticator = _Authenticator()
+    _enroll(credential_store, other_authenticator, actor_subject=_OTHER_ACTOR_SUBJECT)
+    recorded_calls: list[_MergeCall] = []
+    client = _client(
+        pending_store=pending_store,
+        credential_store=credential_store,
+        recorded_calls=recorded_calls,
+    )
+    refusals = _register_refusal_recorder(_TOOL_NAME)
+    challenge = _independent_sign_challenge(row)
+
+    response = client.post(
+        f"/approvals/{row.id}/sign/verify",
+        json={
+            "code": code,
+            "credential": other_authenticator.build_assertion(
+                rp_id=_RP_ID, origin=_ORIGIN, challenge=challenge, sign_count=1
+            ),
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == _INVALID_ERROR_CODE
+    assert refusals == [_RefusalCall(row.id, SignerIdentity(_OTHER_ACTOR_SUBJECT, _ACTOR_ISSUER))]
+    stored = pending_store.get_by_id(row.id)
+    assert stored is not None
+    assert stored.status == "signed"
+    assert stored.outcome == {
+        "error": (
+            "this approval was signed by someone other than the person it was issued to and can "
+            "no longer be used; ask for a new approval"
+        )
+    }
+    other_credential = credential_store.get_by_credential_id(other_authenticator.credential_id)
+    assert other_credential is not None
+    assert other_credential.sign_count == 0
+
+    bound_response = client.post(
+        f"/approvals/{row.id}/sign/verify",
+        json={
+            "code": code,
+            "credential": bound_authenticator.build_assertion(
+                rp_id=_RP_ID, origin=_ORIGIN, challenge=challenge, sign_count=1
+            ),
+        },
+    )
+
+    assert bound_response.status_code == 404
+    assert recorded_calls == []
+    assert len(refusals) == 1
+
+
+def test_a_refusal_recorder_that_fails_leaves_the_approval_voided_and_the_rejection_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recorder that raises does not change the response, and the approval stays voided."""
+    configure()
+    pending_store = FakePendingApprovalStore()
+    credential_store = FakeSigningCredentialStore()
+    row, code = _seed_pending_approval(pending_store)
+    other_authenticator = _Authenticator()
+    _enroll(credential_store, other_authenticator, actor_subject=_OTHER_ACTOR_SUBJECT)
+    recorded_calls: list[_MergeCall] = []
+    client = _client(
+        pending_store=pending_store,
+        credential_store=credential_store,
+        recorded_calls=recorded_calls,
+    )
+    logged: list[dict[str, object]] = []
+
+    def _capture(**entry: object) -> None:
+        logged.append(entry)
+
+    # detroit-exception: the log emitter is the process's output boundary
+    monkeypatch.setattr("ps_service.passkey_signing.router.emit_log_entry", _capture)
+
+    def _failing(row: PendingApprovalRow, config: ServiceConfig, signer: SignerIdentity) -> None:
+        del row, config, signer
+        raise RuntimeError("audit host 10.1.2.3 down")
+
+    _REFUSAL_RECORDERS.pop(_TOOL_NAME, None)
+    register_signing_refusal_recorder(_TOOL_NAME, _failing)
+
+    response = client.post(
+        f"/approvals/{row.id}/sign/verify",
+        json={
+            "code": code,
+            "credential": other_authenticator.build_assertion(
+                rp_id=_RP_ID,
+                origin=_ORIGIN,
+                challenge=_independent_sign_challenge(row),
+                sign_count=1,
+            ),
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == _INVALID_ERROR_CODE
+    assert "10.1.2.3" not in response.text
+    stored = pending_store.get_by_id(row.id)
+    assert stored is not None
+    assert stored.status == "signed"
+    assert recorded_calls == []
+    assert logged == [
+        {
+            "component": "passkey_signing",
+            "action": "sign_verify_refusal_record",
+            "outcome": "failed",
+            "extra": {"pending_approval_id": row.id, "reason": "RuntimeError"},
+        }
+    ]
 
 
 def test_replaying_sign_verify_after_a_successful_sign_is_rejected_without_a_second_merge() -> None:

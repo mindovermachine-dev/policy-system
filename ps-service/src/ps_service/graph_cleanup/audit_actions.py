@@ -10,7 +10,8 @@ same audit contract minus the policy case and acknowledgment, which do not apply
 Obligation; its `before` snapshot holds the deleted node in full with all of its edges.
 An `outcome='failed'` row uses the same model with `before`/`after` optional and `reason_code`
 set. An `applied` row followed by a `failed` row for the same `approval_id` means no edit
-occurred.
+occurred. `capability.split` records the split of an automatically resolved Capability out of its
+terminal Capability, with the edges it moved and the before/after snapshots.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from ps_service.graph_cleanup.models import (  # noqa: TC001 -- pydantic resolve
 __all__ = [
     "CAPABILITY_MERGE_ACTION",
     "CAPABILITY_RELEASE_GOVERNANCE_ACTION",
+    "CAPABILITY_SPLIT_ACTION",
     "CAPABILITY_UNMERGE_ACTION",
     "OBLIGATION_MERGE_ACTION",
     "OBLIGATION_UNMERGE_ACTION",
@@ -39,6 +41,7 @@ __all__ = [
     "CapabilityMergeDetails",
     "CapabilityMergeFailedReason",
     "CapabilityReleaseGovernanceDetails",
+    "CapabilitySplitDetails",
     "CapabilityUnmergeDetails",
     "CleanupFailedReason",
     "ObligationMergeDetails",
@@ -54,6 +57,7 @@ CAPABILITY_UNMERGE_ACTION = "capability.unmerge"
 OBLIGATION_UNMERGE_ACTION = "obligation.unmerge"
 ROLE_MERGE_ACTION = "role.merge"
 ROLE_UNMERGE_ACTION = "role.unmerge"
+CAPABILITY_SPLIT_ACTION = "capability.split"
 
 
 type CleanupFailedReason = Literal[
@@ -66,6 +70,7 @@ type CleanupFailedReason = Literal[
     "acknowledgment_missing",
     "review_missing_or_changed",
     "graph_unavailable",
+    "signer_not_bound_actor",
 ]
 """Why a cleanup edit did not happen, shared by every cleanup action's `failed` rows."""
 
@@ -119,9 +124,7 @@ class ObligationMergeDetails(AuditDetails):
     approval_id: str
     before: GraphSnapshot | None = None
     after: GraphSnapshot | None = None
-    reason_code: (
-        Literal["graph_guard_missed", "graph_write_failed", "interrupted_no_effect"] | None
-    ) = None
+    reason_code: CleanupFailedReason | None = None
 
 
 register_audit_action(OBLIGATION_MERGE_ACTION, ObligationMergeDetails)
@@ -144,9 +147,7 @@ class CapabilityReleaseGovernanceDetails(AuditDetails):
     after: GraphSnapshot | None = None
     governed_set_before: tuple[str, ...] | None = None
     governed_set_after: tuple[str, ...] | None = None
-    reason_code: (
-        Literal["graph_guard_missed", "graph_write_failed", "interrupted_no_effect"] | None
-    ) = None
+    reason_code: CleanupFailedReason | None = None
 
 
 register_audit_action(CAPABILITY_RELEASE_GOVERNANCE_ACTION, CapabilityReleaseGovernanceDetails)
@@ -171,9 +172,7 @@ class CapabilityUnmergeDetails(AuditDetails):
     after: GraphSnapshot | None = None
     restored_edges: tuple[EdgeRecord, ...] | None = None
     survivor_added_edges: tuple[EdgeRecord, ...] | None = None
-    reason_code: (
-        Literal["graph_guard_missed", "graph_write_failed", "interrupted_no_effect"] | None
-    ) = None
+    reason_code: CleanupFailedReason | None = None
 
 
 register_audit_action(CAPABILITY_UNMERGE_ACTION, CapabilityUnmergeDetails)
@@ -200,9 +199,7 @@ class ObligationUnmergeDetails(AuditDetails):
     restored_edges: tuple[EdgeRecord, ...] | None = None
     survivor_added_edges: tuple[EdgeRecord, ...] | None = None
     survivor_edges_possibly_from_merge: tuple[EdgeRecord, ...] | None = None
-    reason_code: (
-        Literal["graph_guard_missed", "graph_write_failed", "interrupted_no_effect"] | None
-    ) = None
+    reason_code: CleanupFailedReason | None = None
 
 
 register_audit_action(OBLIGATION_UNMERGE_ACTION, ObligationUnmergeDetails)
@@ -264,3 +261,36 @@ class RoleUnmergeDetails(AuditDetails):
 
 
 register_audit_action(ROLE_UNMERGE_ACTION, RoleUnmergeDetails)
+
+
+class CapabilitySplitDetails(AuditDetails):
+    """`capability.split`: one Compliance Officer split of an automatically resolved Capability.
+
+    The resource is X, the `ResolvedCapability` id the split mints as its own Capability; `a_id`
+    is the terminal Capability X resolved to. `outcome='applied'`: `before` holds A, the marker
+    and every edge into A, `after` holds A and the minted X with their edges; `moved_edges` are
+    the edges into A that move to X, `shared_edges` the edges into A that stay and are also
+    created on X, and `added_edges` the edges created on X whose source had no edge into A (all
+    as `EdgeRecord`s, the first two as they were on A). `policy_id` / `policy_status` name the
+    Policy governing A, which keeps it; X starts ungoverned. `acknowledged` is the signed
+    governance acknowledgment. `outcome='failed'`: `reason_code` names why the edit did not
+    happen; a refusal before the plan exists carries none of the plan fields.
+    """
+
+    x_id: str
+    a_id: str
+    approval_id: str
+    acknowledged: bool
+    marker_resolves_to: str | None = None
+    policy_id: str | None = None
+    policy_status: str | None = None
+    source_baseline: str | None = None
+    moved_edges: tuple[EdgeRecord, ...] | None = None
+    shared_edges: tuple[EdgeRecord, ...] | None = None
+    added_edges: tuple[EdgeRecord, ...] | None = None
+    before: GraphSnapshot | None = None
+    after: GraphSnapshot | None = None
+    reason_code: CleanupFailedReason | None = None
+
+
+register_audit_action(CAPABILITY_SPLIT_ACTION, CapabilitySplitDetails)

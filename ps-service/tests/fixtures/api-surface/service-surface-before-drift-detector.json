@@ -678,6 +678,13 @@
         "properties": {},
         "type": "object"
       },
+      "name": "list-capability-resolutions"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
       "name": "list-near-misses"
     },
     {
@@ -911,6 +918,23 @@
         "type": "object"
       },
       "name": "set-catalog-source"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "acknowledge_governance_change": {
+            "default": false,
+            "type": "boolean"
+          },
+          "x_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["x_id"],
+        "type": "object"
+      },
+      "name": "split-capability"
     },
     {
       "inputSchema": {

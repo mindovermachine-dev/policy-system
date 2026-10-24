@@ -1,6 +1,6 @@
 ---
 name: ps-graph-cleanup
-description: Compliance Officer graph cleanup — find groups of near-duplicate Capabilities and duplicate Obligations (same Role) in the Policy System compliance graph, and merge two Capabilities (with an explicit acknowledgment when exactly one has a governing policy), merge two Obligations under the same Role, merge two Roles defined by the same instrument, release a Capability from a draft governing policy, or unmerge a Capability, Obligation or Role merge, after a human decision, a preview and a passkey approval. Requires an explicit ComplianceOfficer grant.
+description: Compliance Officer graph cleanup — find groups of near-duplicate Capabilities and duplicate Obligations (same Role) in the Policy System compliance graph, and merge two Capabilities (with an explicit acknowledgment when exactly one has a governing policy), merge two Obligations under the same Role, merge two Roles defined by the same instrument, release a Capability from a draft governing policy, unmerge a Capability, Obligation or Role merge, or list the Capabilities the pipeline resolved automatically onto an existing one and split one back out (with an explicit acknowledgment when the Capability it resolved onto has a governing policy), after a human decision, a preview and a passkey approval. Requires an explicit ComplianceOfficer grant.
 ---
 
 # ps-graph-cleanup
@@ -20,8 +20,10 @@ have a governing policy it must be the **same** policy), merging two Obligations
 **same Role** (`merge-obligations`), merging two Roles defined by the **same instrument**
 (`merge-roles`), releasing a Capability from a **draft** governing policy
 (`release-capability-governance`), reversing a Capability, Obligation or Role merge from its audit snapshot (`unmerge-entities`),
-and `check-cleanup-approval` for any of them.
-Discovery is read-only: it changes nothing and creates no approval.
+listing the Capabilities the pipeline resolved automatically onto an existing Capability
+(`list-capability-resolutions`) and splitting one back out as its own Capability
+(`split-capability`), and `check-cleanup-approval` for any of them.
+Discovery and the resolution list are read-only: they change nothing and create no approval.
 
 **Deliverable:** for a merge, the preview the tool returned, the approval link, and the
 outcome once the officer has signed (or the specific named error state). For
@@ -318,6 +320,47 @@ When the user wants to release a Capability from its draft governing policy (or 
 
 When the user wants to reverse a Capability, Obligation or Role merge, read `references/unmerge.md` and follow it. It covers the locate -> preview -> confirm -> passkey -> result flow for `unmerge-entities`, its conflicts and its named states.
 
+### Reviewing and splitting automatic resolutions
+
+When Company Merge judges an incoming Capability X to be the same duty as an existing
+Capability A, it never creates X; it records the resolution (a `ResolvedCapability` marker) and
+every later ingest follows it. A wrong resolution makes A's governing policy appear to cover
+Obligations it does not cover. When the user wants to review automatic resolutions or split one,
+follow these steps in order and read `references/split.md` for what a split does and its named
+states. The flow is list -> choose -> preview -> acknowledge -> passkey -> result; never skip a
+step and never reorder one.
+
+1. **List.** Call `list-capability-resolutions` (no arguments). It is read-only: it changes
+   nothing, creates no approval and computes no embedding. Report every entry plainly: `x_id`
+   and `x_name`, the Capability it ends up on (`a_id`, `a_name`, and `marker_resolves_to` when
+   that differs), A's `governing_policy` (`id`, `title`, `status`, or none), `similarity` (or
+   "not available" when `null`), the `instruments` whose baseline holds X, and
+   `obligation_count`, the Obligations that rely on X. Say "no automatic resolutions" when the
+   list is empty.
+2. **Choose.** The Compliance Officer decides which resolution was wrong, if any. A high
+   similarity is not a verdict either way. Never choose for the user and never recommend a split
+   on the list alone.
+3. **Preview.** Call `split-capability` with the chosen `x_id`. This call never edits the graph.
+   Show the `preview` plainly: per edge type (`requires`, `covers`, `mitigated_by`) the ids that
+   move to X, are shared, are added and stay on A; `obligations_moving`; `source_baseline`; and
+   say that X starts with no governing policy. Do not give any approval link at this step.
+4. **Acknowledge.** If the response carries `acknowledgment_required: true`, A has a governing
+   policy and no approval exists yet. Show the `message` verbatim and the `governance` block (the
+   policy's `id`, `title` and `status`): the Obligations moving to X are no longer covered by
+   that policy. Ask the officer for an explicit yes to that governance change, in their own
+   words. Only after that yes, repeat `split-capability` with the same `x_id` and
+   `acknowledge_governance_change` set to true. Never acknowledge on the officer's behalf, never
+   infer it from their wish to split, and never reuse it for another `x_id`. If A is ungoverned
+   the first call already returned the approval and this step is skipped.
+5. **Passkey.** Only now give the officer the `approval_url` to open in a browser and sign with
+   a passkey. The approval is bound to this `x_id`, the officer and the previewed state, and is
+   valid for 15 minutes. Never open, sign or complete it on the officer's behalf.
+6. **Result.** Call `check-cleanup-approval` with the `pending_approval_id`. `split: true`
+   means X is its own Capability and the resolution is gone; `error` means the graph was not
+   changed by this approval; `reconciled: applied` means the split was found in the graph after
+   an interrupted run. If `pending`, say so and let the officer finish signing; never poll in a
+   loop. If `expired`, start again from step 3.
+
 ## On-demand references
 
 Read these only when the condition holds; each one is bound by the Guardrails below.
@@ -331,12 +374,13 @@ Read these only when the condition holds; each one is bound by the Guardrails be
 
 - The skill reaches PS Service exclusively through the `ps-mcp` connector —
   never a direct graph connection, a repo-local script or a spawned binary.
-- Discovery, `merge-capabilities`, `merge-obligations`, `merge-roles`, `release-capability-governance` and `unmerge-entities`
+- Discovery, `list-capability-resolutions`, `merge-capabilities`, `merge-obligations`, `merge-roles`,
+  `release-capability-governance`, `split-capability` and `unmerge-entities`
   never edit the graph themselves: a change happens only when the Compliance Officer signs the passkey
   approval. Do not
   offer Cypher or any other route to merge or delete nodes.
 - Never merge a pair the Compliance Officer has not explicitly confirmed, never release a
-  Capability from its policy or reverse a merge without the same confirmation, never
-  acknowledge a governance change on their behalf, and never reuse an approval for a
-  different pair.
+  Capability from its policy, reverse a merge or split a resolution without the same
+  confirmation, never acknowledge a governance change on their behalf, and never reuse an
+  approval for a different pair.
 - Never collapse the named error states in the tables into each other.

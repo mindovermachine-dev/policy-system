@@ -24,6 +24,14 @@ approval, unknown or wrong-actor credential, lost consumption race, malformed or
 WebAuthn payload) raises the identical `PendingApprovalInvalidOrExpiredError`, so the response
 never reveals why. The real reason is logged server-side only.
 
+Another actor's signature: a credential enrolled by someone other than the approval's actor is
+always rejected. When the approval's tool has a registered signing-refusal recorder, the
+assertion is first verified against that credential's own public key; only a verified assertion
+voids the approval (consumed with a fixed error outcome, so it can never execute) and is handed
+to the recorder, which writes the owning component's `failed` audit row with the verified signer
+as actor. An assertion that does not verify, or a tool without a recorder, leaves no row and the
+approval pending.
+
 Execution: a signed approval runs the executor registered for its `tool_name`
 (`ps_service.passkey_signing.executors`); the component that owns the action audits its own write
 (for example a Capability merge writes its `capability.merge` rows). The single-use approval is
@@ -34,7 +42,8 @@ approval. An approval whose `tool_name` has no registered executor is rejected b
 
 Audit: only a successful enrolment writes a row, `passkey.enroll`, attributed to the approval's
 bound actor with `proof="approval_code"` (the caller is identified by the code, not by
-authentication). Rejected steps stay in the operator log, and signing writes no row of its own.
+authentication). Rejected steps stay in the operator log, and signing writes no row of its own;
+a verified signature by another actor is audited by the recorder of the approval's tool.
 
 Exports:
     build_passkey_signing_router: builds the `APIRouter` that `ps_service.main.create_app`
@@ -46,7 +55,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, NoReturn
 
 import webauthn
 from fastapi import APIRouter, Depends, Request
@@ -78,7 +87,11 @@ from ps_service.passkey_signing.audit_actions import (
     PENDING_APPROVAL_RESOURCE_TYPE,
 )
 from ps_service.passkey_signing.error_handlers import reject, reject_on_webauthn_failure
-from ps_service.passkey_signing.executors import resolve_approval_executor
+from ps_service.passkey_signing.executors import (
+    SignerIdentity,
+    resolve_approval_executor,
+    resolve_signing_refusal_recorder,
+)
 from ps_service.passkey_signing.service import (
     _compute_sign_challenge,  # pyright: ignore[reportPrivateUsage]
     _require_pending_and_unexpired,  # pyright: ignore[reportPrivateUsage]
@@ -694,30 +707,27 @@ async def post_sign_options(
     return json.loads(webauthn.options_to_json(options))
 
 
-def _resolve_credential_for_signing(
+def _resolve_enrolled_credential(
     *,
     credential_store: SigningCredentialStore,
     row: PendingApprovalRow,
     credential_payload: dict[str, object],
 ) -> SigningCredentialRow:
-    """Resolve the assertion's `rawId` to an enrolled credential owned by the approval's actor.
-
-    The ownership check runs before cryptographic verification, so a credential belonging to
-    another actor never reaches the WebAuthn library.
+    """Resolve the assertion's `rawId` to an enrolled credential, whoever enrolled it.
 
     Args:
         credential_store: Signing-credential store to look the credential up in.
-        row: The pending approval being signed; its actor is the required owner.
+        row: The pending approval being signed; its id is logged with a rejection.
         credential_payload: The assertion JSON from the request; `rawId` must be a base64url
             string.
 
     Returns:
-        The enrolled credential whose id equals `rawId` and whose actor equals the row's.
+        The enrolled credential whose id equals `rawId`.
 
     Raises:
-        PendingApprovalInvalidOrExpiredError: `rawId` is missing or not base64url, no such
-            credential is enrolled, or it belongs to a different actor. Each condition is
-            logged with its own reason; the response is identical.
+        PendingApprovalInvalidOrExpiredError: `rawId` is missing or not base64url, or no such
+            credential is enrolled. Each condition is logged with its own reason; the response
+            is identical.
         SigningCredentialPersistenceError: the credential lookup failed.
 
     Side Effects:
@@ -739,13 +749,80 @@ def _resolve_credential_for_signing(
     credential = credential_store.get_by_credential_id(raw_id)
     if credential is None:
         reject(action="sign_verify", pending_approval_id=row.id, reason="unknown_credential_id")
-    if (credential.actor_subject, credential.actor_issuer) != (row.actor_subject, row.actor_issuer):
-        reject(
-            action="sign_verify",
-            pending_approval_id=row.id,
-            reason="credential_belongs_to_a_different_actor",
-        )
     return credential
+
+
+_SIGNER_REFUSED_MESSAGE = (
+    "this approval was signed by someone other than the person it was issued to and can no "
+    "longer be used; ask for a new approval"
+)
+
+
+def _refuse_other_actor(
+    *,
+    row: PendingApprovalRow,
+    credential: SigningCredentialRow,
+    challenge: bytes,
+    store: PendingApprovalStore,
+    config: ServiceConfig,
+    http_request: Request,
+    assertion: dict[str, object],
+) -> NoReturn:
+    """Reject a credential enrolled by another actor; void and audit the approval if it verifies.
+
+    Without a signing-refusal recorder for the approval's tool the credential is rejected before
+    any verification. Otherwise the assertion is verified against the presenting credential's
+    own public key and the approval's challenge; an assertion that does not verify is rejected
+    with nothing recorded. A verified one consumes the approval (so it can never execute),
+    stores a fixed error outcome, and calls the recorder with the verified signer, best effort.
+    The credential's sign count is not advanced.
+
+    Args:
+        row: The pending approval being signed.
+        credential: The enrolled credential named by the assertion; its actor differs from the
+            row's.
+        challenge: The approval's recomputed signing challenge.
+        store: Pending-approval store; consumes the approval and receives the outcome.
+        config: The resolved service configuration, passed to the recorder.
+        http_request: The incoming request; gives the expected relying-party id and origin.
+        assertion: The browser's assertion JSON.
+
+    Raises:
+        PendingApprovalInvalidOrExpiredError: always (HTTP 404, generic body).
+        PendingApprovalPersistenceError: consuming the approval or storing its outcome failed.
+
+    Side Effects:
+        For a verified assertion: marks the approval signed, stores the fixed error outcome and
+        calls the tool's refusal recorder, logging a failed-outcome entry if the recorder
+        raises. Always emits the rejection's failed-outcome log entry.
+    """
+    recorder = resolve_signing_refusal_recorder(row.tool_name)
+    if recorder is not None:
+        with reject_on_webauthn_failure(action="sign_verify", pending_approval_id=row.id):
+            verify_authentication(
+                request=http_request,
+                challenge=challenge,
+                credential=assertion,
+                credential_public_key=credential.public_key,
+                credential_current_sign_count=credential.sign_count,
+            )
+        if store.mark_signed(row.id):
+            store.set_outcome(row.id, {"error": _SIGNER_REFUSED_MESSAGE})
+            signer = SignerIdentity(credential.actor_subject, credential.actor_issuer)
+            try:
+                recorder(row, config, signer)
+            except Exception as exc:  # noqa: BLE001 -- the approval is voided; a recorder failure keeps the generic rejection
+                emit_log_entry(
+                    component="passkey_signing",
+                    action="sign_verify_refusal_record",
+                    outcome="failed",
+                    extra={"pending_approval_id": row.id, "reason": type(exc).__name__},
+                )
+    reject(
+        action="sign_verify",
+        pending_approval_id=row.id,
+        reason="credential_belongs_to_a_different_actor",
+    )
 
 
 _EXECUTOR_FAILED_MESSAGE = (
@@ -813,7 +890,9 @@ async def post_sign_verify(
 
     Steps, in order: (1) check the code, status and expiry; (2) recompute the expected
     challenge from the approval (a client-supplied challenge is never trusted); (3) resolve
-    the asserted credential and require that it belongs to the approval's actor; (4) verify
+    the asserted credential and require that it belongs to the approval's actor (another
+    actor's credential is always rejected; if its assertion verifies and the tool has a
+    signing-refusal recorder, the approval is first voided and the refusal audited); (4) verify
     the assertion cryptographically; (5) require an executor registered for the approval's
     tool; (6) atomically flip the approval from `pending` to `signed`, so it can be used once;
     (7) persist the credential's new sign count; (8) run the registered executor and store its
@@ -849,7 +928,8 @@ async def post_sign_verify(
         Marks the approval signed, updates the credential's sign count, runs the executor
         registered for the approval's tool (which owns any graph write and its audit rows),
         stores the action outcome on the approval row, and logs a failed-outcome entry for each
-        rejection or failed action.
+        rejection or failed action. A verified signature by another actor instead voids the
+        approval and calls the refusal recorder registered for its tool.
     """
     row = _verify_code(
         store=store,
@@ -858,9 +938,19 @@ async def post_sign_verify(
         action="sign_verify",
     )
     challenge = _compute_sign_challenge(row)
-    credential = _resolve_credential_for_signing(
+    credential = _resolve_enrolled_credential(
         credential_store=credential_store, row=row, credential_payload=request_body.credential
     )
+    if (credential.actor_subject, credential.actor_issuer) != (row.actor_subject, row.actor_issuer):
+        _refuse_other_actor(
+            row=row,
+            credential=credential,
+            challenge=challenge,
+            store=store,
+            config=config,
+            http_request=http_request,
+            assertion=request_body.credential,
+        )
     # A verification failure (tampered challenge, wrong origin, bad signature, non-monotonic
     # sign_count) or a garbage payload maps to the same generic rejection as every other
     # failure, instead of reaching the app-wide 500 handler.

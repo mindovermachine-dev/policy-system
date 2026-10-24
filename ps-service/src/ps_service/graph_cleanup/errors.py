@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 
 if TYPE_CHECKING:
-    from ps_service.graph_cleanup.models import CapabilityMergePreview
+    from ps_service.graph_cleanup.models import CapabilityMergePreview, CapabilitySplitPreview
 
 
 class GraphCleanupPersistenceError(CompanyMergePersistenceError):
@@ -61,6 +61,29 @@ class GraphCleanupAcknowledgmentRequiredError(Exception):
 
         Args:
             preview: The previewed merge to show the Compliance Officer.
+            message: The acknowledgment text; non-empty, shown to the Compliance Officer.
+        """
+        super().__init__(message)
+        self.preview = preview
+
+
+class GraphCleanupSplitAcknowledgmentRequiredError(Exception):
+    """A split whose terminal Capability is governed was requested without the acknowledgment.
+
+    The Obligations whose `REQUIRES` edge moves to the split Capability leave the Policy's
+    coverage, so no approval is created without `acknowledge_governance_change`. Carries the
+    `preview` so the caller can show it. The message is the acknowledgment text the Compliance
+    Officer must accept before the call is repeated with the flag.
+
+    Attributes:
+        preview: The previewed split the Compliance Officer is asked to acknowledge.
+    """
+
+    def __init__(self, preview: CapabilitySplitPreview, message: str) -> None:
+        """Keep the previewed split alongside the acknowledgment text.
+
+        Args:
+            preview: The previewed split to show the Compliance Officer.
             message: The acknowledgment text; non-empty, shown to the Compliance Officer.
         """
         super().__init__(message)
