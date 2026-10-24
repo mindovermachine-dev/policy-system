@@ -7,9 +7,9 @@ Each tool group lives in its own `*_tools` module and registers its tools throug
 over any `GateEnvironment`. This module builds the production server once, over
 `build_production_environment()`, and exports it as `server` with its gate declarations as
 `TOOL_GATES`. The groups are `ingestion_tools`, `near_miss_tools`, `catalog_tools`,
-`cypher_tools`, `access_audit_tools`, `policy_lifecycle_tools` and `graph_cleanup_tools`; importing
-this module imports them all. It defines no tool itself; it exports `server`, `TOOL_GATES`,
-`build_server` and `handle_mcp_tool_call`.
+`cypher_tools`, `access_audit_tools`, `policy_draft_tools`, `policy_transition_tools` and
+`graph_cleanup_tools`; importing this module imports them all. It defines no tool itself; it exports
+`server`, `TOOL_GATES`, `build_server` and `handle_mcp_tool_call`.
 
 Business Rules:
     - `TOOL_GROUP_MODULES` is in the order that `tools/list` presents the groups' tools in.
@@ -30,7 +30,8 @@ from ps_service.mcp_interface import (
     graph_cleanup_tools,
     ingestion_tools,
     near_miss_tools,
-    policy_lifecycle_tools,
+    policy_draft_tools,
+    policy_transition_tools,
 )
 from ps_service.mcp_interface.access_audit_tools import register_access_audit_tools
 from ps_service.mcp_interface.catalog_tools import register_catalog_tools
@@ -38,7 +39,8 @@ from ps_service.mcp_interface.cypher_tools import handle_mcp_tool_call, register
 from ps_service.mcp_interface.graph_cleanup_tools import register_graph_cleanup_tools
 from ps_service.mcp_interface.ingestion_tools import register_ingestion_tools
 from ps_service.mcp_interface.near_miss_tools import register_near_miss_tools
-from ps_service.mcp_interface.policy_lifecycle_tools import register_policy_lifecycle_tools
+from ps_service.mcp_interface.policy_draft_tools import register_policy_draft_tools
+from ps_service.mcp_interface.policy_transition_tools import register_policy_transition_tools
 from ps_service.mcp_interface.production_environment import build_production_environment
 from ps_service.mcp_interface.tool_core import BuiltServer, create_server
 
@@ -67,7 +69,8 @@ TOOL_GROUP_MODULES: Final[ToolGroups] = (
     (catalog_tools, register_catalog_tools),
     (cypher_tools, register_cypher_tools),
     (access_audit_tools, register_access_audit_tools),
-    (policy_lifecycle_tools, register_policy_lifecycle_tools),
+    (policy_draft_tools, register_policy_draft_tools),
+    (policy_transition_tools, register_policy_transition_tools),
     (graph_cleanup_tools, register_graph_cleanup_tools),
 )
 

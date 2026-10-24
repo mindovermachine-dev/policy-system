@@ -14,7 +14,7 @@ the scenario descriptions, including the 6th (disagreement) scenario.
 Fake graph: a `_HybridGraph`, combining `test_cypher_tool.py`'s
 `_FakeGraphHandle` per-call result/error
 FIFO-queue scripting for the freehand `cypher` tool with
-`test_policy_lifecycle_tools.py`'s `_FakeGraph` literal-query-substring
+`test_policy_lifecycle_tool_calls.py`'s `_FakeGraph` literal-query-substring
 dispatch for the write-side content-CRUD tools -- extended here with one
 additional literal-dispatch branch for the Policy-tree read
 (`graph_writer.read_policy_tree`'s own `"s.id, s.title, s.status, c.id"`
@@ -23,7 +23,7 @@ resume/not-owned scenarios) and `create-policy-draft`'s own
 `supersedes_policy_id` prior-status check (`_read_transition_target`, the
 fork scenarios) -- not spelled out row-by-row in Appendix A's code sample,
 but required by the same convention: the fixed strings are read from
-graph_writer.py the way test_policy_lifecycle_tools.py does, never invented.
+graph_writer.py the way test_policy_lifecycle_tool_calls.py does, never invented.
 A second additional branch handles `read_policy_tree_for_fork`'s
 own distinguishing `"RETURN s.id, properties(s), c.id, properties(c)"`
 query (issued by a successful fork's `_build_forked_standard_drafts`,
@@ -31,12 +31,12 @@ BEFORE the graph write) -- routed to its own empty-result branch so it is
 never miscounted as a write. A third additional branch treats
 `backfill_governance_status`'s three idempotent `SET` statements (issued
 ahead of every `read_policy_tree*` read) as a structural no-op, exactly
-as `test_policy_lifecycle_tools.py`'s own `_TreeFakeGraph`/`_StatefulFakeGraph`
+as `test_policy_lifecycle_tool_calls.py`'s own `_TreeFakeGraph`/`_StatefulFakeGraph`
 already do.
 
 `_verified_actor`/`_install_graph`/`_install_audit_store`/
 `_install_access_role_store` are local copies of
-`test_policy_lifecycle_tools.py`'s own helpers of the same name, taken
+`test_policy_lifecycle_tool_calls.py`'s own helpers of the same name, taken
 from that file.
 """
 
@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from api._gateway_fakes import installed_process_gateway
-from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tool_calls.py's own convention
     FakeAccessRoleStore,
 )
 from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -180,7 +180,7 @@ class _HybridGraph:
     Combines `test_cypher_tool.py`'s `_FakeGraphHandle` per-call
     result/error scripting (generalized to a FIFO queue -- the disagreement
     scenario needs four distinct scripted `cypher` results in one test) with
-    `test_policy_lifecycle_tools.py`'s `_FakeGraph` literal-query dispatch
+    `test_policy_lifecycle_tool_calls.py`'s `_FakeGraph` literal-query dispatch
     for the write-side content-CRUD tools. One instance serves both call
     shapes because both connect through the same single
     `connect_from_config` monkeypatch point within one test.
@@ -213,7 +213,7 @@ class _HybridGraph:
             # `graph_writer.backfill_governance_status`'s three idempotent,
             # already-backfilled-safe `SET` statements -- issued ahead of
             # every `read_policy_tree*` read. A structural no-op here,
-            # exactly as `test_policy_lifecycle_tools.py`'s own
+            # exactly as `test_policy_lifecycle_tool_calls.py`'s own
             # `_TreeFakeGraph`/`_StatefulFakeGraph` treat them (never
             # recorded as a "write" this test cares about).
             return _FakeQueryResult()
@@ -242,7 +242,7 @@ class _HybridGraph:
             # query's own `RETURN` clause is `"RETURN p.id, p.title,
             # p.status, ..."`, which contains that branch's shorter
             # substring, so the more specific match must win here (mirrors
-            # `test_policy_lifecycle_tools.py`'s own "checked BEFORE"
+            # `test_policy_lifecycle_tool_calls.py`'s own "checked BEFORE"
             # ordering discipline for its overlapping-substring branches).
             if self._policy_tree is None:
                 return _FakeQueryResult(result_set=[])
@@ -312,7 +312,7 @@ class _RecordedAuditCall:
 
 
 class _FakeAuditStore:
-    """Records every `record_standalone` call (copied from `test_policy_lifecycle_tools.py`)."""
+    """Records every `record_standalone` call."""
 
     def __init__(self) -> None:
         self.calls: list[_RecordedAuditCall] = []

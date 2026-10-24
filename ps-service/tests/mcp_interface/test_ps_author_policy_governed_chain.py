@@ -20,7 +20,7 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 from api._gateway_fakes import installed_process_gateway
-from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tool_calls.py's own convention
     FakeAccessRoleStore,
 )
 from mcp.server.auth.middleware.auth_context import auth_context_var

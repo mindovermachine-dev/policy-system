@@ -77,6 +77,8 @@ __all__ = [
     "PLAIN_READ_GATE",
     "POLICY_AUTHOR_GATE",
     "POLICY_DRAFT_ACCESS_GATE",
+    "POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE",
+    "POLICY_TRANSITION_GATE",
     "SYSTEM_ADMIN_GATE",
     "UNEXPECTED_ERROR_MESSAGE",
     "BuiltServer",
@@ -181,6 +183,11 @@ def resolve_graph(config: ServiceConfig, *, environment: GateEnvironment) -> Gra
 
 ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: access-role management requires a real authenticated caller"
+)
+
+
+POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
+    "error: this action requires a real authenticated caller (the local-test bypass counts as one)"
 )
 
 
@@ -403,6 +410,18 @@ POLICY_AUTHOR_GATE = ToolGate(
 POLICY_DRAFT_ACCESS_GATE = ToolGate(
     kind=GateKind.AUTHENTICATED_ONLY,
     reason="the Policy owner, SystemOwner or SystemAdmin; enforced in the lifecycle service",
+)
+
+
+# `approve-policy` / `reject-policy` keep their check order (the Policy is read first, so an unknown
+# id is reported before an access denial), so the role gate is a body gate: the policy-lifecycle
+# service calls the enforcer the tool hands it, at the existing position. Under the bypass the role
+# is checked for the lifecycle fallback identity and the audit row names the bypass sentinel.
+POLICY_TRANSITION_GATE = ToolGate(
+    kind=GateKind.BODY,
+    role=AccessRole.POLICY_MANAGER,
+    bypass=BypassPolicy.LIFECYCLE_IDENTITY,
+    unauthenticated_message=POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE,
 )
 
 

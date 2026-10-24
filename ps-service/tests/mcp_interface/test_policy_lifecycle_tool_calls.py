@@ -59,7 +59,7 @@ from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfig
 from ps_service.domain_schema import patchable_fields
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import policy_lifecycle_tools
+from ps_service.mcp_interface import policy_draft_tools, policy_transition_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
@@ -242,12 +242,14 @@ def _configure_graph_name(monkeypatch: pytest.MonkeyPatch, graph_name: str) -> N
     base_config = ServiceConfig(
         host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
     )
+
+    def _config() -> ServiceConfig:
+        return dataclasses.replace(base_config, falkordb_graph=graph_name)
+
     # detroit-exception: the config handed to the tool is the specified input (load_config)
-    monkeypatch.setattr(
-        policy_lifecycle_tools,
-        "load_config",
-        lambda: dataclasses.replace(base_config, falkordb_graph=graph_name),
-    )
+    monkeypatch.setattr(policy_draft_tools, "load_config", _config)
+    # detroit-exception: the config handed to the tool is the specified input (load_config)
+    monkeypatch.setattr(policy_transition_tools, "load_config", _config)
 
 
 def _call_create_policy_draft(

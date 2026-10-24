@@ -19,7 +19,7 @@ from ps_service.mcp_interface import (
     access_audit_tools,
     cypher_tools,
     near_miss_tools,
-    policy_lifecycle_tools,
+    policy_transition_tools,
 )
 
 if TYPE_CHECKING:
@@ -113,8 +113,8 @@ def test_list_audit_events_tool_docstring_lists_the_new_actions() -> None:
     "tool",
     [
         near_miss_tools.near_misses_resolve,
-        policy_lifecycle_tools.approve_policy,
-        policy_lifecycle_tools.reject_policy,
+        policy_transition_tools.approve_policy,
+        policy_transition_tools.reject_policy,
     ],
 )
 def test_body_gated_tool_docstrings_describe_the_access_gate_denial_row(

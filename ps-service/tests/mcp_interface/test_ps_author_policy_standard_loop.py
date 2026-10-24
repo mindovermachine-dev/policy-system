@@ -87,7 +87,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from api._gateway_fakes import installed_process_gateway
-from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tool_calls.py's own convention
     FakeAccessRoleStore,
 )
 from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -231,7 +231,7 @@ class _HybridGraph:
     checked BEFORE the generic write bucket below, since its own query text
     also contains that bucket's `SUPPORTED_BY]->(s:Standard {id:
     $standard_id})` matching substring (the same "more specific match wins"
-    ordering `test_policy_lifecycle_tools.py`'s own `_StatefulFakeGraph`
+    ordering `test_policy_lifecycle_tool_calls.py`'s own `_StatefulFakeGraph`
     documents for this exact pair of queries). Every write this slice's
     scenarios issue (`create-policy-draft`'s MERGE, `add-standard-to-draft`'s
     MERGE, `update-standard-draft`'s SET) is routed to one generic bucket --

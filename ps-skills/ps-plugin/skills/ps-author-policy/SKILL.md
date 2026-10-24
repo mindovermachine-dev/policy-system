@@ -309,7 +309,7 @@ Control cardinality question in this session has been answered "finish".
 Report every non-success outcome below as its own named state -- never
 collapsed into a generic "action failed". Sourced from
 `ps_service.policy_lifecycle.errors` (exact message text),
-`policy_lifecycle_tools.py`, and `cypher_tools.py`'s `cypher` tool docstring -- every message below was verified
+`policy_draft_tools.py`, `policy_transition_tools.py`, and `cypher_tools.py`'s `cypher` tool docstring -- every message below was verified
 against that real source, not copied from paraphrase:
 
 | Tool result shape                                                                                                                                                                                                | Named state to report                                                                                                                                                                                              | Applies to                                                                                                                                                                  |

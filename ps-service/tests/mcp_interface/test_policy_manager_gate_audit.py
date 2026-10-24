@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 from authz._fakes import FakeAccessRoleStore
 
-from mcp_interface.test_policy_lifecycle_tools import (
+from mcp_interface.test_policy_lifecycle_tool_calls import (
     _MANAGER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _OTHER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _approvable_fixture,  # pyright: ignore[reportPrivateUsage]  -- same fixtures as the lifecycle tool tests

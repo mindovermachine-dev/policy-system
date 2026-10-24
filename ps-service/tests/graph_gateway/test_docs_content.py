@@ -866,7 +866,9 @@ def test_both_copies_of_the_domain_concepts_are_identical() -> None:
     assert "since #211" in _read(copy)
 
 
-def test_operations_guide_says_policy_lifecycle_tools_answer_an_error_without_a_gateway() -> None:
+def test_operations_guide_says_draft_and_transition_tools_answer_an_error_without_a_gateway() -> (
+    None
+):
     ops = _section(_read(_OPS), "## Troubleshooting / FAQ")
 
     assert "Policy Lifecycle" in ops

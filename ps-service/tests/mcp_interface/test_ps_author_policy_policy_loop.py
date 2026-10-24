@@ -67,7 +67,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from api._gateway_fakes import installed_process_gateway
-from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tools.py's own convention
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tool_calls.py's own convention
     FakeAccessRoleStore,
 )
 from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -207,7 +207,7 @@ class _HybridGraph:
             # already-backfilled-safe `SET` statements -- issued ahead of
             # `read_policy_tree` by `_read_transition_target`. Structural
             # no-op, exactly as `test_ps_author_policy_branch_detection.py`
-            # and `test_policy_lifecycle_tools.py` already treat it.
+            # and `test_policy_lifecycle_tool_calls.py` already treat it.
             return _FakeQueryResult()
         if "s.id, s.title, s.status, c.id" in q:
             # `graph_writer.read_policy_tree` -- `update-policy-draft`'s own
