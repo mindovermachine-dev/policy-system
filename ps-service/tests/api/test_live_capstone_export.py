@@ -310,7 +310,8 @@ def capstone(
     log_path = tmp_path_factory.mktemp("export_capstone") / "capstone.jsonl"
     facade.configure(log_path=log_path)
 
-    install_compliance_officer_grant(monkeypatch, granted=True)  # the routes are role-gated
+    # The routes are role-gated.
+    install_compliance_officer_grant(monkeypatch, granted=True, real_audit_store=True)
     app = create_app(config)
     # The ingestion pre-step and both exports write through the Graph Write Gateway.
     # `TestClient` is not entered, so the app lifespan never installs it: install the real one

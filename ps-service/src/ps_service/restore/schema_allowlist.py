@@ -121,7 +121,7 @@ def _validate_capability_status(node_label: str, properties: Mapping[str, object
     artifact legitimately carries a merge status. Any value the schema does not define
     would reach the graph through `ON CREATE SET n += properties`; this is the one
     property-level rule. Label and relationship allow-lists already exclude the
-    `Merged*` markers.
+    `Merged*` markers and the `ResolvedCapability` marker, so no artifact can restore one.
     """
     status = properties.get("status")
     if node_label == "Capability" and status is not None and status not in CAPABILITY_STATUSES:

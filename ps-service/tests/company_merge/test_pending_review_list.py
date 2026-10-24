@@ -162,6 +162,17 @@ def test_the_list_query_filters_on_existence_alone_not_on_a_status() -> None:
     assert "coalesce" not in graph.calls[0].query
 
 
+def test_the_list_query_requires_both_sides_to_carry_the_reviews_own_kind_label() -> None:
+    """A side held only by a marker node (`MergedCapability`, `ResolvedCapability`) is no match."""
+    graph = _FakeGraph(rows=[])
+
+    list_pending_reviews(graph)
+
+    query = graph.calls[0].query
+    assert "MATCH (a) WHERE a.id = r.incoming_id AND r.kind IN labels(a)" in query
+    assert "MATCH (b) WHERE b.id = r.nearest_existing_id AND r.kind IN labels(b)" in query
+
+
 # --- falkordb_live: the list and the merge must agree ---------
 
 _LIVE_TEST_GRAPH = "policy_system_issue196_stale_review_live_test"
@@ -238,3 +249,41 @@ def test_list_pending_reviews_omits_reviews_the_merge_path_would_refuse_live() -
     finally:
         db.select_graph(_LIVE_TEST_GRAPH).delete()
         assert _LIVE_TEST_GRAPH not in set(db.list_graphs())
+
+
+_LIVE_RESOLUTION_TEST_GRAPH = "policy_system_resolution_marker_review_live_test"
+
+
+@pytest.mark.falkordb_live
+def test_a_review_whose_incoming_id_only_a_resolution_marker_holds_is_not_listed_live() -> None:
+    """A review naming a resolved id is not resolvable: no `Capability` carries that id.
+
+    Writes into a dedicated, disposable graph name, never the shared `policy_system` graph, with
+    the same defensive pre-clean and `finally` delete as the test above.
+    """
+    db = connect_from_config(load_config())
+    if _LIVE_RESOLUTION_TEST_GRAPH in set(db.list_graphs()):
+        db.select_graph(_LIVE_RESOLUTION_TEST_GRAPH).delete()
+
+    try:
+        graph = select_graph(db, _LIVE_RESOLUTION_TEST_GRAPH)
+        graph.query("CREATE (:Capability {id: 'cap_live_a'})")
+        graph.query("CREATE (:Capability {id: 'cap_live_b'})")
+        graph.query("CREATE (:ResolvedCapability {id: 'cap_live_x', resolves_to: 'cap_live_a'})")
+        for review_id, incoming_id, created_at in (
+            ("review_live_resolvable", "cap_live_a", "2024-01-01"),
+            ("review_live_resolved_side", "cap_live_x", "2024-01-02"),
+        ):
+            graph.query(
+                "CREATE (:PendingReview {id: $id, kind: 'Capability', incoming_id: $incoming_id, "
+                "incoming_text: 'incoming', nearest_existing_id: 'cap_live_b', "
+                "nearest_existing_text: 'nearest', similarity: 0.62, created_at: $created_at})",
+                params={"id": review_id, "incoming_id": incoming_id, "created_at": created_at},
+            )
+
+        listed = [record.id for record in list_pending_reviews(graph)]
+
+        assert listed == ["review_live_resolvable"]
+    finally:
+        db.select_graph(_LIVE_RESOLUTION_TEST_GRAPH).delete()
+        assert _LIVE_RESOLUTION_TEST_GRAPH not in set(db.list_graphs())

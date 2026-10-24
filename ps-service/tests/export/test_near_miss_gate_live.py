@@ -1,9 +1,10 @@
 """`falkordb_live` proof of the near-miss gate's "unresolved" predicate.
 
 The gate reuses `list_pending_reviews`, whose query requires both referenced nodes to exist under
-the review's `kind` and neither to be a `merged` tombstone. A scripted handle cannot execute that
-Cypher, so only a real FalkorDB shows that a review naming a gone node or a `merged` tombstone
-does not block an export, while a live one does.
+the review's `kind`. A cleanup merge deletes the node it absorbs and leaves a `MergedCapability`
+marker under the absorbed id, so a review naming a merged-away side has no node of its `kind` to
+match. A scripted handle cannot execute that Cypher, so only a real FalkorDB shows that a review
+naming a gone node or a merged-away node does not block an export, while a live one does.
 
 Writes only into two disposable, uniquely tokened graphs (never the real `policy_system` or any
 `*_baseline`) and deletes both in a `finally` block.
@@ -38,7 +39,10 @@ def test_only_reviews_the_merge_path_would_accept_block_an_export_live() -> None
         policy = select_graph(db, policy_name)
         policy.query("CREATE (:Capability {id: 'cap_live_a', status: 'active'})")
         policy.query("CREATE (:Capability {id: 'cap_live_other', status: 'active'})")
-        policy.query("CREATE (:Capability {id: 'cap_live_merged_in_baseline', status: 'merged'})")
+        policy.query(
+            "CREATE (:MergedCapability {id: 'cap_live_merged_in_baseline', "
+            "merged_into: 'cap_live_other'})"
+        )
         for review_id, incoming_id, nearest_id, created_at in (
             ("review_live_blocks", "cap_live_a", "cap_live_other", "2024-01-01"),
             ("review_live_node_gone", "cap_live_a", "cap_live_absent", "2024-01-02"),

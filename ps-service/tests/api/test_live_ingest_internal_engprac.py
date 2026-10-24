@@ -154,7 +154,8 @@ def ingest_env(
         if name in db.list_graphs():
             db.select_graph(name).delete()
     facade.configure(log_path=tmp_path / "ingest.jsonl")
-    install_compliance_officer_grant(monkeypatch, granted=True)  # the route is role-gated
+    # The route is role-gated.
+    install_compliance_officer_grant(monkeypatch, granted=True, real_audit_store=True)
     app = create_app(config)
     app.dependency_overrides[get_principal] = lambda: Principal(sub=_OWNER[0], iss=_OWNER[1])
     # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not

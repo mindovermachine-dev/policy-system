@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from graph_gateway.live_endpoints import falkordb_endpoint
 
 from ps_service import config as config_module
 from ps_service.config import load_config
@@ -62,10 +63,11 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
 
 @pytest.mark.falkordb_live
 def test_connect_and_select_graph_succeed_against_real_falkordb_instance() -> None:
-    """Real connect to 127.0.0.1:6379, select the `policy_system` graph, and
+    """Real connect to the live-test FalkorDB, select the `policy_system` graph, and
     run a trivial read-only query -- requires a reachable FalkorDB instance.
     """
-    db = connect(host="127.0.0.1", port=6379)
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
     graph = select_graph(db, "policy_system")
 
     graph.query("MATCH (n) RETURN n LIMIT 1")

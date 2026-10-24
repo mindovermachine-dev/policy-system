@@ -33,9 +33,22 @@ MERGE_MARKER_LABELS: Mapping[str, str] = MappingProxyType(
 """One `{id, merged_into}` marker per absorbed id and kind. A marker belongs to the deployment's
 own graph: no export artifact carries one and no restore allow-list admits one."""
 
+RESOLUTION_MARKER_LABELS: Mapping[str, str] = MappingProxyType(
+    {"ResolvedCapability": "company-merge semantic-resolution marker node, not a domain node"}
+)
+"""One `{id, resolves_to}` marker per incoming Capability id that Company Merge resolved onto an
+existing Capability by similarity. It records a decision, not an absorbed node: there is no audit
+snapshot behind it and nothing to unmerge. Like a merge marker it belongs to the deployment's own
+graph: no export artifact carries one and no restore allow-list admits one."""
+
+REDIRECT_MARKER_LABELS: Mapping[str, str] = MappingProxyType(
+    {**MERGE_MARKER_LABELS, **RESOLUTION_MARKER_LABELS}
+)
+"""Every marker label Company Merge follows from an incoming id to its terminal survivor."""
+
 OPERATIONAL_LABELS: Mapping[str, str] = MappingProxyType(
     {
-        **MERGE_MARKER_LABELS,
+        **REDIRECT_MARKER_LABELS,
         "PendingReview": "near-miss review store, not a domain node",
         "ReingestProgress": (
             "change-monitor re-ingest stage marker in the native graph; "

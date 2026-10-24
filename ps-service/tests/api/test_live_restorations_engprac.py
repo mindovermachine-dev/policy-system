@@ -160,7 +160,7 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
     )
     db = connect_from_config(config)
 
-    install_compliance_officer_grant(monkeypatch, granted=True)
+    install_compliance_officer_grant(monkeypatch, granted=True, real_audit_store=True)
     app = create_app(config)
     app.dependency_overrides[get_principal] = lambda: Principal(
         sub=_OWNER_SUBJECT, iss=_OWNER_ISSUER

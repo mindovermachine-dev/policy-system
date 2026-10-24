@@ -123,7 +123,7 @@ def test_export_accepted_response_is_frozen() -> None:
     )
 
     with pytest.raises(ValidationError):
-        response.instrument_id = "other"  # type: ignore[misc]
+        response.instrument_id = "other"
 
 
 # --- error types ---------------------------------------------------------------

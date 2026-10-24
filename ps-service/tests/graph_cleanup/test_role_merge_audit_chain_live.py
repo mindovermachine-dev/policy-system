@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pytest
 from audit._integrity_support import assert_chain_is_intact
@@ -34,11 +34,12 @@ from ps_service.graph_cleanup.audit_actions import RoleMergeDetails, RoleUnmerge
 from ps_service.logging import configure, reset_for_tests
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from persistence.provisioned_postgres import Provisioned
 
     from graph_cleanup._gateway_fakes import CleanupRig
+    from ps_service.audit import AuditQueryFilters, AuditQueryPage
     from ps_service.audit.store import AuditStore
 
 pytestmark = pytest.mark.postgres_live
@@ -58,15 +59,53 @@ class _LinkedAuditStore:
         self._inner = inner
         self._rig = rig
 
-    def query(self, **kwargs: object) -> object:
-        return self._inner.query(**kwargs)  # type: ignore[arg-type]
+    def query(
+        self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
+    ) -> AuditQueryPage:
+        return self._inner.query(filters=filters, cursor=cursor, page_size=page_size)
 
-    def record_standalone(self, **kwargs: object) -> None:
-        self.record_standalone_with_event_id(**kwargs)
+    def record_standalone(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: Literal["applied", "rejected", "failed"],
+        details: Mapping[str, object],
+    ) -> None:
+        self.record_standalone_with_event_id(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
 
-    def record_standalone_with_event_id(self, **kwargs: object) -> str:
-        event_id = self._inner.record_standalone_with_event_id(**kwargs)  # type: ignore[arg-type]
-        self._rig.events.append(f"audit:{kwargs['outcome']}")
+    def record_standalone_with_event_id(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: Literal["applied", "rejected", "failed"],
+        details: Mapping[str, object],
+    ) -> str:
+        event_id = self._inner.record_standalone_with_event_id(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            outcome=outcome,
+            details=details,
+        )
+        self._rig.events.append(f"audit:{outcome}")
         self._rig.store.audit_rows.add(event_id)
         return event_id
 

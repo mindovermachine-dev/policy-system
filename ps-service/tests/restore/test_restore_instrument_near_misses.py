@@ -190,7 +190,7 @@ def test_AC_BI_007_a_refused_group_leaves_no_review(restore_rig: RestoreRig) -> 
             raise GraphWriteRejectedError("the group is refused")
 
     refusing = RefusingGateway(restore_rig.gateway)
-    restore_rig.open_gateway = lambda: refusing  # type: ignore[method-assign]
+    restore_rig.gateway_opener = lambda: refusing
 
     with pytest.raises(RestoreGroupRejectedError):
         restore_rig.restore(near_miss_artifact())

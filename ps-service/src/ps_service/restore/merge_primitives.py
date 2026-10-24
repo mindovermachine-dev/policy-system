@@ -4,16 +4,20 @@ The offline baseline merge is built from reads of the live graph and an overlay 
 own writes; the only thing a later step reads of an earlier step's writes is node existence by
 id (the provenance edges', classification edges' and rewired edges' endpoints):
 
-- every decision that depends on graph content (Capability convergence, merge-marker
-  redirects, which ids already exist) is read from `live` and made before anything is built;
+- every decision that depends on graph content (Capability convergence, redirects through the
+  merge and resolution markers, which ids already exist) is read from `live` and made before
+  anything is built;
 - an id counts as existing when `live` holds it or an earlier primitive of this same leg creates
   it (`_Overlay`);
 - nothing is written: the result is a tuple of primitives for one `GraphLeg` that the caller
   submits with `ExpectedPosition(P)`, where P is the log position at which `live` was read. The
   caller makes the graph caught up and reads that position first.
 
-The builders are the pure builders of `company_merge.graph_writer`, so a restore and a live
-merge decide create-only, set-if-null and edge rewiring identically.
+The builders are the pure builders of `company_merge.graph_writer` and
+`company_merge.resolution_markers`, so a restore and a live merge decide create-only,
+set-if-null, edge rewiring and the `ResolvedCapability` markers identically. The leg logs no
+resolution fact itself: it returns its semantic resolutions and redirected Capabilities, and the
+caller logs them once the leg is applied.
 """
 
 from __future__ import annotations
@@ -52,6 +56,11 @@ from ps_service.company_merge.pending_review import (
     drop_already_reviewed,
 )
 from ps_service.company_merge.redirects import compose_with_resolutions, resolve_redirects
+from ps_service.company_merge.resolution_markers import (
+    build_resolution_marker_primitives,
+    capability_redirects,
+    semantic_resolutions,
+)
 from ps_service.company_merge.reviewable_kinds import CAPABILITY, ROLE
 from ps_service.graph_gateway.models import UpsertNode
 from ps_service.logging.facade import emit_log_entry
@@ -65,7 +74,13 @@ if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.generated_values import ValueSource
     from ps_service.company_merge.governance_import import GovernanceImport
-    from ps_service.company_merge.models import BaselineGraph, BaselineNode, NearMissPair
+    from ps_service.company_merge.models import (
+        BaselineGraph,
+        BaselineNode,
+        CanonicalResolution,
+        NearMissPair,
+    )
+    from ps_service.company_merge.resolution_markers import CapabilityRedirect
     from ps_service.company_merge.reviewable_kinds import ReviewThresholds
     from ps_service.export.models import SerializedGraph
     from ps_service.graph_gateway.models import Primitive
@@ -90,7 +105,7 @@ _NODE_LABELS = (
 
 @dataclass(frozen=True)
 class PolicySystemLeg:
-    """What one restore does to `policy_system`: its primitives and its audit counts.
+    """What one restore does to `policy_system`: its primitives, audit counts and resolutions.
 
     Attributes:
         primitives: The writes, in dependency order; empty when the artifact adds nothing to
@@ -98,10 +113,16 @@ class PolicySystemLeg:
         counts: The six classification keys, the four governance keys and
             `near_miss_reviews_created` of the `succeeded` audit entry, each a non-negative
             count.
+        semantic_resolutions: The Capability resolutions onto an existing Capability by
+            similarity; `primitives` carries one `ResolvedCapability` marker for each.
+        capability_redirects: The incoming Capability ids a marker redirected before dedup, each
+            with its terminal and the label of the first marker followed.
     """
 
     primitives: tuple[Primitive, ...]
     counts: dict[str, int]
+    semantic_resolutions: tuple[CanonicalResolution, ...]
+    capability_redirects: tuple[CapabilityRedirect, ...]
 
 
 class _Overlay:
@@ -203,13 +224,17 @@ def build_policy_system_leg(  # noqa: PLR0913 -- the leg's collaborators and thr
     moves the position and the gateway refuses the leg. Primitives come in dependency order:
     instrument, Roles, Requirements, provenance edges, Obligations, Capability mints, draft
     governance, PracticeArea and RiskPath nodes, then the rewired edges (regulatory spine,
-    governance and classification), then one `PendingReview` per Capability near miss.
+    governance and classification) with one `ResolvedCapability` marker per semantic Capability
+    resolution, then one `PendingReview` per Capability near miss.
 
-    Business Rules: Capabilities converge onto an existing one by embedding similarity; a draft
-    Policy never converges; nodes a cleanup merge absorbed are redirected to their
-    survivor; governance content is created only as a `draft` owned by `governance.owner`; every
-    Capability near miss scoring at or above the review threshold is recorded as a `PendingReview`
-    in the same leg (a pair below it records none), so a failed restore leaves none.
+    Business Rules: Capabilities converge onto an existing one by embedding similarity, and each
+    such resolution is recorded as a `ResolvedCapability` marker in the same all-or-nothing leg
+    as the edges onto its target; a draft Policy never converges; nodes a cleanup merge absorbed,
+    and Capabilities an earlier run resolved by similarity, are redirected to the terminal of
+    their marker chain before dedup; governance content is created only as a `draft` owned by
+    `governance.owner`; every Capability near miss scoring at or above the review threshold is
+    recorded as a `PendingReview` in the same leg (a pair below it records none), so a failed
+    restore leaves none.
 
     Args:
         baseline_graph: The parsed baseline leg of the artifact.
@@ -230,11 +255,13 @@ def build_policy_system_leg(  # noqa: PLR0913 -- the leg's collaborators and thr
         values: Source of generated values (timestamps); defaults to the system clock.
 
     Returns:
-        The leg's primitives (empty for a baseline that adds nothing) and its audit counts.
+        The leg's primitives (empty for a baseline that adds nothing), its audit counts, its
+        semantic Capability resolutions and its redirected Capability ids.
 
     Side Effects:
         Reads `live` (including the unresolved reviews of the near-miss pairs) and emits log
-        entries (dedup, redirect and `build_policy_system_leg` success); writes no graph.
+        entries (dedup, the redirect count and `build_policy_system_leg` success); writes no
+        graph. The marker writes and the redirected Capability ids are not logged here.
 
     Raises:
         CompanyMergeConfigurationError: `merge_threshold`, `review_threshold` or
@@ -244,8 +271,8 @@ def build_policy_system_leg(  # noqa: PLR0913 -- the leg's collaborators and thr
             is `None`.
         ArtifactContentRejectedError: `instrument_id` matches no instrument of an artifact that
             holds some.
-        CompanyMergeValidationError: a merge-marker chain has a cycle or ends at a node that
-            exists nowhere.
+        CompanyMergeValidationError: a marker chain has a cycle or ends at a node that exists
+            nowhere, or one Capability id is held by both a merge and a resolution marker.
         CompanyMergePersistenceError: a node carries a property the gateway cannot store, a
             classification edge endpoint exists nowhere, an edge endpoint has no mapping entry,
             or a read of `live` failed.
@@ -259,8 +286,9 @@ def build_policy_system_leg(  # noqa: PLR0913 -- the leg's collaborators and thr
         raise RestoreOwnerRequiredError
     _check_instrument(baseline_graph, read, instrument_id)
 
-    # Drop nodes a cleanup merge absorbed before any build, and map them to their terminal
-    # survivor so the rewiring below re-targets their edges.
+    # Drop nodes a cleanup merge absorbed, and Capabilities an earlier run resolved by
+    # similarity, before any build, and map them to their terminal so the rewiring below
+    # re-targets their edges.
     resolution = resolve_redirects(live, read, emitter=emitter)
     read = resolution.baseline
     dedup_result = resolve_capability_convergence_offline(
@@ -339,6 +367,7 @@ def build_policy_system_leg(  # noqa: PLR0913 -- the leg's collaborators and thr
             canonical_id_by_incoming_id,
         )
     )
+    overlay.add(build_resolution_marker_primitives(dedup_result.resolutions))
 
     # Last, so the reviews follow the content they refer to inside the same all-or-nothing leg.
     overlay.add(build_pending_review_primitives(new_near_misses, kind=CAPABILITY, values=values))
@@ -356,7 +385,12 @@ def build_policy_system_leg(  # noqa: PLR0913 -- the leg's collaborators and thr
         extra={"primitive_count": len(overlay.primitives)},
         emitter=emitter,
     )
-    return PolicySystemLeg(primitives=tuple(overlay.primitives), counts=counts)
+    return PolicySystemLeg(
+        primitives=tuple(overlay.primitives),
+        counts=counts,
+        semantic_resolutions=semantic_resolutions(dedup_result.resolutions),
+        capability_redirects=capability_redirects(resolution, dedup_result.resolutions),
+    )
 
 
 def _new_role_near_misses(

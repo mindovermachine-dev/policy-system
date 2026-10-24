@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from persistence.provisioned_postgres import Provisioned
 
     from ps_service.config import ServiceConfig
+    from ps_service.logging.emitter import LogEmitter
 
 pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
@@ -79,7 +80,7 @@ def _graph_counts(
 
 
 def _restore(
-    db: FalkorDB, emitter: object, short_name: str, graph_name: str, config: ServiceConfig
+    db: FalkorDB, emitter: LogEmitter, short_name: str, graph_name: str, config: ServiceConfig
 ) -> None:
     # The restore writes through the real gateway; its groups are anchored to a real
     # `instrument.restore` audit row (the graph log's audit link is a foreign key into
@@ -104,7 +105,7 @@ def _restore(
         actor=_ACTOR,
         open_gateway=lambda: gateway,
         audit_event_id=audit_event_id,
-        emitter=emitter,  # type: ignore[arg-type]
+        emitter=emitter,
         owner=_OWNER,
     )
 

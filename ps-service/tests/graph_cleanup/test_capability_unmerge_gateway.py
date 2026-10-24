@@ -10,7 +10,7 @@ and guarded by the log position read BEFORE the guard reads. The guard is the st
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import pytest
 import redis.exceptions
@@ -58,6 +58,24 @@ _WRITE_FAILED = (
 _ABSORBED = NodeRef(label="Capability", id=ABSORBED)
 _SURVIVOR = NodeRef(label="Capability", id=SURVIVOR)
 _POLICY = NodeRef(label="Policy", id=POLICY)
+
+
+class _CapabilityUnmergeOutcome(TypedDict):
+    """The success outcome `execute_unmerge` documents for a Capability, as JSON-mode values."""
+
+    merged_id: str
+    survivor_id: str
+    unmerged: bool
+    survivor_added_edges: list[dict[str, object]]
+
+
+def _succeeded_unmerge(rig: CleanupRig) -> _CapabilityUnmergeOutcome:
+    """Run the capability unmerge and read its outcome as the documented success shape.
+
+    `execute_unmerge` returns a plain `dict[str, object]` because its keys depend on the
+    outcome; the cast fixes the success shape the caller then asserts on.
+    """
+    return cast("_CapabilityUnmergeOutcome", run_capability_unmerge(rig))
 
 
 def _restore(edge_type: str, label: str, node_id: str) -> UpsertEdge:
@@ -229,9 +247,9 @@ def test_an_edge_the_survivor_gained_since_the_merge_is_neither_removed_nor_in_t
         ("REQUIRES", "Obligation", "obl_new", "Capability", SURVIVOR), legacy=False
     )
 
-    outcome = run_capability_unmerge(cleanup_rig)
+    outcome = _succeeded_unmerge(cleanup_rig)
 
-    assert [e["source_id"] for e in outcome["survivor_added_edges"]] == ["obl_new"]  # type: ignore[attr-defined]
+    assert [e["source_id"] for e in outcome["survivor_added_edges"]] == ["obl_new"]
     [group] = cleanup_rig.hooked.groups
     assert all("obl_new" not in str(p) for p in group.primitives)
     assert ("REQUIRES", "obl_new") in _into(cleanup_rig, SURVIVOR)
@@ -494,10 +512,10 @@ def test_a_group_committed_but_not_applied_is_a_success_with_the_survivor_added_
         redis.exceptions.ConnectionError("Error connecting to 10.1.2.3:6379")
     )
 
-    outcome = run_capability_unmerge(cleanup_rig)
+    outcome = _succeeded_unmerge(cleanup_rig)
 
     assert outcome["unmerged"] is True
-    assert [e["source_id"] for e in outcome["survivor_added_edges"]] == ["obl_new"]  # type: ignore[attr-defined]
+    assert [e["source_id"] for e in outcome["survivor_added_edges"]] == ["obl_new"]
     assert _rows(cleanup_rig) == [("capability.unmerge", "applied")]
     assert len(cleanup_rig.hooked.groups) == 1
     assert "10.1.2.3" not in str(outcome)

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, cast
 from company_merge._gateway_fakes import POLICY_SYSTEM, MergeRig, RigReadHandle
 from company_merge._thresholds import REVIEW_THRESHOLD, ROLE_REVIEW_THRESHOLD
 
+from ps_service.graph_gateway.models import MutationGroup, UpsertNode
 from ps_service.restore.restore_instrument import restore_instrument
 
 if TYPE_CHECKING:
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
     from graph_gateway._fakes import InMemoryGraph
 
     from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.graph_gateway.gateway import GraphWriteGateway
+    from ps_service.graph_gateway.models import MultiGraphGroup, MultiGraphOutcome
     from ps_service.logging.emitter import LogEmitter
     from ps_service.restore.models import RestoreArtifact, RestoreOutcome
 
@@ -61,11 +64,13 @@ class RestoreRig(MergeRig):
         super().__init__(swap=True)
         self.db = RigDb(lambda: RigReadHandle(self.graphs.open(POLICY_SYSTEM)))
         self.open_gateway_calls = 0
+        self.gateway_opener: Callable[[], object] = lambda: self.gateway
+        """Opens the gateway `open_gateway` hands the restore; a test installs a stand-in here."""
 
     def open_gateway(self) -> object:
-        """What the orchestration hands the restore: the rig's gateway (counted)."""
+        """What the orchestration hands the restore: the opened gateway (counted)."""
         self.open_gateway_calls += 1
-        return self.gateway
+        return self.gateway_opener()
 
     def graph(self, name: str) -> InMemoryGraph:
         """The rig's graph `name` (created empty when it does not exist yet)."""
@@ -97,6 +102,69 @@ class RestoreRig(MergeRig):
             source=source,
             owner=owner,
         )
+
+
+_WRITER_EVENT_ID = "6f1c2b3a-0d4e-4f5a-8b6c-7d8e9f0a1b2c"
+
+
+class RacingGateway:
+    """The rig's gateway, except another writer lands a group after each of the first N reads.
+
+    The competing group is written between the restore's position read and its submit, which is
+    exactly the window `ExpectedPosition` guards. Each rival writes a Capability
+    `<rival_prefix>-<n>`; a second racing gateway on the same rig needs its own prefix, since
+    rewriting an existing rival changes nothing and so moves no log position.
+    """
+
+    def __init__(self, rig: RestoreRig, *, races: int, rival_prefix: str = "rival") -> None:
+        self._rig = rig
+        self._inner: GraphWriteGateway = rig.gateway
+        self._races = races
+        self._rival_prefix = rival_prefix
+        self.rivals = 0
+        self.submits = 0
+
+    def read_log_position(self, graph: str) -> int:
+        position = self._inner.read_log_position(graph)
+        if graph == POLICY_SYSTEM and self.rivals < self._races:
+            self.rivals += 1
+            self._rig.store.audit_rows.add(_WRITER_EVENT_ID)
+            self._inner.submit_group(
+                MutationGroup(
+                    graph=POLICY_SYSTEM,
+                    audit_event_id=_WRITER_EVENT_ID,
+                    primitives=(
+                        UpsertNode(
+                            label="Capability",
+                            id=f"{self._rival_prefix}-{self.rivals}",
+                            properties={"name": f"{self._rival_prefix} {self.rivals}"},
+                        ),
+                    ),
+                )
+            )
+        return position
+
+    def submit_multi_graph_group(self, group: MultiGraphGroup) -> MultiGraphOutcome:
+        self.submits += 1
+        return self._inner.submit_multi_graph_group(group)
+
+    def submit_group(self, group: MutationGroup) -> object:
+        return self._inner.submit_group(group)
+
+    def is_caught_up(self, graph: str) -> bool:
+        return self._inner.is_caught_up(graph)
+
+    def catch_up(self, graph: str) -> object:
+        return self._inner.catch_up(graph)
+
+
+def install_racing_gateway(
+    rig: RestoreRig, *, races: int, rival_prefix: str = "rival"
+) -> RacingGateway:
+    """Make `rig.restore` open a `RacingGateway` that races the first `races` position reads."""
+    racing = RacingGateway(rig, races=races, rival_prefix=rival_prefix)
+    rig.gateway_opener = lambda: racing
+    return racing
 
 
 _IDS_READ = re.compile(r"^MATCH \(n:(?P<label>\w+)\) WHERE n\.id IN \$ids RETURN n\.id$")

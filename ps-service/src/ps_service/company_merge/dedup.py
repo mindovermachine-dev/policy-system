@@ -65,6 +65,7 @@ from ps_service.logging.emitter import (
 from ps_service.logging.facade import emit_log_entry
 
 __all__ = [
+    "DEDUP_DECISION_ACTION",
     "capability_id",
     "dedupe_canonical_nodes",
     "find_best_semantic_match",
@@ -72,6 +73,9 @@ __all__ = [
     "resolve_capability_convergence_offline",
     "resolve_exact_match",
 ]
+
+DEDUP_DECISION_ACTION = "dedupe_canonical_nodes"
+"""The log action of every per-node dedup decision entry, whichever path decides it."""
 
 
 def read_existing_canonical_index(
@@ -491,16 +495,17 @@ def dedupe_canonical_nodes(
                     )
                 )
         else:
+            # `_merge_target_id` returns non-None only when `result` is not None, so `result`
+            # is narrowed with a cast rather than a redundant check.
             resolutions.append(
                 CanonicalResolution(
                     incoming_id=node.id,
                     canonical_id=merge_target_id,
                     match_kind="semantic",
                     embedding=None,
+                    similarity=cast("SemanticMatchResult", result).best_eligible_similarity,
                 )
             )
-            # `_merge_target_id` returns non-None only when `result` is not None, so `result`
-            # is narrowed with a cast rather than a redundant check.
             _record_excluded_same_run_mint_near_miss(
                 node,
                 node_text,
@@ -725,6 +730,7 @@ def resolve_capability_convergence_offline(
                     canonical_id=best_eligible.id,
                     match_kind="semantic",
                     embedding=None,
+                    similarity=match.best_eligible_score,
                 )
             )
             _record_excluded_same_run_mint_near_miss_offline(

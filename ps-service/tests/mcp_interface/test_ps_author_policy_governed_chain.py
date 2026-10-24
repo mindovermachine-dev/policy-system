@@ -17,12 +17,14 @@ import contextlib
 import json
 import re
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors test_policy_lifecycle_tool_calls.py's own convention
     FakeAccessRoleStore,
 )
+from graph_gateway._fakes import FakeQueryResult
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
@@ -56,12 +58,11 @@ _CAP_ID = "cap_data_protection"
 _PRIOR_ID = "pol_prior"
 
 
-class _Result:
-    def __init__(
-        self, header: Sequence[object] | None = None, rows: list[object] | None = None
-    ) -> None:
-        self.header: list[object] = list(header or [])
-        self.result_set = rows or []
+@dataclass(frozen=True)
+class _Result(FakeQueryResult):
+    """A scripted result that also carries the column header the cypher tool reports."""
+
+    header: Sequence[object] = ()
 
 
 class _ChainGraph(PolicyReadGraph):
@@ -102,28 +103,30 @@ class _ChainGraph(PolicyReadGraph):
         )
         if "GOVERNED_BY" not in q:
             rows: list[object] = [[name_match[1], cap_id]] if cap_id else []
-            return _Result([[0, "capability_name"], [0, "capability_id"]], rows)
+            return _Result(header=[[0, "capability_name"], [0, "capability_id"]], result_set=rows)
         header = [[0, "policy_id"], [0, "status"], [0, "fork_id"], [0, "fork_status"]]
         governor = self.governed().get(cap_id or "")
         if governor is None:
-            return _Result(header, [])
+            return _Result(header=header, result_set=[])
         forks = [
             key[4] for key in self._graph.edges if key[0] == "SUPERSEDED_BY" and key[2] == governor
         ]
         gov_status = self.status(governor)
         if not forks:
-            return _Result(header, [[governor, gov_status, None, None]])
-        return _Result(header, [[governor, gov_status, f, self.status(f)] for f in forks])
+            return _Result(header=header, result_set=[[governor, gov_status, None, None]])
+        return _Result(
+            header=header, result_set=[[governor, gov_status, f, self.status(f)] for f in forks]
+        )
 
-    def query(  # type: ignore[override]
+    def query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
-    ) -> _Result:
+    ) -> FakeQueryResult:
         if q == _SEED_CHECK_QUERY:
-            return _Result([[0, "c"]], [[1]])
+            return _Result(header=[[0, "c"]], result_set=[[1]])
         skill = self._skill_query(q)
         if skill is not None:
             return skill
-        return cast("_Result", super().query(q, params, timeout))
+        return super().query(q, params, timeout)
 
 
 class _FakeFalkorDB:

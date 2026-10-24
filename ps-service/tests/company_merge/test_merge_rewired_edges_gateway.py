@@ -175,11 +175,21 @@ def test_the_edges_are_one_group_after_the_node_groups_and_before_the_backfills(
     edge_groups = [i for i, names in enumerate(kinds) if names & set(_ALL_EDGE_TYPES)]
     capability_groups = [i for i, names in enumerate(kinds) if "Capability" in names]
     # first regulation: nodes, then its edges; second: its nodes (no Capability: matched), edges
+    # with the marker of its semantic Capability match
     assert len(edge_groups) == 2
     assert all(
         {e.name for e in merge_rig.groups[i].entries} <= set(_ALL_EDGE_TYPES) | {"DEFINES"}
-        for i in edge_groups
+        for i in edge_groups[:1]
     )
+    assert {e.name for e in merge_rig.groups[edge_groups[1]].entries} <= set(_ALL_EDGE_TYPES) | {
+        "DEFINES",
+        "ResolvedCapability",
+    }
+    assert [
+        e.identity
+        for e in merge_rig.groups[edge_groups[1]].entries
+        if e.name == "ResolvedCapability"
+    ] == [_CAP_ALIAS]
     assert capability_groups[0] < edge_groups[0] < edge_groups[1]
     assert all(g.audit_event_id == merge_rig.audit_event_id for g in merge_rig.groups)
 

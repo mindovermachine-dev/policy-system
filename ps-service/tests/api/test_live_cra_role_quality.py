@@ -142,7 +142,7 @@ def cra_roles(
         _delete_graph_if_exists(db, stale_graph)
     facade.configure(log_path=tmp_path_factory.mktemp("cra_role_quality") / "run.jsonl")
 
-    install_compliance_officer_grant(monkeypatch, granted=True)
+    install_compliance_officer_grant(monkeypatch, granted=True, real_audit_store=True)
     app = create_app(config)
     install_graph_write_gateway(build_default_graph_write_gateway(config))
 

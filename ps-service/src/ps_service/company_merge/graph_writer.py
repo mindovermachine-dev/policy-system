@@ -82,11 +82,13 @@ __all__ = [
     "validate_classification_edge_endpoints",
 ]
 
-# Which of `$ids` exist as a node under any label. A `Merged<Kind>` marker carries the id of a
-# node that no longer exists, so it never counts; one `AND NOT` per marker label.
+# Which of `$ids` exist as a node under any label. A redirect marker carries the id of a node that
+# does not exist (a `Merged<Kind>` id was absorbed, a `ResolvedCapability` id was never minted), so
+# it never counts; one `AND NOT` per marker label.
 ANY_LABEL_EXISTENCE_READ = (
     "UNWIND $ids AS id MATCH (n {id: id}) "
-    "WHERE NOT n:MergedObligation AND NOT n:MergedRole AND NOT n:MergedCapability RETURN id"
+    "WHERE NOT n:MergedObligation AND NOT n:MergedRole AND NOT n:MergedCapability "
+    "AND NOT n:ResolvedCapability RETURN id"
 )
 
 _REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
@@ -1202,6 +1204,7 @@ def persist_rewired_edges(
     bare_edges: tuple[BareEdge, ...],
     canonical_id_by_incoming_id: dict[str, str],
     *,
+    markers: tuple[Primitive, ...] = (),
     checkpoint_requested: bool = False,
 ) -> None:
     """Persist `bare_edges` (the ten Edge Catalog types) into `target`'s graph as one group.
@@ -1221,6 +1224,10 @@ def persist_rewired_edges(
     on `single_tenant_graph` (`build_rewired_edge_primitives`). The nodes were written by the
     earlier groups of this run, which the gateway has applied.
 
+    `markers` ride in the same group, after the edges, so a marker and the edges it accounts for
+    are written together or not at all; a run with markers submits the group even when every edge
+    was dropped.
+
     Idempotent: re-running with the same input leaves the same graph, and the gateway logs nothing
     for edges that already exist.
 
@@ -1229,6 +1236,8 @@ def persist_rewired_edges(
         single_tenant_graph: Read handle on the graph `target` names.
         bare_edges: Edges to write, of the ten Edge Catalog types.
         canonical_id_by_incoming_id: `incoming_id -> canonical_id` map built from dedup.
+        markers: Marker primitives to submit in the same group (the semantic-resolution markers
+            of `resolution_markers`); empty for none.
         checkpoint_requested: Asks the gateway to record the graph's digest after this group; the
             merge sets it unless a canonical-embedding backfill follows and will request it instead.
 
@@ -1237,7 +1246,7 @@ def persist_rewired_edges(
 
     Side Effects:
         One read query per Edge Catalog label on `single_tenant_graph`; one gateway group submitted
-        on `target` when some edge has both endpoints present.
+        on `target` when some edge has both endpoints present or `markers` is non-empty.
 
     Raises:
         CompanyMergePersistenceError: a dedupe-eligible endpoint has no mapping entry (raised before
@@ -1252,6 +1261,6 @@ def persist_rewired_edges(
     }
     submit_group(
         target,
-        build_rewired_edge_primitives(existing, bare_edges, canonical_id_by_incoming_id),
+        build_rewired_edge_primitives(existing, bare_edges, canonical_id_by_incoming_id) + markers,
         checkpoint_requested=checkpoint_requested,
     )

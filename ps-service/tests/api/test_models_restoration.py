@@ -112,7 +112,7 @@ def test_restoration_stage_outcome_and_accepted_response_are_frozen() -> None:
     )
 
     with pytest.raises(ValidationError):
-        response.instrument_id = "other"  # type: ignore[misc]
+        response.instrument_id = "other"
 
     assert response.stages[0].stage == "verified"
 

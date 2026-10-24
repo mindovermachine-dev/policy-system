@@ -47,3 +47,6 @@ xdist
 noqa
 shellcheck
 docstrings
+importlib
+passkeysigning
+postgres

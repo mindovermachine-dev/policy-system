@@ -71,3 +71,13 @@ def test_obligation_cleanup_merge_is_documented_as_a_delete_not_a_tombstone() ->
 
     assert "A Compliance Officer cleanup merge of two Obligations under the same Role" in text
     assert "deletes the absorbed Obligation" in text
+
+
+def test_capability_lifecycle_documents_the_resolved_capability_marker() -> None:
+    text = " ".join(_domain_text().split())
+
+    assert "`ResolvedCapability`" in text
+    assert "`resolves_to`" in text
+    assert "never a semantic-match candidate" in text
+    assert "only an explicit Compliance Officer cleanup merge changes" in text
+    assert "is not a merge" in text

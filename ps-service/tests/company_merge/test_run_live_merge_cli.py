@@ -25,7 +25,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, TypedDict
 
 import pytest
 
@@ -248,12 +248,21 @@ class _FakeGateway:
     """Stands in for the Graph Write Gateway: `merge_fn` is faked, so it is never submitted to."""
 
 
+class _AuditCall(TypedDict):
+    """One call the recording audit recorder received."""
+
+    action: str
+    resource_type: str
+    resource_id: str
+    details: dict[str, object]
+
+
 class _FakeWriteAccess:
     """The injected `write_access` builder: hands out one gateway and a recording audit recorder."""
 
     def __init__(self) -> None:
         self.gateway = _FakeGateway()
-        self.audit_calls: list[dict[str, object]] = []
+        self.audit_calls: list[_AuditCall] = []
         self.build_calls = 0
 
     def __call__(self, config: object) -> tuple[object, object]:
@@ -756,7 +765,7 @@ def test_the_cli_passes_the_gateway_graph_names_and_an_audit_event_to_the_merge_
         ("ingestion_run.submit", "ingestion_run", run_id)
         for run_id in json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))["run_ids"]
     ]
-    assert all(c["details"]["trigger"] == "operator_cli" for c in write_access.audit_calls)  # type: ignore[index]
+    assert all(c["details"]["trigger"] == "operator_cli" for c in write_access.audit_calls)
 
 
 def test_the_cli_merges_into_the_configured_single_tenant_graph(

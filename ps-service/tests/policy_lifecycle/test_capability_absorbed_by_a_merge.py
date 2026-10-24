@@ -66,3 +66,25 @@ def test_claiming_an_absorbed_capability_raises_not_found(lifecycle_rig: Lifecyc
 
     assert raised.value.capability_ids == ("cap_b",)
     assert lifecycle_rig.logged_groups == 0
+
+
+def test_claiming_a_capability_id_only_a_resolution_marker_holds_raises_not_found(
+    lifecycle_rig: LifecycleRig,
+) -> None:
+    """A resolved id was never minted as a Capability, so a draft cannot claim it."""
+    lifecycle_rig.seed_capability("cap_a")
+    lifecycle_rig.graph.seed_node(("ResolvedCapability",), "cap_x", {"resolves_to": "cap_a"})
+
+    with pytest.raises(PolicyCapabilityNotFoundError) as raised:
+        create_policy_draft(
+            actor=_OWNER,
+            title="Claim a resolved capability id",
+            capability_ids=("cap_a", "cap_x"),
+            graph=lifecycle_rig.read,
+            audit_store=lifecycle_rig.audit,
+            submitter=lifecycle_rig.gateway,
+            graph_name=POLICY_SYSTEM,
+        )
+
+    assert raised.value.capability_ids == ("cap_x",)
+    assert lifecycle_rig.logged_groups == 0

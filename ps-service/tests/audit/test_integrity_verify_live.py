@@ -32,7 +32,7 @@ from persistence.provisioned_postgres import (
 
 from audit._integrity_support import assert_chain_is_intact
 from ps_service.audit import PsycopgAuditStore
-from ps_service.audit.models import AuditChainBreak, AuditChainVerification
+from ps_service.audit.models import AuditChainBreak, AuditChainBreakKind, AuditChainVerification
 from ps_service.logging import configure, reset_for_tests
 
 if TYPE_CHECKING:
@@ -222,10 +222,10 @@ def _tampering(prov: Provisioned) -> Generator[psycopg.Connection[tuple[object, 
     with prov.superuser_connect(prov.state_db) as conn:
         conn.autocommit = False
         for table in _TABLES:
-            conn.execute(f"ALTER TABLE {table} DISABLE TRIGGER ALL")  # type: ignore[arg-type]
+            conn.execute(f"ALTER TABLE {table} DISABLE TRIGGER ALL")
         yield conn
         for table in _TABLES:
-            conn.execute(f"ALTER TABLE {table} ENABLE TRIGGER ALL")  # type: ignore[arg-type]
+            conn.execute(f"ALTER TABLE {table} ENABLE TRIGGER ALL")
         conn.commit()
 
 
@@ -244,13 +244,18 @@ def _verify(prov: Provisioned) -> AuditChainVerification:
 
 
 def _assert_row_break(
-    prov: Provisioned, result: AuditChainVerification, *, kind: str, chain_seq: int, rows: int
+    prov: Provisioned,
+    result: AuditChainVerification,
+    *,
+    kind: AuditChainBreakKind,
+    chain_seq: int,
+    rows: int,
 ) -> None:
     event_id, occurred_at = _row_identity(prov, chain_seq)
     assert result.intact is False
     assert result.rows_checked == rows
     assert result.first_break == AuditChainBreak(
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         chain_seq=chain_seq,
         event_id=event_id,
         occurred_at=occurred_at,

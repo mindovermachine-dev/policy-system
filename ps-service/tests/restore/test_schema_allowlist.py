@@ -18,7 +18,7 @@ import pytest
 from ps_service.domain_schema import DOMAIN_SCHEMA, EnumType
 from ps_service.domain_schema.vocabulary_exceptions import (
     CELLAR_ELI_NATIVE_LABELS,
-    MERGE_MARKER_LABELS,
+    REDIRECT_MARKER_LABELS,
     SYSTEM_MINTED_EDGE_TYPES,
     find_unpinned,
 )
@@ -400,8 +400,8 @@ def test_merged_into_is_not_a_schema_edge_and_in_no_allow_list() -> None:
     assert "MERGED_INTO" not in NATIVE_ALLOWED_RELATIONSHIP_TYPES
 
 
-@pytest.mark.parametrize("marker", sorted(MERGE_MARKER_LABELS))
-def test_a_merge_marker_label_is_in_no_allow_list(marker: str) -> None:
+@pytest.mark.parametrize("marker", sorted(REDIRECT_MARKER_LABELS))
+def test_a_redirect_marker_label_is_in_no_allow_list(marker: str) -> None:
     assert marker not in BASELINE_ALLOWED_LABELS
     assert marker not in NATIVE_ALLOWED_LABELS
 

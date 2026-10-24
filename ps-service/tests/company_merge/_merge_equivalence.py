@@ -100,6 +100,13 @@ def reference_graph(
             read.bare_edges + read.governance_edges + read.classification_edges,
             {r.incoming_id: r.canonical_id for r in outcome.resolutions},
         )
+        # The frozen writer predates the semantic-resolution marker; the merge writes one per
+        # semantic resolution in the rewired-edges group, so the reference adds it here.
+        for resolution in outcome.resolutions:
+            if resolution.match_kind == "semantic":
+                reference.nodes[("ResolvedCapability", resolution.incoming_id)] = {
+                    "resolves_to": resolution.canonical_id
+                }
         write_legacy_embedding_backfill(reference, outcome.embedding_backfills, kind="Capability")
         write_legacy_pending_reviews(
             reference, outcome.near_misses, kind="Capability", values=values

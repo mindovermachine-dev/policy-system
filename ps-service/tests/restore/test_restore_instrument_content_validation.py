@@ -162,3 +162,43 @@ def test_baseline_with_a_merged_capability_is_rejected_before_any_db_call(
         )
 
     assert spy_db.touched == []
+
+
+def test_baseline_with_a_resolved_capability_node_is_rejected_before_any_db_call(
+    make_emitter: MakeEmitter,
+) -> None:
+    """A semantic-resolution marker belongs to the deployment's own graph, never to an artifact."""
+    emitter, _log_path = make_emitter()
+    spy_db = _SpyDb()
+    baseline = SerializedGraph(
+        nodes=(
+            SerializedNode(label="RegulatoryInstrument", properties={"id": _INSTRUMENT_ID}),
+            SerializedNode(label="Capability", properties={"id": "cap_a"}),
+            SerializedNode(
+                label="ResolvedCapability", properties={"id": "cap_x", "resolves_to": "cap_a"}
+            ),
+        ),
+        edges=(),
+    )
+    artifact = build_restore_artifact(
+        instrument_id=_INSTRUMENT_ID,
+        short_name=_SHORT_NAME,
+        native_graph=_valid_native_graph(),
+        baseline_graph=baseline,
+    )
+
+    with pytest.raises(ArtifactContentRejectedError, match="ResolvedCapability"):
+        restore_instrument(
+            artifact,
+            db=cast("FalkorDB", spy_db),
+            single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
+            merge_threshold=0.9,
+            review_threshold=REVIEW_THRESHOLD,
+            role_review_threshold=ROLE_REVIEW_THRESHOLD,
+            actor=_ACTOR,
+            open_gateway=never_open_gateway,
+            audit_event_id=UNUSED_EVENT_ID,
+            emitter=emitter,
+        )
+
+    assert spy_db.touched == []

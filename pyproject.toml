@@ -266,6 +266,7 @@ exclude = [
     "**/__pycache__",
     "spikes",                 # nested git repo, no .py, in .gitignore (basedpyright does NOT respect .gitignore, so this line is load-bearing)
 ]
+enableTypeIgnoreComments = false  # `# type: ignore` suppresses nothing, so the ban in level2-python-instructions.md holds under this gate; an unavoidable suppression is `# pyright: ignore[<rule>]  # <reason>`
 reportMissingTypeStubs = false  # falkordb / litellm ship no py.typed. This is a stub-AVAILABILITY signal, not a type-correctness downgrade — kept as the single commented global key (AC-BI-003 permits it; verifier confirms it is the only global report* override).
 
 # --- Per-library relaxation (AC-BI-003: commented, per-library, NOT a global rule downgrade) ---

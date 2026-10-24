@@ -12,9 +12,11 @@ Flow:
    `CompanyMergeConfigurationError` before any graph call of any kind, including
    `graph_reader.read_baseline_graph`.
 1. Read the regulation's `{short}_baseline` graph.
-2. Drop nodes that a cleanup merge absorbed and map each to its terminal survivor
-   (`redirects.resolve_redirects`); a cycle or a dangling terminal raises here, before any dedup
-   embedding call and before any write.
+2. Drop nodes that a cleanup merge absorbed, and Capabilities an earlier run resolved onto an
+   existing one by similarity, and map each to the terminal of its marker chain
+   (`redirects.resolve_redirects`); such a Capability is never embedded, scored or minted again.
+   A cycle or a dangling terminal raises here, before any dedup embedding call and before any
+   write.
 3. Dedupe Capability nodes against the single-tenant graph. Then compare the instrument's Role
    nodes for near misses (review-only: a Role is never merged or rewired here, so Role ids are
    written exactly as read). Obligation is Role-scoped (a weak entity of exactly one Role, never
@@ -35,14 +37,17 @@ Flow:
 7. Persist `HAS`/`SATISFIED_BY`/`REQUIRES`/`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`/`COVERS`/
    `OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges in one `persist_rewired_edges` call, using the
    combined Capability, Policy and redirected-node canonical-id mapping (a Capability target
-   is rewritten; a Policy maps onto itself). Then backfill Capability embeddings onto the
-   single-tenant graph's canonical nodes, and freshly computed incoming Capability embeddings onto
-   this regulation's own `{short}_baseline` graph.
+   is rewritten; a Policy maps onto itself). The same group carries a
+   `ResolvedCapability {id, resolves_to}` marker for every semantic Capability resolution, and one
+   `record_semantic_resolution` entry is logged per marker once the group is applied. Then backfill
+   Capability embeddings onto the single-tenant graph's canonical nodes, and freshly computed
+   incoming Capability embeddings onto this regulation's own `{short}_baseline` graph.
 8. Emit one `outcome="succeeded"` log entry for the whole call, carrying the classification,
    governance and new/matched count fields. No `bind_run_context()` self-bind happens here:
    `run_id` is whatever the caller already bound, or `None`.
-9. Emit one log entry per Capability dedup decision (one per `CanonicalResolution` with
-   `outcome=match_kind`, one per `NearMissPair` with `outcome="near_miss"`), drop the near misses
+9. Emit one log entry per Capability decision (one per redirected Capability id with
+   `outcome="redirected"`, one per `CanonicalResolution` with `outcome=match_kind`, one per
+   `NearMissPair` with `outcome="near_miss"`), drop the near misses
    that already have an unresolved review (`drop_already_reviewed`, shared with restore), persist
    a `PendingReview` node for each remaining one and log the created / already-reviewed counts.
    Role near misses go through the same steps with kind `Role`.
@@ -67,6 +72,7 @@ from ps_service.company_merge import (
     graph_reader,
     graph_writer,
     redirects,
+    resolution_markers,
 )
 from ps_service.company_merge.capability_config import capability_thresholds, role_thresholds
 from ps_service.company_merge.generated_values import SYSTEM_VALUES
@@ -89,7 +95,6 @@ __all__ = ["merge_baseline_graph"]
 
 _COMPONENT = "company_merge"
 _MERGE_ACTION = "merge_baseline_graph"
-_DEDUP_ACTION = "dedupe_canonical_nodes"
 _PERSIST_REVIEWS_ACTION = "persist_near_miss_reviews"
 
 
@@ -137,12 +142,21 @@ def _persist_classification_passthrough(
     )
 
 
-def _log_dedup_decisions(dedup_result: DedupResult, *, emitter: LogEmitter | None) -> None:
-    """Emit one log entry per `CanonicalResolution` and per `NearMissPair` dedup decision."""
+def _log_dedup_decisions(
+    dedup_result: DedupResult,
+    redirected: tuple[resolution_markers.CapabilityRedirect, ...],
+    *,
+    regulatory_instrument_id: str,
+    emitter: LogEmitter | None,
+) -> None:
+    """Emit one log entry per redirected Capability id, `CanonicalResolution` and `NearMissPair`."""
+    resolution_markers.log_capability_redirects(
+        redirected, regulatory_instrument_id=regulatory_instrument_id, emitter=emitter
+    )
     for resolution in dedup_result.resolutions:
         emit_log_entry(
             component=_COMPONENT,
-            action=_DEDUP_ACTION,
+            action=dedup.DEDUP_DECISION_ACTION,
             entity_id=resolution.incoming_id,
             outcome=resolution.match_kind,
             emitter=emitter,
@@ -150,7 +164,7 @@ def _log_dedup_decisions(dedup_result: DedupResult, *, emitter: LogEmitter | Non
     for near_miss in dedup_result.near_misses:
         emit_log_entry(
             component=_COMPONENT,
-            action=_DEDUP_ACTION,
+            action=dedup.DEDUP_DECISION_ACTION,
             entity_id=near_miss.incoming_id,
             outcome="near_miss",
             emitter=emitter,
@@ -228,7 +242,7 @@ def _persist_role_reviews(
     for near_miss in near_misses:
         emit_log_entry(
             component=_COMPONENT,
-            action=_DEDUP_ACTION,
+            action=dedup.DEDUP_DECISION_ACTION,
             entity_id=near_miss.incoming_id,
             outcome="near_miss",
             extra={
@@ -330,10 +344,11 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
 
     Side Effects:
         Submits gateway groups to the single-tenant graph (Role/Requirement/Obligation/Capability
-        nodes, governance drafts, PracticeArea/RiskPath nodes, rewired edges, embedding
-        backfills, Capability and Role `PendingReview` nodes) and to the baseline graph (incoming
-        embedding backfills). The graph's legacy edges are stamped before its first group. Emits log
-        entries for the run and for each dedup decision.
+        nodes, governance drafts, PracticeArea/RiskPath nodes, rewired edges with the
+        `ResolvedCapability` markers, embedding backfills, Capability and Role `PendingReview`
+        nodes) and to the baseline graph (incoming embedding backfills). The graph's legacy edges
+        are stamped before its first group. Emits log entries for the run, for each marker written
+        and for each dedup decision.
     """
     thresholds = capability_thresholds(merge_threshold, review_threshold)
     role_review_thresholds = role_thresholds(role_review_threshold)
@@ -439,14 +454,22 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
     # One rewiring call covers the regulatory-spine, governance and classification edges (the
     # latter two are empty for an external baseline). The last group written to the single-tenant
     # graph asks for the digest checkpoint: the embedding backfill when it has something to
-    # write, otherwise the rewired edges.
+    # write, otherwise the rewired edges. The `ResolvedCapability` marker of each semantic
+    # Capability resolution rides in the same group, so it and the `REQUIRES` edges onto its
+    # target are written together or not at all.
     backfill_follows = bool(capability_dedup.embedding_backfills)
     graph_writer.persist_rewired_edges(
         targets.single_tenant,
         single_tenant_graph,
         graph.bare_edges + graph.governance_edges + graph.classification_edges,
         canonical_id_by_incoming_id,
+        markers=resolution_markers.build_resolution_marker_primitives(capability_dedup.resolutions),
         checkpoint_requested=not backfill_follows,
+    )
+    resolution_markers.log_resolution_markers(
+        capability_dedup.resolutions,
+        regulatory_instrument_id=regulatory_instrument_id,
+        emitter=emitter,
     )
 
     graph_writer.backfill_canonical_embeddings(
@@ -465,12 +488,9 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         embeddings=capability_dedup.incoming_embedding_backfills,
     )
 
-    # A redirected Capability is a matched one: it resolved onto its (composed) survivor.
-    redirected_capability_ids = tuple(
-        redirects.compose_with_resolutions(
-            resolution.by_kind["Capability"], capability_dedup.resolutions
-        ).values()
-    )
+    # A redirected Capability is a matched one: it resolved onto its (composed) terminal.
+    redirected = resolution_markers.capability_redirects(resolution, capability_dedup.resolutions)
+    redirected_capability_ids = tuple(redirect.terminal_id for redirect in redirected)
     new_capability_count = sum(1 for r in capability_dedup.resolutions if r.match_kind == "new")
     matched_capability_count = (
         len(capability_dedup.resolutions) - new_capability_count + len(redirected_capability_ids)
@@ -491,7 +511,12 @@ def merge_baseline_graph(  # noqa: PLR0913 -- the two read handles, the gateway 
         emitter=emitter,
     )
 
-    _log_dedup_decisions(capability_dedup, emitter=emitter)
+    _log_dedup_decisions(
+        capability_dedup,
+        redirected,
+        regulatory_instrument_id=regulatory_instrument_id,
+        emitter=emitter,
+    )
     # Persist a PendingReview node for every Capability near-miss that has no unresolved review
     # yet, at the point its decision is logged, so a near-miss is never logged without either
     # being persisted or already having a review.

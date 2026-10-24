@@ -6,7 +6,9 @@ Read on demand from `SKILL.md`. Every Guardrail in `SKILL.md` still applies.
 from the audit snapshot (`capability.merge`, `obligation.merge` or `role.merge`) that merge
 recorded. It takes only `merged_id`: the id that was absorbed (a deleted Capability with a
 `MergedCapability` marker, a deleted Obligation with a `MergedObligation` marker, or a deleted
-Role with a `MergedRole` marker).
+Role with a `MergedRole` marker). A `ResolvedCapability` marker, which Company Merge leaves when
+it resolves an incoming Capability onto an existing one by similarity, is not a merge and cannot
+be unmerged.
 The tool works out which kind it is from the audit trail; `preview.kind` says so. The flow is
 locate -> preview -> confirm -> passkey -> result; never skip a step.
 

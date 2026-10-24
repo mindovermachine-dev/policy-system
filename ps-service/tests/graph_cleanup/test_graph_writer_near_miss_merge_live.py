@@ -20,11 +20,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from graph_gateway.live_endpoints import falkordb_endpoint
 
 from ps_service.company_merge.models import BaselineGraph, BaselineNode
 from ps_service.company_merge.pending_review import choose_survivor, read_review_merge_sides
 from ps_service.company_merge.redirects import resolve_redirects
 from ps_service.graph_cleanup.graph_reader import read_capability_merge_state
+from ps_service.graph_cleanup.graph_submission import edge_identity
 from ps_service.graph_cleanup.group_builders import build_capability_merge_group
 from ps_service.graph_cleanup.merge_planner import plan_capability_merge
 from ps_service.graph_gateway.applier import apply_decoded
@@ -49,7 +51,8 @@ def _delete(db: FalkorDB) -> None:
 
 @pytest.fixture
 def graph() -> Iterator[GraphHandle]:
-    db = connect(host="127.0.0.1", port=6379)
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
     _delete(db)
     handle = select_graph(db, _GRAPH)
     handle.query(
@@ -61,6 +64,7 @@ def graph() -> Iterator[GraphHandle]:
         "(:PendingReview {id: 'review_live', kind: 'Capability', status: 'pending', "
         "incoming_id: 'new', nearest_existing_id: 'old'})"
     )
+    # Each edge carries its gateway identity, the key the merge group's edge upserts match on.
     for rel, label, ident, target in (
         ("REQUIRES", "Obligation", "o1", "new"),
         ("REQUIRES", "Obligation", "o2", "new"),
@@ -68,8 +72,9 @@ def graph() -> Iterator[GraphHandle]:
         ("COVERS", "PracticeArea", "pa1", "new"),
     ):
         handle.query(
-            f"MATCH (x:{label} {{id: $x}}), (c:Capability {{id: $c}}) CREATE (x)-[:{rel}]->(c)",
-            params={"x": ident, "c": target},
+            f"MATCH (x:{label} {{id: $x}}), (c:Capability {{id: $c}}) "
+            f"CREATE (x)-[:{rel} {{identity: $identity}}]->(c)",
+            params={"x": ident, "c": target, "identity": edge_identity(rel, ident, target)},
         )
     try:
         yield handle

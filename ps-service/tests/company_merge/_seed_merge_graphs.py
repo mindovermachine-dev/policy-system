@@ -171,7 +171,9 @@ class SingleTenantStore:
         r"WHERE (NOT n:\w+(?: AND NOT n:\w+)*) RETURN id$"
     )
     _EXCLUDED_LABEL = re.compile(r"NOT n:(\w+)")
-    _MARKER_READ = re.compile(r"^MATCH \(m:Merged(\w+)\) RETURN m\.id, m\.merged_into$")
+    _MARKER_READ = re.compile(
+        r"^MATCH \(m:((?:Merged|Resolved)\w+)\) RETURN m\.id, m\.(merged_into|resolves_to)$"
+    )
     _INDEX_READ = re.compile(r"^MATCH \(n:(\w+)\) RETURN n\.id, n\.(\w+), n\.embedding$")
     _DEFINED_INDEX_READ = re.compile(
         r"^MATCH \(:RegulatoryInstrument \{id: \$instrument_id\}\)-\[:DEFINES\]->"
@@ -195,10 +197,11 @@ class SingleTenantStore:
             return [[node_id] for node_id in requested if node_id in known]
         marker_read = self._MARKER_READ.match(q)
         if marker_read is not None:
+            marker_label, target = marker_read.groups()
             return [
-                [node_id, props.get("merged_into")]
+                [node_id, props.get(target)]
                 for (label, node_id), props in self.nodes.items()
-                if label == f"Merged{marker_read.group(1)}"
+                if label == marker_label
             ]
         embedding_state = self._EMBEDDING_STATE_READ.match(q)
         if embedding_state is not None:

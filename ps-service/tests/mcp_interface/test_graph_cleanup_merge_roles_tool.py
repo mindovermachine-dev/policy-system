@@ -43,6 +43,8 @@ from ps_service.passkey_signing.errors import PendingApprovalPersistenceError
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
 
+    from ps_service.passkey_signing.models import PendingApprovalRow
+
 _OWNER = "owner"
 _OFFICER = "officer"
 _ADMIN = "admin"
@@ -415,7 +417,16 @@ class _Garbage:
 class _DownApprovalStore(FakeApprovalStore):
     """An approval store that cannot reach Postgres."""
 
-    def create_pending_approval(self, **_kwargs: object) -> object:  # type: ignore[override]
+    def create_pending_approval(
+        self,
+        *,
+        tool_name: str,
+        normalized_args: dict[str, object],
+        actor_subject: str,
+        actor_issuer: str,
+        display_summary: dict[str, object],
+    ) -> tuple[PendingApprovalRow, str]:
+        del tool_name, normalized_args, actor_subject, actor_issuer, display_summary
         message = "connection to 10.0.0.1:6379 refused: relation pending_approvals /etc/secret"
         raise PendingApprovalPersistenceError(message)
 

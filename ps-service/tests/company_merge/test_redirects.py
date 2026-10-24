@@ -10,6 +10,7 @@ Fakes are hand-written and satisfy `GraphHandle` structurally (`_marker_graph.Ma
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -184,14 +185,72 @@ def _markers(kind: str, markers: dict[str, str | None]) -> dict[str, dict[str, s
     return {kind: markers}
 
 
+def _marker_reads(kind: MergeableKind) -> list[str]:
+    """The literal marker reads of `kind`: Capability also has its semantic-resolution markers."""
+    reads = [f"MATCH (m:Merged{kind}) RETURN m.id, m.merged_into"]
+    if kind == "Capability":
+        reads.append("MATCH (m:ResolvedCapability) RETURN m.id, m.resolves_to")
+    return reads
+
+
 @pytest.mark.parametrize("kind", _KINDS)
-def test_read_markers_is_one_literal_read_returning_the_marker_map(kind: MergeableKind) -> None:
+def test_read_markers_is_one_literal_read_per_marker_label_returning_the_marker_map(
+    kind: MergeableKind,
+) -> None:
     graph = MarkerGraph(markers=_markers(kind, {"a": "s", "b": "s"}))
 
     found = read_markers(graph, kind)
 
     assert found == {"a": "s", "b": "s"}
-    assert [q for q, _ in graph.calls] == [f"MATCH (m:Merged{kind}) RETURN m.id, m.merged_into"]
+    assert [q for q, _ in graph.calls] == _marker_reads(kind)
+
+
+def test_read_markers_merges_merged_and_resolved_capability_markers() -> None:
+    graph = MarkerGraph(
+        markers=_markers("Capability", {"cap_a": "cap_s"}),
+        resolved=_markers("Capability", {"cap_x": "cap_t"}),
+    )
+
+    found = read_markers(graph, "Capability")
+
+    assert found == {"cap_a": "cap_s", "cap_x": "cap_t"}
+    assert [q for q, _ in graph.calls] == _marker_reads("Capability")
+
+
+def test_read_markers_rejects_a_resolved_capability_marker_without_a_target() -> None:
+    graph = MarkerGraph(resolved=_markers("Capability", {"cap_x": None}))
+
+    with pytest.raises(CompanyMergeValidationError) as excinfo:
+        read_markers(graph, "Capability")
+
+    assert str(excinfo.value) == "ResolvedCapability 'cap_x' has no resolves_to target"
+
+
+def test_a_resolved_capability_marker_drops_the_node_and_maps_it_to_its_target() -> None:
+    graph = MarkerGraph(
+        resolved=_markers("Capability", {_CAPABILITY_ABSORBED: _CAPABILITY_SURVIVOR}),
+        existing={"Capability": frozenset({_CAPABILITY_SURVIVOR})},
+    )
+
+    resolution = resolve_redirects(
+        graph, _baseline_of("Capability", _CAPABILITY_ABSORBED, _OTHER_CAPABILITY)
+    )
+
+    assert _kept(resolution.baseline, "Capability") == [_OTHER_CAPABILITY]
+    assert resolution.mapping == {_CAPABILITY_ABSORBED: _CAPABILITY_SURVIVOR}
+    assert resolution.first_hop == {_CAPABILITY_ABSORBED: "ResolvedCapability"}
+
+
+@pytest.mark.parametrize("kind", _KINDS)
+def test_the_first_hop_names_the_merge_marker_of_a_merged_node(kind: MergeableKind) -> None:
+    graph = MarkerGraph(
+        markers=_markers(kind, {_ABSORBED[kind]: _SURVIVOR[kind]}),
+        existing={kind: frozenset({_SURVIVOR[kind]})},
+    )
+
+    resolution = resolve_redirects(graph, _baseline_of(kind, _ABSORBED[kind]))
+
+    assert resolution.first_hop == {_ABSORBED[kind]: f"Merged{kind}"}
 
 
 @pytest.mark.parametrize("kind", _KINDS)
@@ -283,7 +342,7 @@ def test_baseline_without_markers_is_returned_unchanged_after_one_read_per_prese
 
     assert resolution.baseline is baseline
     assert resolution.mapping == {}
-    assert [q for q, _ in graph.calls] == [f"MATCH (m:Merged{kind}) RETURN m.id, m.merged_into"]
+    assert [q for q, _ in graph.calls] == _marker_reads(kind)
 
 
 @pytest.mark.parametrize("kind", _KINDS)
@@ -745,3 +804,97 @@ def test_an_absorbed_capability_is_not_a_semantic_candidate(
     assert _minted(merge_rig, "Capability") == []
     assert result.capability_canonical_ids == (_CAPABILITY_SURVIVOR,)
     assert _CAPABILITY_ABSORBED not in _edge_endpoints(merge_rig)
+
+
+_IDS_ONLY_CYCLE = re.compile(r"^capability marker cycle detected at capability 'cap_[a-z0-9_]+'$")
+
+
+def test_a_resolution_onto_a_capability_merged_later_follows_to_the_survivor(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """A resolution names a Capability a cleanup merge absorbed afterwards; the chain mixes both."""
+    single_tenant = MarkerGraph(
+        resolved=_markers("Capability", {_CAPABILITY_ABSORBED: _CAPABILITY_SURVIVOR}),
+        markers=_markers("Capability", {_CAPABILITY_SURVIVOR: _CAPABILITY_TERMINAL}),
+        existing={"Capability": frozenset({_CAPABILITY_TERMINAL})},
+        gateway_graph=merge_rig.policy_system,
+    )
+
+    result = _ingest(merge_rig, single_tenant, make_emitter, "Capability")
+
+    assert _minted(merge_rig, "Capability") == []
+    assert _edge_pairs(merge_rig, "REQUIRES") == [
+        {"source_id": _OBLIGATION_ABSORBED, "target_id": _CAPABILITY_TERMINAL}
+    ]
+    assert result.capability_canonical_ids == (_CAPABILITY_TERMINAL,)
+    redirect = resolve_redirects(single_tenant, _baseline_of("Capability", _CAPABILITY_ABSORBED))
+    assert redirect.mapping == {_CAPABILITY_ABSORBED: _CAPABILITY_TERMINAL}
+    assert redirect.first_hop == {_CAPABILITY_ABSORBED: "ResolvedCapability"}
+
+
+def test_a_cycle_across_resolved_and_merged_markers_raises_naming_only_ids_before_any_write(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    single_tenant = MarkerGraph(
+        resolved=_markers("Capability", {_CAPABILITY_ABSORBED: _CAPABILITY_SURVIVOR}),
+        markers=_markers("Capability", {_CAPABILITY_SURVIVOR: _CAPABILITY_ABSORBED}),
+        gateway_graph=merge_rig.policy_system,
+    )
+
+    with pytest.raises(CompanyMergeValidationError) as excinfo:
+        _ingest(merge_rig, single_tenant, make_emitter, "Capability")
+
+    assert _IDS_ONLY_CYCLE.match(str(excinfo.value))
+    assert merge_rig.groups == []
+
+
+def test_a_resolution_ending_nowhere_raises_before_any_write(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """The target is neither a Capability in the graph nor a node of the baseline."""
+    single_tenant = MarkerGraph(
+        resolved=_markers("Capability", {_CAPABILITY_ABSORBED: _CAPABILITY_SURVIVOR}),
+        gateway_graph=merge_rig.policy_system,
+    )
+
+    with pytest.raises(CompanyMergeValidationError) as excinfo:
+        _ingest(merge_rig, single_tenant, make_emitter, "Capability")
+
+    assert str(excinfo.value) == (
+        f"capability {_CAPABILITY_ABSORBED!r} resolves to {_CAPABILITY_SURVIVOR!r}, "
+        "which does not exist"
+    )
+    assert merge_rig.groups == []
+
+
+def test_an_id_with_both_a_merged_and_a_resolved_marker_raises_before_any_write(
+    make_emitter: MakeEmitter, merge_rig: MergeRig
+) -> None:
+    """Both markers name live targets, so neither may silently win over the other."""
+    single_tenant = MarkerGraph(
+        markers=_markers("Capability", {_CAPABILITY_ABSORBED: _CAPABILITY_SURVIVOR}),
+        resolved=_markers("Capability", {_CAPABILITY_ABSORBED: _CAPABILITY_TERMINAL}),
+        existing={"Capability": frozenset({_CAPABILITY_SURVIVOR, _CAPABILITY_TERMINAL})},
+        gateway_graph=merge_rig.policy_system,
+    )
+
+    with pytest.raises(CompanyMergeValidationError) as excinfo:
+        _ingest(merge_rig, single_tenant, make_emitter, "Capability")
+
+    assert str(excinfo.value) == (
+        f"capability {_CAPABILITY_ABSORBED!r} is held by more than one marker label"
+    )
+    assert merge_rig.groups == []
+
+
+def test_an_id_held_by_both_marker_labels_fails_even_when_the_baseline_does_not_hold_it() -> None:
+    """The check is global over the markers read, as the missing-target check is."""
+    graph = MarkerGraph(
+        markers=_markers("Capability", {"cap_x": "cap_a"}),
+        resolved=_markers("Capability", {"cap_x": "cap_a"}),
+    )
+
+    with pytest.raises(CompanyMergeValidationError) as excinfo:
+        resolve_redirects(graph, _baseline_of("Capability", _OTHER_CAPABILITY))
+
+    assert str(excinfo.value) == "capability 'cap_x' is held by more than one marker label"

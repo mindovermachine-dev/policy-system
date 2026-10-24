@@ -62,6 +62,15 @@ _SIDES_READ = re.compile(
     r"^MATCH \(r:PendingReview \{id: \$review_id\}\) OPTIONAL MATCH \(a:(\w+) "
 )
 _WRITE_KEYWORD = re.compile(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|DETACH|DROP)\b")
+_MARKER_READ = re.compile(r"^MATCH \(m:(\w+)[ )]")
+
+
+def _marker_label(query: str) -> str:
+    """The marker label a marker read matches, taken from its statement text."""
+    found = _MARKER_READ.match(query)
+    if found is None:
+        raise AssertionError(f"not a marker read the double was taught: {query}")
+    return found.group(1)
 
 
 class CleanupReadGraph:
@@ -76,28 +85,21 @@ class CleanupReadGraph:
             graph_reader._CAPABILITY_GOVERNORS_QUERY: self._capability_governors,
             graph_reader._POLICY_GOVERNED_SETS_QUERY: self._policy_governed_sets,
             graph_reader._GOVERNED_EDGE_QUERY: self._governed_edge_count,
-            graph_reader._CAPABILITY_MARKER_QUERY: self._capability_marker,
-            graph_reader._CAPABILITY_ANY_MARKER_QUERY: self._capability_any_marker,
             graph_reader._CAPABILITY_PRESENT_QUERY: self._capability_present,
             graph_reader._OBLIGATION_NODES_QUERY: self._obligation_nodes,
             graph_reader._OBLIGATION_ROLES_QUERY: self._obligation_roles,
             graph_reader._OBLIGATION_SATISFIED_QUERY: self._obligation_satisfied,
             graph_reader._OBLIGATION_REQUIRES_QUERY: self._obligation_requires,
             graph_reader._OBLIGATION_REFS_QUERY: self._obligation_refs,
-            graph_reader._OBLIGATION_MARKER_QUERY: self._obligation_marker,
-            graph_reader._OBLIGATION_ANY_MARKER_QUERY: self._obligation_any_marker,
             graph_reader._OBLIGATION_PRESENT_QUERY: self._obligation_present,
             graph_reader._ROLE_NODES_QUERY: self._role_nodes,
-            graph_reader._ROLE_MARKERS_QUERY: self._role_markers,
             graph_reader._ROLE_DEFINES_QUERY: self._role_defines,
             graph_reader._ROLE_OBLIGATIONS_QUERY: self._role_obligations,
             graph_reader._ROLE_FOREIGN_BEARERS_QUERY: self._role_foreign_bearers,
             graph_reader._ROLE_DEGREE_QUERY: self._role_degree,
             graph_reader._PENDING_REVIEW_QUERY: self._pending_review,
             graph_reader._OBLIGATIONS_BY_ROLE_QUERY: self._obligations_by_role,
-            graph_reader._CAPABILITY_MARKERS_QUERY: self._capability_markers,
             graph_reader._POLICY_EXISTS_QUERY: self._policy_exists,
-            graph_reader._OBLIGATION_MARKERS_QUERY: self._obligation_markers,
             graph_reader._ROLE_EXISTS_QUERY: self._role_exists,
             graph_reader._INSTRUMENT_EXISTS_QUERY: self._instrument_exists,
             graph_reader._REQUIREMENTS_EXIST_QUERY: self._requirements_exist,
@@ -109,6 +111,21 @@ class CleanupReadGraph:
             self._reads[query] = self._existing_nodes(_ENDPOINT_LABELS[_rel_type])
         for _rel_type, source_label, query in graph_reader._INCOMING_EDGE_QUERIES:
             self._reads[query] = self._incoming_edges(_rel_type, source_label)
+        # The marker reads answer from the label written in their own statement text, so a read
+        # that names a different marker label reads those nodes here as it would in FalkorDB.
+        for query in (graph_reader._CAPABILITY_MARKER_QUERY, graph_reader._OBLIGATION_MARKER_QUERY):
+            self._reads[query] = self._marker_naming_survivor(_marker_label(query))
+        for query, id_param in (
+            (graph_reader._CAPABILITY_ANY_MARKER_QUERY, "capability_id"),
+            (graph_reader._OBLIGATION_ANY_MARKER_QUERY, "obligation_id"),
+        ):
+            self._reads[query] = self._any_marker(_marker_label(query), id_param)
+        for query in (
+            graph_reader._CAPABILITY_MARKERS_QUERY,
+            graph_reader._OBLIGATION_MARKERS_QUERY,
+            graph_reader._ROLE_MARKERS_QUERY,
+        ):
+            self._reads[query] = self._markers(_marker_label(query))
         self._flips: list[tuple[str, int, Callable[[], None]]] = []
         self._seen: dict[str, int] = {}
 
@@ -269,13 +286,36 @@ class CleanupReadGraph:
 
         return read
 
-    def _capability_marker(self, params: dict[str, object]) -> list[object]:
-        marker = self._graph.nodes.get(("MergedCapability", cast("str", params["absorbed_id"])))
-        return [[1 if marker and marker.get("merged_into") == params["survivor_id"] else 0]]
+    def _marker_naming_survivor(self, label: str) -> Callable[[dict[str, object]], list[object]]:
+        """Count of `label` markers with id `absorbed_id` whose `merged_into` is `survivor_id`."""
 
-    def _capability_any_marker(self, params: dict[str, object]) -> list[object]:
-        marker = self._graph.nodes.get(("MergedCapability", cast("str", params["capability_id"])))
-        return [[1 if marker is not None else 0]]
+        def read(params: dict[str, object]) -> list[object]:
+            marker = self._graph.nodes.get((label, cast("str", params["absorbed_id"])))
+            return [[1 if marker and marker.get("merged_into") == params["survivor_id"] else 0]]
+
+        return read
+
+    def _any_marker(self, label: str, id_param: str) -> Callable[[dict[str, object]], list[object]]:
+        """Count of `label` markers with the id given as `id_param`."""
+
+        def read(params: dict[str, object]) -> list[object]:
+            marker = self._graph.nodes.get((label, cast("str", params[id_param])))
+            return [[1 if marker is not None else 0]]
+
+        return read
+
+    def _markers(self, label: str) -> Callable[[dict[str, object]], list[object]]:
+        """`[id, merged_into]` of every `label` marker whose id is in `ids`."""
+
+        def read(params: dict[str, object]) -> list[object]:
+            wanted = set(cast("list[str]", params["ids"]))
+            return [
+                [node_id, props.get("merged_into")]
+                for (node_label, node_id), props in self._graph.nodes.items()
+                if node_label == label and node_id in wanted
+            ]
+
+        return read
 
     def _capability_present(self, params: dict[str, object]) -> list[object]:
         present = ("Capability", cast("str", params["capability_id"])) in self._graph.nodes
@@ -332,14 +372,6 @@ class CleanupReadGraph:
             rows.extend([requirement, ref] for ref in (refs or [None]))
         return rows
 
-    def _obligation_marker(self, params: dict[str, object]) -> list[object]:
-        marker = self._graph.nodes.get(("MergedObligation", cast("str", params["absorbed_id"])))
-        return [[1 if marker and marker.get("merged_into") == params["survivor_id"] else 0]]
-
-    def _obligation_any_marker(self, params: dict[str, object]) -> list[object]:
-        marker = self._graph.nodes.get(("MergedObligation", cast("str", params["obligation_id"])))
-        return [[1 if marker is not None else 0]]
-
     def _obligation_present(self, params: dict[str, object]) -> list[object]:
         present = ("Obligation", cast("str", params["obligation_id"])) in self._graph.nodes
         return [[1 if present else 0]]
@@ -352,14 +384,6 @@ class CleanupReadGraph:
             [node_id, props.get("name"), props.get("description"), props.get("confidence")]
             for (label, node_id), props in self._graph.nodes.items()
             if label == "Role" and node_id in wanted
-        ]
-
-    def _role_markers(self, params: dict[str, object]) -> list[object]:
-        wanted = set(cast("list[str]", params["ids"]))
-        return [
-            [node_id, props.get("merged_into")]
-            for (label, node_id), props in self._graph.nodes.items()
-            if label == "MergedRole" and node_id in wanted
         ]
 
     def _role_defines(self, params: dict[str, object]) -> list[object]:
@@ -409,22 +433,6 @@ class CleanupReadGraph:
     def _policy_exists(self, params: dict[str, object]) -> list[object]:
         policy_id = cast("str", params["policy_id"])
         return [[policy_id]] if ("Policy", policy_id) in self._graph.nodes else []
-
-    def _capability_markers(self, params: dict[str, object]) -> list[object]:
-        wanted = set(cast("list[str]", params["ids"]))
-        return [
-            [node_id, props.get("merged_into")]
-            for (label, node_id), props in self._graph.nodes.items()
-            if label == "MergedCapability" and node_id in wanted
-        ]
-
-    def _obligation_markers(self, params: dict[str, object]) -> list[object]:
-        wanted = set(cast("list[str]", params["ids"]))
-        return [
-            [node_id, props.get("merged_into")]
-            for (label, node_id), props in self._graph.nodes.items()
-            if label == "MergedObligation" and node_id in wanted
-        ]
 
     def _role_exists(self, params: dict[str, object]) -> list[object]:
         role_id = cast("str", params["role_id"])

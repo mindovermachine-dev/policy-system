@@ -12,67 +12,16 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ps_service.graph_gateway.models import MutationGroup, UpsertNode
 from ps_service.restore.errors import RestoreConcurrencyConflictError
 from ps_service.restore.graph_submission import MAX_POLICY_SYSTEM_ATTEMPTS
 from restore._fixtures import build_restore_artifact, small_graphs
+from restore._gateway_fakes import install_racing_gateway
 from restore._near_miss_fixtures import INCOMING, near_miss_artifact, reviews, seed_existing
 
 if TYPE_CHECKING:
-    from ps_service.graph_gateway.gateway import GraphWriteGateway
-    from ps_service.graph_gateway.models import MultiGraphGroup, MultiGraphOutcome
     from restore._gateway_fakes import RestoreRig
 
 _POLICY_SYSTEM = "policy_system"
-_WRITER_EVENT_ID = "6f1c2b3a-0d4e-4f5a-8b6c-7d8e9f0a1b2c"
-
-
-class _RacingGateway:
-    """The rig's gateway, except another writer lands a group after each of the first N reads.
-
-    The competing group is written between the restore's position read and its submit, which is
-    exactly the window `ExpectedPosition` guards.
-    """
-
-    def __init__(self, rig: RestoreRig, *, races: int) -> None:
-        self._rig = rig
-        self._inner: GraphWriteGateway = rig.gateway
-        self._races = races
-        self.rivals = 0
-        self.submits = 0
-
-    def read_log_position(self, graph: str) -> int:
-        position = self._inner.read_log_position(graph)
-        if graph == _POLICY_SYSTEM and self.rivals < self._races:
-            self.rivals += 1
-            self._rig.store.audit_rows.add(_WRITER_EVENT_ID)
-            self._inner.submit_group(
-                MutationGroup(
-                    graph=_POLICY_SYSTEM,
-                    audit_event_id=_WRITER_EVENT_ID,
-                    primitives=(
-                        UpsertNode(
-                            label="Capability",
-                            id=f"rival-{self.rivals}",
-                            properties={"name": f"rival {self.rivals}"},
-                        ),
-                    ),
-                )
-            )
-        return position
-
-    def submit_multi_graph_group(self, group: MultiGraphGroup) -> MultiGraphOutcome:
-        self.submits += 1
-        return self._inner.submit_multi_graph_group(group)
-
-    def submit_group(self, group: MutationGroup) -> object:
-        return self._inner.submit_group(group)
-
-    def is_caught_up(self, graph: str) -> bool:
-        return self._inner.is_caught_up(graph)
-
-    def catch_up(self, graph: str) -> object:
-        return self._inner.catch_up(graph)
 
 
 def _artifact():
@@ -82,14 +31,8 @@ def _artifact():
     )
 
 
-def _install(rig: RestoreRig, *, races: int) -> _RacingGateway:
-    racing = _RacingGateway(rig, races=races)
-    rig.open_gateway = lambda: racing  # type: ignore[method-assign]  # a rig stand-in
-    return racing
-
-
 def test_an_undisturbed_restore_succeeds_on_the_first_attempt(restore_rig: RestoreRig) -> None:
-    racing = _install(restore_rig, races=0)
+    racing = install_racing_gateway(restore_rig, races=0)
 
     restore_rig.restore(_artifact())
 
@@ -99,7 +42,7 @@ def test_an_undisturbed_restore_succeeds_on_the_first_attempt(restore_rig: Resto
 def test_a_write_between_the_read_and_the_submit_forces_a_recompute_and_both_writes_survive(
     restore_rig: RestoreRig,
 ) -> None:
-    racing = _install(restore_rig, races=1)
+    racing = install_racing_gateway(restore_rig, races=1)
 
     restore_rig.restore(_artifact())
 
@@ -111,7 +54,7 @@ def test_a_write_between_the_read_and_the_submit_forces_a_recompute_and_both_wri
 
 
 def test_a_refused_attempt_logs_nothing_on_any_graph(restore_rig: RestoreRig) -> None:
-    _install(restore_rig, races=1)
+    install_racing_gateway(restore_rig, races=1)
 
     restore_rig.restore(_artifact())
 
@@ -123,7 +66,7 @@ def test_a_refused_attempt_logs_nothing_on_any_graph(restore_rig: RestoreRig) ->
 def test_three_refused_attempts_raise_the_concurrency_conflict_and_only_the_rival_writes_remain(
     restore_rig: RestoreRig,
 ) -> None:
-    racing = _install(restore_rig, races=MAX_POLICY_SYSTEM_ATTEMPTS)
+    racing = install_racing_gateway(restore_rig, races=MAX_POLICY_SYSTEM_ATTEMPTS)
 
     with pytest.raises(RestoreConcurrencyConflictError) as raised:
         restore_rig.restore(_artifact())
@@ -148,7 +91,7 @@ def test_AC_BI_007_a_retry_rebuilds_the_reviews_so_one_race_leaves_one_set(
     restore_rig: RestoreRig,
 ) -> None:
     seed_existing(restore_rig)
-    racing = _install(restore_rig, races=1)
+    racing = install_racing_gateway(restore_rig, races=1)
 
     outcome = restore_rig.restore(near_miss_artifact())
 
@@ -159,7 +102,7 @@ def test_AC_BI_007_a_retry_rebuilds_the_reviews_so_one_race_leaves_one_set(
 
 def test_AC_BI_007_three_refused_attempts_leave_no_review(restore_rig: RestoreRig) -> None:
     seed_existing(restore_rig)
-    _install(restore_rig, races=MAX_POLICY_SYSTEM_ATTEMPTS)
+    install_racing_gateway(restore_rig, races=MAX_POLICY_SYSTEM_ATTEMPTS)
 
     with pytest.raises(RestoreConcurrencyConflictError):
         restore_rig.restore(near_miss_artifact())

@@ -433,7 +433,9 @@ Capability.
 Capabilities never returns it and needs no status filter for merges. If you query the
 graph directly with the `run-cypher` tool, the `MergedCapability`, `MergedObligation` and
 `MergedRole` nodes (each with `id` and `merged_into`) record which node replaced an
-absorbed id. The packaged domain concepts describe the markers.
+absorbed id, and a `ResolvedCapability` node (`id`, `resolves_to`) records which existing
+Capability an incoming Capability was resolved onto by similarity. None of these markers is a
+Capability, Obligation or Role. The packaged domain concepts describe the markers.
 
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-graph-cleanup skill."_

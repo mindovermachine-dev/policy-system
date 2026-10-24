@@ -313,20 +313,10 @@ def test_a_retry_after_a_partial_audit_failure_records_each_failed_row_once(
     pairs = [seed_capability_pair_with_review(cleanup_rig, n) for n in (1, 2)]
     row = _orphan(cleanup_rig, store, pairs, applied=0)
     audit = cleanup_rig.audit
-    original = audit.record_standalone_with_event_id
-    calls = 0
-
-    def _second_write_fails(**kwargs: object) -> str:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise AuditPostgresUnavailableError("down")
-        return original(**kwargs)  # type: ignore[arg-type]
-
-    audit.record_standalone_with_event_id = _second_write_fails  # type: ignore[method-assign]
+    audit.raise_on_call[audit.standalone_calls + 2] = AuditPostgresUnavailableError("down")
     with pytest.raises(AuditPostgresUnavailableError):
         _check(cleanup_rig, store, row.id)
-    audit.record_standalone_with_event_id = original  # type: ignore[method-assign]
+    audit.raise_on_call.clear()
     _into_history(cleanup_rig)
 
     status = _check(cleanup_rig, store, row.id)

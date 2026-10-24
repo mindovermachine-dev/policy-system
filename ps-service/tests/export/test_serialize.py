@@ -13,6 +13,7 @@ import json
 
 import pytest
 
+from ps_service.domain_schema.vocabulary_exceptions import REDIRECT_MARKER_LABELS
 from ps_service.export.errors import ExportSourceGraphError
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.export.serialize import (
@@ -203,15 +204,26 @@ def test_serialize_graph_refuses_a_graph_with_an_unfinished_replay_record() -> N
         serialize_graph(graph)
 
 
-@pytest.mark.parametrize("marker", ["MergedCapability", "MergedObligation", "MergedRole"])
-def test_serialize_graph_leaves_a_merge_marker_out_of_the_artifact(marker: str) -> None:
-    """A merge marker belongs to the deployment's own graph, never to an export."""
+# Each redirect marker label and the property naming where its id leads.
+_REDIRECT_MARKER_TARGETS = {
+    "MergedCapability": "merged_into",
+    "MergedObligation": "merged_into",
+    "MergedRole": "merged_into",
+    "ResolvedCapability": "resolves_to",
+}
+
+
+@pytest.mark.parametrize(("marker", "target_property"), sorted(_REDIRECT_MARKER_TARGETS.items()))
+def test_serialize_graph_leaves_a_redirect_marker_out_of_the_artifact(
+    marker: str, target_property: str
+) -> None:
+    """A redirect marker belongs to the deployment's own graph, never to an export."""
     graph = _ScriptedFakeGraphQueryHandle(
         labels=[["Capability"], [marker]],
         relationship_types=[],
         node_rows_by_label={
             "Capability": [[["Capability"], {"id": "cap_b"}]],
-            marker: [[[marker], {"id": "cap_a", "merged_into": "cap_b"}]],
+            marker: [[[marker], {"id": "cap_a", target_property: "cap_b"}]],
         },
         edge_rows_by_type={},
         total_node_count=2,
@@ -222,3 +234,8 @@ def test_serialize_graph_leaves_a_merge_marker_out_of_the_artifact(marker: str) 
     assert [(node.label, node.properties["id"]) for node in result.nodes] == [
         ("Capability", "cap_b")
     ]
+
+
+def test_the_serialize_redirect_marker_cases_cover_every_redirect_marker_label() -> None:
+    """Every label Company Merge follows is one of the cases the export leaves out."""
+    assert set(_REDIRECT_MARKER_TARGETS) == set(REDIRECT_MARKER_LABELS)

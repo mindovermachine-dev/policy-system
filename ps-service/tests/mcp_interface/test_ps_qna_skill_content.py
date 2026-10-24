@@ -71,3 +71,11 @@ def test_active_only_default_explains_an_absorbed_capability_is_deleted() -> Non
     assert "is deleted, so a Capability query never returns it" in " ".join(text.split())
     assert "`MergedCapability` node" in text
     assert "merge history" in text
+
+
+def test_active_only_default_names_the_resolution_marker_and_when_to_read_it() -> None:
+    text = _skill_text()
+
+    assert "`ResolvedCapability` node (`id`, `resolves_to`)" in text
+    assert "automatic resolution" in text
+    assert "resolution history" in text

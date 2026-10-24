@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -35,6 +36,9 @@ from ps_service.graph_cleanup.service import (
     create_role_merge_approval,
 )
 from ps_service.graph_gateway.models import DeleteNode
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _REVIEW = "review_role_1"
 _ACTOR = ("officer", "https://issuer.example.com/")
@@ -225,12 +229,12 @@ def _retype_review(rig: CleanupRig) -> None:
     ids=["removed", "repointed", "retyped"],
 )
 def test_a_review_that_changed_since_the_preview_is_refused_with_a_failed_row(
-    cleanup_rig: CleanupRig, drift: object
+    cleanup_rig: CleanupRig, drift: Callable[[CleanupRig], None]
 ) -> None:
     rig = cleanup_rig
     _world(rig)
     row = role_row(rig, review_id=_REVIEW)
-    drift(rig)  # type: ignore[operator]
+    drift(rig)
     before = _graph_state(rig)
 
     outcome = run_role_merge(rig, row=row)

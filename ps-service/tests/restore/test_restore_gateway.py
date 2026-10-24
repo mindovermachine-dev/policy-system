@@ -291,13 +291,9 @@ def test_no_gateway_installed_fails_closed_after_verification_with_nothing_writt
     def no_gateway() -> object:
         raise GraphWriteUnavailableError("graph writes are unavailable")
 
-    rig_open = restore_rig.open_gateway
-    restore_rig.open_gateway = no_gateway  # type: ignore[method-assign]  # a rig stand-in for "none installed"
-    try:
-        with pytest.raises(GraphWriteUnavailableError):
-            restore_rig.restore(_artifact())
-    finally:
-        restore_rig.open_gateway = rig_open  # type: ignore[method-assign]
+    restore_rig.gateway_opener = no_gateway
+    with pytest.raises(GraphWriteUnavailableError):
+        restore_rig.restore(_artifact())
 
     assert restore_rig.store.groups == []
 
@@ -317,7 +313,7 @@ def test_a_gateway_refusal_is_a_group_rejection_and_logs_nothing(restore_rig: Re
             raise GraphWriteRejectedError("the group is refused")
 
     refusing = RefusingGateway(restore_rig.gateway)
-    restore_rig.open_gateway = lambda: refusing  # type: ignore[method-assign]
+    restore_rig.gateway_opener = lambda: refusing
 
     with pytest.raises(RestoreGroupRejectedError) as raised:
         restore_rig.restore(_artifact())

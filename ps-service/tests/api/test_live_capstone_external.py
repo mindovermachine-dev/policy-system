@@ -218,7 +218,8 @@ def capstone(
         _delete_graph_if_exists(db, stale_graph)
     facade.configure(log_path=tmp_path_factory.mktemp("api_capstone") / "capstone.jsonl")
 
-    install_compliance_officer_grant(monkeypatch, granted=True)  # the catalog route is role-gated
+    # The catalog route is role-gated.
+    install_compliance_officer_grant(monkeypatch, granted=True, real_audit_store=True)
     app = create_app(config)
     app.dependency_overrides[provide_pipeline_dependencies] = _limited_dependencies
     # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not

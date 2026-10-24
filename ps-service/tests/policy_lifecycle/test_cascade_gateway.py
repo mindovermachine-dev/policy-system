@@ -9,7 +9,7 @@ a gateway failure records a `failed` row with the same details and the prefixed 
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors `test_service.py`'s cross-package import convention
@@ -156,8 +156,10 @@ def test_a_standard_added_between_the_gate_read_and_the_cascade_read_is_cascaded
     (group,) = lifecycle_rig.store.groups
     assert ("Standard", "std_late") in _merges(group)
     assert lifecycle_rig.graph.nodes[("Standard", "std_late")]["status"] == "proposed"
-    # The audit row names the nodes of the gate read; the cascade covers more.
-    assert "std_late" not in lifecycle_rig.audit.rows[0].details["affected_node_ids"]  # type: ignore[operator]
+    # The audit row names the nodes of the gate read; the cascade covers more. `details` is the
+    # row's JSON document (`Mapping[str, object]`); the lifecycle writes this key as a list of ids.
+    affected_node_ids = cast("list[str]", lifecycle_rig.audit.rows[0].details["affected_node_ids"])
+    assert "std_late" not in affected_node_ids
 
 
 def test_a_gate_rejection_writes_a_rejected_row_and_nothing_to_the_graph(

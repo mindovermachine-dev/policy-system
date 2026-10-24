@@ -1,11 +1,13 @@
-"""A `GraphHandle` fake that holds `Merged<Kind>` markers and live node ids per mergeable kind.
+"""A `GraphHandle` fake that holds redirect markers and live node ids per mergeable kind.
 
-It answers the reads `company_merge.redirects` issues (the marker read, the batched existence
-read of one kind and the live `DEFINES` read) from what a test seeded, records every statement,
-and refuses a write statement: the resolver reads, it never writes. When given a gateway rig
-graph it also answers the per-label existence read, the marker read and the live `DEFINES`
-read from that graph, so a merge run over the rig (a real cleanup merge leaves a
-`Merged<Kind>` node there) is seen by the resolver.
+The markers are `Merged<Kind> {id, merged_into}` (a cleanup merge) and
+`Resolved<Kind> {id, resolves_to}` (a semantic resolution). It answers the reads
+`company_merge.redirects` issues (each marker read, the batched existence read of one kind and the
+live `DEFINES` read) from what a test seeded, records every statement, and refuses a write
+statement: the resolver reads, it never writes. When given a gateway rig graph it also answers the
+per-label existence read, the marker reads and the live `DEFINES` read from that graph, so a merge
+run over the rig (a real cleanup merge leaves a `Merged<Kind>` node there, a semantic resolution a
+`ResolvedCapability` node) is seen by the resolver.
 """
 
 from __future__ import annotations
@@ -18,7 +20,10 @@ if TYPE_CHECKING:
 
     from graph_gateway._fakes import InMemoryGraph
 
-_MARKER_READ = re.compile(r"^MATCH \(m:Merged(?P<kind>\w+)\) RETURN m\.id, m\.merged_into$")
+_MARKER_READ = re.compile(
+    r"^MATCH \(m:(?P<prefix>Merged|Resolved)(?P<kind>\w+)\) "
+    r"RETURN m\.id, m\.(?P<target>merged_into|resolves_to)$"
+)
 _EXISTENCE_READ = re.compile(r"^MATCH \(n:(?P<kind>\w+)\) WHERE n\.id IN \$ids RETURN n\.id$")
 _DEFINES_READ = (
     "MATCH (:RegulatoryInstrument {id: $instrument_id})-[:DEFINES]->(n:Role) "
@@ -33,19 +38,21 @@ class _Result:
 
 
 class MarkerGraph:
-    """Scripted markers (`kind -> {absorbed id: merged_into}`), live ids (`kind -> {id}`) and the
-    Roles the live graph already holds a `DEFINES` edge to (`instrument id -> {role id}`).
+    """Scripted merge markers (`kind -> {absorbed id: merged_into}`), semantic-resolution markers
+    (`kind -> {resolved id: resolves_to}`), live ids (`kind -> {id}`) and the Roles the live graph
+    already holds a `DEFINES` edge to (`instrument id -> {role id}`).
     """
 
     def __init__(
         self,
         *,
         markers: Mapping[str, Mapping[str, str | None]] | None = None,
+        resolved: Mapping[str, Mapping[str, str | None]] | None = None,
         existing: Mapping[str, frozenset[str]] | None = None,
         defines: Mapping[str, frozenset[str]] | None = None,
         gateway_graph: InMemoryGraph | None = None,
     ) -> None:
-        self._markers = markers or {}
+        self._markers = {"Merged": markers or {}, "Resolved": resolved or {}}
         self._defines = defines or {}
         self._existing = existing or {}
         self._gateway_graph = gateway_graph
@@ -63,13 +70,13 @@ class MarkerGraph:
             raise AssertionError(message)
         marker = _MARKER_READ.match(q)
         if marker is not None:
-            kind = marker.group("kind")
-            rows = dict(self._markers.get(kind, {}))
+            prefix, kind = marker.group("prefix"), marker.group("kind")
+            rows = dict(self._markers[prefix].get(kind, {}))
             if self._gateway_graph is not None:
                 rows |= {
-                    node_id: cast("str | None", props.get("merged_into"))
+                    node_id: cast("str | None", props.get(marker.group("target")))
                     for (label, node_id), props in self._gateway_graph.nodes.items()
-                    if label == f"Merged{kind}"
+                    if label == f"{prefix}{kind}"
                 }
             return _Result([[absorbed, target] for absorbed, target in rows.items()])
         existence = _EXISTENCE_READ.match(q)

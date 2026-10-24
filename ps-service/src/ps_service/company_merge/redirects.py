@@ -1,16 +1,24 @@
-"""Merge redirects for Company Merge: keep a cleanup-merged node from being re-minted.
+"""Redirects for Company Merge: keep a merged or resolved node from being minted or rescored.
 
-A Compliance Officer cleanup merge deletes the absorbed node and leaves a
-`Merged<Kind> {id, merged_into}` marker. Ids are content hashes, so a later live merge or offline
-restore whose baseline regenerates the absorbed node would otherwise mint it again. Before any
-persist, `resolve_redirects` drops such a node from the baseline and maps its id to the terminal
-survivor; the caller folds that mapping into `canonical_id_by_incoming_id`, so the
-endpoint-agnostic `persist_rewired_edges` unions the node's edges onto the survivor and re-MERGEs
-the (idempotent) `HAS` edge.
+Two markers redirect an id:
 
-This module is the one place that reads the markers, follows chains, and rejects cycles and
-dangling terminals, for every mergeable kind listed in `_KINDS`. Ids of the kinds never collide
-(`role_`, `obl_`, `cap_` prefixes), so one absorbed-id to terminal mapping carries all of them.
+- A Compliance Officer cleanup merge deletes the absorbed node and leaves a
+  `Merged<Kind> {id, merged_into}` marker (every mergeable kind).
+- A semantic Capability resolution never mints the incoming id and leaves a
+  `ResolvedCapability {id, resolves_to}` marker (Capability only).
+
+Ids are content hashes, so a later live merge or offline restore whose baseline regenerates such
+an id would otherwise mint it again, or score it again against a candidate pool that has grown
+since. Before any dedup or persist, `resolve_redirects` drops such a node from the baseline and
+maps its id to the terminal of its marker chain; the caller folds that mapping into
+`canonical_id_by_incoming_id`, so the endpoint-agnostic `persist_rewired_edges` unions the node's
+edges onto the terminal and re-MERGEs the (idempotent) `HAS` edge. A Capability chain may mix both
+markers: a resolution onto a Capability a cleanup merge later absorbed follows on to the survivor.
+
+This module is the one place that reads the markers, follows chains, and rejects cycles, dangling
+terminals and an id held by two markers, for every mergeable kind listed in `_KINDS`. Ids of the
+kinds never collide (`role_`, `obl_`, `cap_` prefixes), so one absorbed-id to terminal mapping
+carries all of them.
 
 Read-only; every failure is raised before the caller's first write.
 """
@@ -57,11 +65,23 @@ class RedirectResolution:
             redirected.
         by_kind: The same entries split by kind, with an entry for every kind (empty when the
             kind redirected nothing).
+        first_hop: Redirected id to the label of the marker that holds it (the first hop of its
+            chain), for every redirected id of every kind.
     """
 
     baseline: BaselineGraph
     mapping: dict[str, str]
     by_kind: dict[MergeableKind, dict[str, str]]
+    first_hop: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _MarkerSource:
+    """One marker label of a kind: its static read and the property naming its target."""
+
+    label: str
+    query: str
+    target_property: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +90,7 @@ class _KindSpec:
 
     nodes: Callable[[BaselineGraph], tuple[BaselineNode, ...]]
     nodes_field: str
-    marker_label: str
-    marker_query: str
+    markers: tuple[_MarkerSource, ...]
     existing_query: str
 
 
@@ -79,22 +98,42 @@ _KINDS: Mapping[MergeableKind, _KindSpec] = {
     "Capability": _KindSpec(
         nodes=lambda baseline: baseline.capability_nodes,
         nodes_field="capability_nodes",
-        marker_label="MergedCapability",
-        marker_query="MATCH (m:MergedCapability) RETURN m.id, m.merged_into",
+        markers=(
+            _MarkerSource(
+                label="MergedCapability",
+                query="MATCH (m:MergedCapability) RETURN m.id, m.merged_into",
+                target_property="merged_into",
+            ),
+            _MarkerSource(
+                label="ResolvedCapability",
+                query="MATCH (m:ResolvedCapability) RETURN m.id, m.resolves_to",
+                target_property="resolves_to",
+            ),
+        ),
         existing_query="MATCH (n:Capability) WHERE n.id IN $ids RETURN n.id",
     ),
     "Role": _KindSpec(
         nodes=lambda baseline: baseline.role_nodes,
         nodes_field="role_nodes",
-        marker_label="MergedRole",
-        marker_query="MATCH (m:MergedRole) RETURN m.id, m.merged_into",
+        markers=(
+            _MarkerSource(
+                label="MergedRole",
+                query="MATCH (m:MergedRole) RETURN m.id, m.merged_into",
+                target_property="merged_into",
+            ),
+        ),
         existing_query="MATCH (n:Role) WHERE n.id IN $ids RETURN n.id",
     ),
     "Obligation": _KindSpec(
         nodes=lambda baseline: baseline.obligation_nodes,
         nodes_field="obligation_nodes",
-        marker_label="MergedObligation",
-        marker_query="MATCH (m:MergedObligation) RETURN m.id, m.merged_into",
+        markers=(
+            _MarkerSource(
+                label="MergedObligation",
+                query="MATCH (m:MergedObligation) RETURN m.id, m.merged_into",
+                target_property="merged_into",
+            ),
+        ),
         existing_query="MATCH (n:Obligation) WHERE n.id IN $ids RETURN n.id",
     ),
 }
@@ -106,35 +145,53 @@ _LIVE_DEFINES_READ = (
 )
 
 
-def _read_kind_markers(graph: GraphHandle, kind: MergeableKind) -> dict[str, str]:
-    """Run the kind's one marker read; a marker without a target is a corrupt graph."""
-    spec = _KINDS[kind]
-    rows = cast("list[list[object]]", graph.query(spec.marker_query).result_set)
-    markers: dict[str, str] = {}
-    for row in rows:
-        absorbed_id, target = row[0], row[1]
-        if not isinstance(absorbed_id, str) or not isinstance(target, str):
-            message = f"{spec.marker_label} {absorbed_id!r} has no merged_into target"
-            raise CompanyMergeValidationError(message)
-        markers[absorbed_id] = target
-    return markers
+def _read_kind_markers(
+    graph: GraphHandle, kind: MergeableKind
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Run one read per marker label of the kind; a marker without a target is a corrupt graph.
+
+    An id held by more than one marker is a corrupt graph too: no marker may silently win over
+    another, so the check covers every marker read, whether or not the baseline holds the id.
+
+    Returns the `{id: target}` map of every marker of the kind and the `{id: marker label}` map
+    of the label that holds each id.
+    """
+    targets: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    for source in _KINDS[kind].markers:
+        rows = cast("list[list[object]]", graph.query(source.query).result_set)
+        for row in rows:
+            marked_id, target = row[0], row[1]
+            if not isinstance(marked_id, str) or not isinstance(target, str):
+                message = f"{source.label} {marked_id!r} has no {source.target_property} target"
+                raise CompanyMergeValidationError(message)
+            if marked_id in labels:
+                message = f"{kind.lower()} {marked_id!r} is held by more than one marker label"
+                raise CompanyMergeValidationError(message)
+            targets[marked_id] = target
+            labels[marked_id] = source.label
+    return targets, labels
 
 
 def read_markers(graph: GraphHandle, kind: MergeableKind) -> dict[str, str]:
-    """Read every marker of `kind` as `{absorbed_id: merged_into}` (one hop, one read).
+    """Read every marker of `kind` as `{marked_id: target}` (one hop, one read per marker label).
+
+    A Capability has two marker labels, `MergedCapability` (`merged_into`) and
+    `ResolvedCapability` (`resolves_to`); both land in the one map, so a chain may mix them.
 
     Args:
         graph: Read handle on the single-tenant graph.
         kind: The mergeable kind whose markers are read.
 
     Returns:
-        A dict from each absorbed id to the id it was merged into; empty when no marker exists.
+        A dict from each marked id to the id its marker names; empty when no marker exists.
         Chains are not followed here.
 
     Raises:
-        CompanyMergeValidationError: a marker carries no `merged_into` target.
+        CompanyMergeValidationError: a marker carries no target, or one id is held by more than
+            one marker.
     """
-    return _read_kind_markers(graph, kind)
+    return _read_kind_markers(graph, kind)[0]
 
 
 def follow_markers(start_id: str, markers: Mapping[str, str], kind: MergeableKind) -> str:
@@ -142,7 +199,7 @@ def follow_markers(start_id: str, markers: Mapping[str, str], kind: MergeableKin
 
     Args:
         start_id: The id to start from.
-        markers: Absorbed id to merged-into id, as read by `read_markers`.
+        markers: Marked id to target id, as read by `read_markers`.
         kind: The mergeable kind of the chain, named in a cycle error.
 
     Returns:
@@ -155,7 +212,7 @@ def follow_markers(start_id: str, markers: Mapping[str, str], kind: MergeableKin
     current = start_id
     while current in markers:
         if current in seen:
-            message = f"{_KINDS[kind].marker_label} cycle detected at {kind.lower()} {current!r}"
+            message = f"{kind.lower()} marker cycle detected at {kind.lower()} {current!r}"
             raise CompanyMergeValidationError(message)
         seen.add(current)
         current = markers[current]
@@ -200,8 +257,7 @@ def _check_terminals(
     for absorbed_id, terminal in terminals.items():
         if terminal not in baseline_ids and terminal not in existing:
             message = (
-                f"merged {kind.lower()} {absorbed_id!r} redirects to {terminal!r}, "
-                "which does not exist"
+                f"{kind.lower()} {absorbed_id!r} resolves to {terminal!r}, which does not exist"
             )
             raise CompanyMergeValidationError(message)
 
@@ -257,19 +313,24 @@ def _retarget_defines(
 
 def _resolve_kind(
     graph: GraphHandle, baseline: BaselineGraph, kind: MergeableKind
-) -> tuple[BaselineGraph, dict[str, str]]:
-    """Resolve the markers of one kind against `baseline`; unchanged when none applies."""
+) -> tuple[BaselineGraph, dict[str, str], dict[str, str]]:
+    """Resolve the markers of one kind against `baseline`; unchanged when none applies.
+
+    Returns the rewritten baseline, the redirected-id to terminal map and the redirected-id to
+    first-hop marker label map.
+    """
     nodes = _KINDS[kind].nodes(baseline)
     if not nodes:
-        return baseline, {}
-    markers = _read_kind_markers(graph, kind)
+        return baseline, {}, {}
+    markers, labels = _read_kind_markers(graph, kind)
     terminals = {
         node.id: follow_markers(node.id, markers, kind) for node in nodes if node.id in markers
     }
     if not terminals:
-        return baseline, {}
+        return baseline, {}, {}
     _check_terminals(graph, kind, {node.id for node in nodes}, terminals)
-    return _drop_absorbed(baseline, kind, terminals), terminals
+    first_hop = {marked_id: labels[marked_id] for marked_id in terminals}
+    return _drop_absorbed(baseline, kind, terminals), terminals, first_hop
 
 
 def _log_redirects(
@@ -295,7 +356,7 @@ def resolve_redirects(
     *,
     emitter: LogEmitter | None = None,
 ) -> RedirectResolution:
-    """Drop every absorbed node from `baseline` and map each to its terminal survivor.
+    """Drop every merged or resolved node from `baseline` and map each to its chain's terminal.
 
     A kind the baseline holds no node of issues no read at all.
 
@@ -305,27 +366,33 @@ def resolve_redirects(
         emitter: Log emitter, or `None` for the default.
 
     Returns:
-        The rewritten baseline and the absorbed-id to terminal-survivor mapping (empty, with the
-        baseline returned unchanged, when nothing is redirected).
+        The rewritten baseline, the redirected-id to terminal mapping (empty, with the baseline
+        returned unchanged, when nothing is redirected) and the label of the marker each
+        redirected id was found under.
 
     Raises:
-        CompanyMergeValidationError: a marker chain has a cycle, a marker has no target, or a
-            chain ends at a node that exists in neither the graph nor the baseline.
+        CompanyMergeValidationError: a marker chain has a cycle, a marker has no target, one id
+            is held by more than one marker, or a chain ends at a node that exists in neither the
+            graph nor the baseline. Each message names ids only.
 
     Side Effects:
-        Reads the markers of each present kind and, when a terminal survivor is outside the
-        baseline, one more query for its existence; when a Role is redirected, one more read for
-        the `DEFINES` edges the instrument already holds. Emits one `resolve_merge_redirects` log
-        entry when at least one node is redirected. Writes nothing.
+        Reads the markers of each present kind (one read per marker label) and, when a terminal
+        is outside the baseline, one more query for its existence; when a Role is redirected, one
+        more read for the `DEFINES` edges the instrument already holds. Emits one
+        `resolve_merge_redirects` log entry when at least one node is redirected. Writes nothing.
     """
     mapping: dict[str, str] = {}
     counts: dict[MergeableKind, int] = {}
     by_kind: dict[MergeableKind, dict[str, str]] = {}
+    first_hop: dict[str, str] = {}
     for kind in _KINDS:
-        baseline, by_kind[kind] = _resolve_kind(graph, baseline, kind)
+        baseline, by_kind[kind], kind_first_hop = _resolve_kind(graph, baseline, kind)
         mapping.update(by_kind[kind])
+        first_hop.update(kind_first_hop)
         counts[kind] = len(by_kind[kind])
     baseline = _retarget_defines(graph, baseline, by_kind["Role"])
     if mapping:
         _log_redirects(baseline, counts, emitter)
-    return RedirectResolution(baseline=baseline, mapping=mapping, by_kind=by_kind)
+    return RedirectResolution(
+        baseline=baseline, mapping=mapping, by_kind=by_kind, first_hop=first_hop
+    )

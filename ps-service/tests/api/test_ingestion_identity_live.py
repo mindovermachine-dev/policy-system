@@ -8,7 +8,8 @@ short_name collision check (``check_short_name_collision``) and the CELEX-existe
 
 Run with:
 `uv run pytest -m falkordb_live ps-service/tests/api/test_ingestion_identity_live.py -q`
-(needs FalkorDB on 127.0.0.1:6379; collected but deselected by default). Uses a throwaway graph,
+(needs the FalkorDB named by ``PS_TEST_FALKORDB_HOST``/``PS_TEST_FALKORDB_PORT``, default
+127.0.0.1:6379; collected but deselected by default). Uses a throwaway graph,
 deleted before and after each test.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from graph_gateway.live_endpoints import falkordb_endpoint
 
 from ps_service.api.ingestion_orchestration import (
     _find_instrument_id_by_celex,  # pyright: ignore[reportPrivateUsage] -- the real CELEX query under test
@@ -48,7 +50,8 @@ def _delete(db: FalkorDB) -> None:
 @pytest.fixture
 def seed() -> Iterator[Seed]:
     """A factory seeding ``RegulatoryInstrument`` nodes into a fresh throwaway graph."""
-    db = connect(host="127.0.0.1", port=6379)
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
     _delete(db)
     handle: GraphHandle = select_graph(db, _GRAPH)
 

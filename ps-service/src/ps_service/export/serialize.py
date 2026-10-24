@@ -14,7 +14,7 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Protocol, cast
 
-from ps_service.domain_schema.vocabulary_exceptions import MERGE_MARKER_LABELS
+from ps_service.domain_schema.vocabulary_exceptions import REDIRECT_MARKER_LABELS
 from ps_service.export.errors import ExportSourceGraphError
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
 from ps_service.graph_gateway import REPLAY_STATE_LABEL
@@ -129,9 +129,10 @@ def serialize_graph(graph: _GraphQueryHandle) -> SerializedGraph:
     Business Rules:
         Every node and every edge endpoint carries exactly one label. A graph that still holds
         a replay progress record is not exported, because its replay from the mutation log is
-        unfinished or failed and nobody has verified its contents. A merge marker
-        (`MergedCapability`, `MergedObligation`, `MergedRole`) records a merge made in this
-        deployment's own graph and is left out of the artifact.
+        unfinished or failed and nobody has verified its contents. A redirect marker
+        (`MergedCapability`, `MergedObligation`, `MergedRole`, `ResolvedCapability`) records a
+        merge or a semantic resolution made in this deployment's own graph and is left out of
+        the artifact.
 
     Args:
         graph: Read handle on the graph to serialize; the caller has already selected it.
@@ -167,7 +168,7 @@ def serialize_graph(graph: _GraphQueryHandle) -> SerializedGraph:
     for relationship_type in _enumerate_relationship_types(graph):
         edges.extend(_read_edges_for_relationship_type(graph, relationship_type))
 
-    domain_nodes = tuple(node for node in nodes if node.label not in MERGE_MARKER_LABELS)
+    domain_nodes = tuple(node for node in nodes if node.label not in REDIRECT_MARKER_LABELS)
     return SerializedGraph(nodes=domain_nodes, edges=tuple(edges))
 
 

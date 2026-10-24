@@ -548,3 +548,10 @@ def test_error_and_case_references_cover_merge_roles() -> None:
     assert "different instruments" in errors
     assert "`merge-roles`" in cases
     assert "same instrument" in cases.lower()
+
+
+def test_unmerge_reference_says_a_resolution_marker_cannot_be_unmerged() -> None:
+    section = _ref("unmerge.md")
+
+    assert "`ResolvedCapability`" in section
+    assert "is not a merge and cannot be unmerged" in section

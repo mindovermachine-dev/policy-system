@@ -210,12 +210,16 @@ class CanonicalResolution:
             (minted).
         embedding: The node's own embedding, written into its properties at mint time; meaningful
             only when `match_kind` is `new`, and None when no comparison produced one.
+        similarity: The score of the match onto `canonical_id`; set only when `match_kind` is
+            `semantic`. Reported in the log and left out of equality, so two resolutions onto the
+            same node compare equal whatever their score.
     """
 
     incoming_id: str
     canonical_id: str
     match_kind: Literal["exact", "semantic", "new"]
     embedding: tuple[float, ...] | None
+    similarity: float | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

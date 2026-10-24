@@ -20,6 +20,8 @@ Once verification passes:
    `ExpectedPosition`. A refusal because `policy_system` moved (another writer) re-reads and
    rebuilds, up to `MAX_POLICY_SYSTEM_ATTEMPTS` times, then raises
    `RestoreConcurrencyConflictError`. Every other refusal raises a `RestoreGraphWriteError`.
+5. Once the group is applied, log one entry per `ResolvedCapability` marker it wrote and one per
+   Capability id a marker redirected, so a refused attempt logs neither.
 
 An audit log entry is emitted at `"started"` (once verification has passed), `"succeeded"`
 (after the group took effect) and `"failed"` (whenever anything after `"started"` raises -- no
@@ -34,6 +36,10 @@ from ps_service.company_merge.falkordb_client import (
     select_graph as select_company_merge_graph,
 )
 from ps_service.company_merge.governance_import import GovernanceImport
+from ps_service.company_merge.resolution_markers import (
+    log_capability_redirects,
+    log_resolution_markers,
+)
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.serialize import checksum_bytes, parse_serialized_graph_json
 from ps_service.graph_gateway.errors import StaleGraphStateError
@@ -228,6 +234,8 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
     the live graph; the leg is guarded by that position, so a write landing in between makes the
     gateway refuse the whole group (nothing logged) and the next attempt reads again. After
     `MAX_POLICY_SYSTEM_ATTEMPTS` refused attempts `RestoreConcurrencyConflictError` is raised.
+    The applied attempt's `ResolvedCapability` marker writes and redirected Capability ids are
+    logged once, after its group is applied.
 
     Returns:
         The classification, governance and `near_miss_reviews_created` counts of the built
@@ -273,6 +281,16 @@ def _commit_restore(  # noqa: PLR0913 -- one restore's collaborators; no natural
                 emitter=emitter,
             )
             continue
+        log_resolution_markers(
+            policy_system.semantic_resolutions,
+            regulatory_instrument_id=instrument_id,
+            emitter=emitter,
+        )
+        log_capability_redirects(
+            policy_system.capability_redirects,
+            regulatory_instrument_id=instrument_id,
+            emitter=emitter,
+        )
         return policy_system.counts
     raise RestoreConcurrencyConflictError(
         f"restore merge into {single_tenant_graph_name!r} aborted after "
@@ -360,9 +378,11 @@ def restore_instrument(  # noqa: PLR0913 -- the restore's collaborators; no natu
 
     Side Effects:
         Emits `started`, then `succeeded` or `failed` audit log entries, plus a
-        `retry_policy_system_leg` entry per stale attempt. Reads `policy_system` through `db`.
-        On success the native and baseline graphs are replaced and `policy_system` is merged,
-        all through the gateway as one logged group.
+        `retry_policy_system_leg` entry per stale attempt and, for the applied attempt, one
+        `record_semantic_resolution` entry per `ResolvedCapability` marker written and one
+        `redirected` dedup entry per Capability id a marker redirected. Reads `policy_system`
+        through `db`. On success the native and baseline graphs are replaced and `policy_system`
+        is merged, all through the gateway as one logged group.
 
     Raises:
         ArtifactIntegrityError: a blob does not match its manifest digest.

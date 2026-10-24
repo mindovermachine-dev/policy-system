@@ -160,6 +160,27 @@ ambient dev data. A full live run needs a reachable FalkorDB, a Postgres superus
 (`ps-service/tests/ingestion/live_native.py`) delete and rebuild the per-instrument
 native and baseline graphs, so do not run those suites against a FalkorDB holding data you keep.
 
+Run the live suites against throwaway FalkorDB and Postgres containers, never a shared or dev
+graph. Point the tests at them with `PS_TEST_FALKORDB_HOST`/`PS_TEST_FALKORDB_PORT` (read by
+`falkordb_endpoint()` in `ps-service/tests/graph_gateway/live_endpoints.py`) and
+`PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` (read by tests that build their configuration with
+`load_config()`). Besides the superuser DSN, some `postgres_live` tests read the ambient
+`PS_STATE_POSTGRES_*` and `PS_PASSKEYSIGNING_POSTGRES_*` variables (`_HOST`, `_PORT`, `_DATABASE`,
+`_USER`, `_PASSWORD`) through `load_config()`, so those databases and roles must exist first:
+
+```bash
+psql "$PS_TEST_POSTGRES_SUPERUSER_DSN" \
+  -c "create role ps_state login password '<state-password>'" \
+  -c "create role ps_signing login password '<signing-password>'" \
+  -c "create database ps_state owner ps_state" \
+  -c "create database ps_signing owner ps_signing"
+```
+
+Keep the repository `addopts` when selecting live markers across packages, for example
+`uv run pytest -m "falkordb_live or postgres_live"`: they set `--import-mode=importlib`, without
+which same-named test files in different packages collide at collection. `-o addopts=""` is only
+safe for a single test file.
+
 Run the full local gate exactly as CI does:
 
 ```bash

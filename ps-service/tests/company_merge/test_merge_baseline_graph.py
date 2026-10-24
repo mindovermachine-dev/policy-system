@@ -102,6 +102,7 @@ _READ_MARKERS = (
     "RETURN n.id, n.title, n.embedding",
     "RETURN a.id, b.id",
     "RETURN m.id, m.merged_into",
+    "RETURN m.id, m.resolves_to",
 )
 
 
@@ -382,7 +383,7 @@ class _FakeSingleTenantGraph:
         self.calls.append(call)
         if self._gateway_graph is not None and _is_read_call(call):
             self._gateway_graph.events.append(_DEDUP_READ_EVENT)
-        if "(m:Merged" in q:  # no cleanup-merge obligation markers
+        if "(m:Merged" in q or "(m:Resolved" in q:  # no redirect markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult(self._capability_index_rows())
@@ -698,10 +699,12 @@ def test_both_dedup_reads_complete_before_any_write_call(
     )
 
     read_positions = [i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)]
-    assert len(read_positions) == 5  # Capability index + Role index + one marker read per kind
+    # Capability index + Role index + one marker read per marker label (Merged<Kind> for each
+    # kind, plus ResolvedCapability)
+    assert len(read_positions) == 6
     # A write is a gateway group: its first log append must come after the last read
     events = merge_rig.events
-    assert events.count(_DEDUP_READ_EVENT) == 5
+    assert events.count(_DEDUP_READ_EVENT) == 6
     assert max(i for i, event in enumerate(events) if event == _DEDUP_READ_EVENT) < events.index(
         "log_append"
     )

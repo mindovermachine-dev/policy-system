@@ -399,10 +399,9 @@ def test_read_regulatory_instrument_properties_includes_instrument_type() -> Non
     assert result.regulatory_instrument_properties["instrument_type"] == "directive"
 
 
-def _empty_scripted_graph(**overrides: object) -> _ScriptedFakeGraph:
+def _empty_scripted_graph(**row_overrides: list[object]) -> _ScriptedFakeGraph:
     """A `_ScriptedFakeGraph` with every required row list empty, overridable by kwarg."""
-    defaults: dict[str, object] = {
-        "regulatory_instrument_properties": {"id": "REG-1.0", "title": "Test Regulation"},
+    rows: dict[str, list[object]] = {
         "role_rows": [],
         "requirement_rows": [],
         "obligation_rows": [],
@@ -413,8 +412,10 @@ def _empty_scripted_graph(**overrides: object) -> _ScriptedFakeGraph:
         "satisfied_by_rows": [],
         "requires_rows": [],
     }
-    defaults.update(overrides)
-    return _ScriptedFakeGraph(**defaults)  # type: ignore[arg-type]
+    rows.update(row_overrides)
+    return _ScriptedFakeGraph(
+        regulatory_instrument_properties={"id": "REG-1.0", "title": "Test Regulation"}, **rows
+    )
 
 
 def test_read_requirement_nodes_omits_role_id_when_absent() -> None:

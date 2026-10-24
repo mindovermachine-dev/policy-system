@@ -269,7 +269,8 @@ def capstone(
 
     facade.configure(log_path=tmp_path_factory.mktemp("api_internal_capstone") / "capstone.jsonl")
 
-    install_compliance_officer_grant(monkeypatch, granted=True)  # the route is role-gated
+    # The route is role-gated.
+    install_compliance_officer_grant(monkeypatch, granted=True, real_audit_store=True)
     app = create_app(config)
     # Every pipeline stage writes through the Graph Write Gateway. `TestClient` is not
     # entered, so the app lifespan never installs it: install the real one (PS state Postgres and

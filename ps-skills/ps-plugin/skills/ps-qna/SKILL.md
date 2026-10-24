@@ -80,7 +80,10 @@ request, not shown by default.
    are counted on the survivor. A `MergedCapability` node
    (`id`, `merged_into`) records which Capability replaced it; read it only
    when the user explicitly asks about merged duplicates or merge history,
-   and say so in the gate statement. This does not extend
+   and say so in the gate statement. A `ResolvedCapability` node
+   (`id`, `resolves_to`) records an automatic resolution of an incoming
+   Capability onto an existing one; it is not a Capability, so read it only
+   when the user asks about resolution history. This does not extend
    to Policy (draft\|approved\|deprecated) or Standard/Control
    (`implementation_status`: planned\|draft\|implemented\|reviewed\|
    deprecated) — ask explicitly instead. An entity with no status

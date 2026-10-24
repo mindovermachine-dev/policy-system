@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from graph_gateway.live_endpoints import falkordb_endpoint
 
 from graph_cleanup._legacy_reference import FROZEN_STATEMENTS, run_frozen_merge_capabilities
 from ps_service.graph_cleanup.errors import GraphCleanupStaleStateError
@@ -55,7 +56,8 @@ def _delete(db: FalkorDB) -> None:
 
 @pytest.fixture
 def graph() -> Iterator[GraphHandle]:
-    db = connect(host="127.0.0.1", port=6379)
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
     _delete(db)
     handle = select_graph(db, _GRAPH)
     handle.query(

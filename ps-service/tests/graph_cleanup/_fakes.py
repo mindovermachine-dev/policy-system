@@ -120,6 +120,9 @@ class RecordingAuditStore:
     rows: list[RecordedAudit] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
     raise_on_outcome: dict[str, Exception] = field(default_factory=dict)
+    raise_on_call: dict[int, Exception] = field(default_factory=dict)
+    """Raise on the given 1-based `record_standalone_with_event_id` call number."""
+    standalone_calls: int = 0
     history: list[AuditEventRow] = field(default_factory=list)
     query_error: Exception | None = None
     query_calls: int = 0
@@ -167,7 +170,8 @@ class RecordingAuditStore:
         """Record the row as `record_standalone` does and return its fresh event id."""
         from ps_service.audit.models import resolve_details_model
 
-        error = self.raise_on_outcome.get(outcome)
+        self.standalone_calls += 1
+        error = self.raise_on_call.get(self.standalone_calls) or self.raise_on_outcome.get(outcome)
         if error is not None:
             raise error
         model = resolve_details_model(action)

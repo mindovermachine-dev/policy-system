@@ -270,3 +270,34 @@ def test_export_instrument_returns_the_manifest_matching_the_written_file(
     instrument_dir = repo_root / "curated-content" / "CRA-1.0"
     document = json.loads((instrument_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest == InstrumentManifest(**document)
+
+
+def test_export_instrument_never_serializes_a_resolution_marker_from_the_single_tenant_graph(
+    tmp_path: Path, make_emitter: MakeEmitter, rig: ExportRig
+) -> None:
+    """Only the instrument's own baseline and native graphs are serialized.
+
+    A `ResolvedCapability` marker lives only in `policy_system`, so no artifact can carry it.
+    """
+    emitter, _log_path = make_emitter()
+    repo_root = tmp_path / "repo"
+    policy_system = rig.rig.graphs.open("policy_system")
+    rig.seed_node(policy_system, "ResolvedCapability", "cap_x", {"resolves_to": "cap_1"})
+
+    _export(
+        rig,
+        _CRA_DESCRIPTOR,
+        repo_root,
+        tmp_path / "packaged" / "catalog.json",
+        _FakeEmbeddingCaller([0.1, 0.2]),
+        emitter,
+    )
+
+    instrument_dir = repo_root / "curated-content" / "CRA-1.0"
+    baseline_text = (instrument_dir / "baseline.json").read_text(encoding="utf-8")
+    native_text = (instrument_dir / "native.json").read_text(encoding="utf-8")
+    assert "ResolvedCapability" not in baseline_text
+    assert "ResolvedCapability" not in native_text
+    exported_ids = [node["properties"]["id"] for node in json.loads(baseline_text)["nodes"]]
+    assert "cap_1" in exported_ids
+    assert ("ResolvedCapability", "cap_x") in policy_system.nodes

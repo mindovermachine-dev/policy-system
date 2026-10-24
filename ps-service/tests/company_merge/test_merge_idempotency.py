@@ -256,7 +256,7 @@ class _FakeSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
-        if "MERGED_INTO" in q or "(m:Merged" in q:  # no tombstones/markers
+        if "MERGED_INTO" in q or "(m:Merged" in q or "(m:Resolved" in q:  # no tombstones/markers
             return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult(self._capability_index_rows())

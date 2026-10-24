@@ -13,7 +13,7 @@ resolution to look up. Fakes mirror `test_graph_writer_edge_rewiring.py`'s
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 import pytest
@@ -140,18 +140,17 @@ def test_only_the_missing_endpoint_is_named_in_the_error() -> None:
 
 
 def _minimal_baseline_graph(**overrides: object) -> BaselineGraph:
-    defaults: dict[str, object] = {
-        "regulatory_instrument_id": "REG-1.0",
-        "regulatory_instrument_properties": {},
-        "role_nodes": (),
-        "requirement_nodes": (),
-        "obligation_nodes": (),
-        "capability_nodes": (),
-        "provenance_edges": (),
-        "bare_edges": (),
-    }
-    defaults.update(overrides)
-    return BaselineGraph(**defaults)  # type: ignore[arg-type]
+    minimal = BaselineGraph(
+        regulatory_instrument_id="REG-1.0",
+        regulatory_instrument_properties={},
+        role_nodes=(),
+        requirement_nodes=(),
+        obligation_nodes=(),
+        capability_nodes=(),
+        provenance_edges=(),
+        bare_edges=(),
+    )
+    return replace(minimal, **overrides)
 
 
 def test_classification_write_counts_reports_every_key_correctly() -> None:
@@ -214,3 +213,21 @@ def test_endpoint_that_only_a_merge_marker_holds_is_reported_missing() -> None:
 
     with pytest.raises(CompanyMergePersistenceError, match="obl_gone"):
         validate_classification_edge_endpoints(graph, (edge,), {"cap_x": "cap_x"})
+
+
+def test_an_endpoint_that_only_a_resolution_marker_holds_is_reported_missing() -> None:
+    """A resolved id was never minted: its marker is not a node an edge may point at.
+
+    The store parses the `NOT n:<Label>` exclusions out of the query it receives, so the id is
+    reported missing only when the existence read itself excludes the `ResolvedCapability` label.
+    """
+    graph = SingleTenantStore(
+        nodes={("ResolvedCapability", "cap_resolved"): {"resolves_to": "cap_x"}}
+    )
+    edge = BareEdge(relationship_type="COVERS", source_id="pa_1", target_id="cap_resolved")
+
+    with pytest.raises(CompanyMergePersistenceError, match="cap_resolved"):
+        validate_classification_edge_endpoints(graph, (edge,), {"pa_1": "pa_1"})
+
+    assert graph.statements == [ANY_LABEL_EXISTENCE_READ]
+    assert "NOT n:ResolvedCapability" in ANY_LABEL_EXISTENCE_READ

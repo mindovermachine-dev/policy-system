@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from graph_gateway.live_endpoints import falkordb_endpoint
 
 from ps_service.change_monitor import falkordb_client as falkordb_client_module
 from ps_service.change_monitor.errors import ChangeMonitorConfigurationError
@@ -128,9 +129,10 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
 
 @pytest.mark.falkordb_live
 def test_check_connectivity_succeeds_against_real_falkordb_instance() -> None:
-    """Real connect to 127.0.0.1:6379 -- requires a reachable FalkorDB
+    """Real connect to the live-test FalkorDB -- requires a reachable FalkorDB
     instance.
     """
-    db = connect(host="127.0.0.1", port=6379)
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
 
-    check_connectivity(db, host="127.0.0.1", port=6379)
+    check_connectivity(db, host=host, port=port)

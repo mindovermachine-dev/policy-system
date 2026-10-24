@@ -66,7 +66,7 @@ def test_audit_context_is_frozen_and_carries_actor_and_store() -> None:
     assert context.actor == _ACTOR
     assert context.store is store
     with pytest.raises(dataclasses.FrozenInstanceError):
-        context.actor = ("x", "y")  # type: ignore[misc]
+        context.actor = ("x", "y")  # pyright: ignore[reportAttributeAccessIssue]  # deliberately mutating a frozen dataclass to prove it raises
 
 
 def test_record_opening_row_writes_an_applied_row_with_the_given_actor() -> None:

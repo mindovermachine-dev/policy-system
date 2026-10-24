@@ -1354,6 +1354,7 @@ def install_compliance_officer_grant(
     *,
     granted: bool,
     roles: frozenset[AccessRole] | None = None,
+    real_audit_store: bool = False,
 ) -> None:
     """Wire a real, verified principal through a route's ``require_access_role`` gate.
 
@@ -1408,6 +1409,12 @@ def install_compliance_officer_grant(
             ``frozenset({AccessRole.AUTHENTICATED_USER})`` when
             ``granted=False`` and ``roles`` is omitted. Ignored when
             ``granted=True``.
+        real_audit_store: ``False`` swaps ``PsycopgAuditStore`` for a fresh
+            in-memory store, so a fast test writes no audit row to Postgres.
+            ``True`` keeps the real store, for a live test whose route anchors
+            its graph-log groups to the audit row it opens: the graph log's
+            audit link is a foreign key into ``audit_events``, so that row must
+            reach the same Postgres the gateway writes to.
     """
     principal = compliance_officer_principal()
     resolved_roles = (
@@ -1428,8 +1435,9 @@ def install_compliance_officer_grant(
     # detroit-exception: called as a raw function inside require_access_role's own closure
     monkeypatch.setattr(dependencies, "get_principal", _get_principal)
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _store_factory)
-    # A denial now writes its `access.gate` audit row; keep that write in memory, never Postgres.
-    monkeypatch.setattr(dependencies, "PsycopgAuditStore", _in_memory_audit_store_factory)
+    if not real_audit_store:
+        # A denial writes its `access.gate` audit row; keep that write in memory, never Postgres.
+        monkeypatch.setattr(dependencies, "PsycopgAuditStore", _in_memory_audit_store_factory)
 
 
 def install_compliance_officer_caller(

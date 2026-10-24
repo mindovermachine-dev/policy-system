@@ -75,7 +75,7 @@ from ps_service.query_engine.cypher_query import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Mapping
 
     import pytest
 
@@ -353,6 +353,16 @@ def _text(result: CallToolResult) -> str:
     return block.text
 
 
+def _merged_property(content: Mapping[str, object], name: str) -> str:
+    """The text property `name` a `merge_property` log entry writes.
+
+    A log entry's `content` is the JSON document Postgres stores, typed `dict[str, object]`; the
+    casts fix the `merge_property` shape: a `properties` object whose drafted fields are strings.
+    """
+    properties = cast("dict[str, object]", content["properties"])
+    return cast("str", properties[name])
+
+
 def _call_create_policy_draft(*, title: str) -> CallToolResult:
     result = asyncio.run(_server().call_tool("create-policy-draft", {"title": title}))
     assert isinstance(result, CallToolResult)
@@ -468,7 +478,7 @@ def test_update_standard_draft_persists_procedure_with_sources_suffix(
     assert len(groups) == 3
     assert [e.content["op"] for e in groups[-1].entries] == ["merge_property"]
 
-    persisted_procedure = cast("str", groups[-1].entries[0].content["properties"]["procedure"])  # type: ignore[index]
+    persisted_procedure = _merged_property(groups[-1].entries[0].content, "procedure")
     assert persisted_procedure == _PROCEDURE_WITH_SOURCE
     assert persisted_procedure.endswith(f"Sources: {_SOURCE_URL}")
 
@@ -514,10 +524,7 @@ def test_update_control_draft_persists_execution_method_with_sources_suffix(
     assert len(groups) == 4
     assert [e.content["op"] for e in groups[-1].entries] == ["merge_property"]
 
-    persisted_method = cast(
-        "str",
-        groups[-1].entries[0].content["properties"]["execution_method"],  # type: ignore[index]
-    )
+    persisted_method = _merged_property(groups[-1].entries[0].content, "execution_method")
     assert persisted_method == _EXECUTION_METHOD_WITH_SOURCE
     assert persisted_method.endswith(f"Sources: {_SOURCE_URL}")
 
@@ -549,6 +556,6 @@ def test_update_standard_draft_without_sources_suffix_round_trips(
     assert body["policy_id"] == policy_id
 
     groups = installed_process_gateway().rig.store.groups
-    persisted_procedure = cast("str", groups[-1].entries[0].content["properties"]["procedure"])  # type: ignore[index]
+    persisted_procedure = _merged_property(groups[-1].entries[0].content, "procedure")
     assert persisted_procedure == _PROCEDURE_WITHOUT_SOURCE
     assert "Sources:" not in persisted_procedure
