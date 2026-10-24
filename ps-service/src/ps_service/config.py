@@ -37,6 +37,8 @@ _DEFAULT_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS = 5.0
 _DEFAULT_STATE_POSTGRES_STATEMENT_TIMEOUT_MS = 30000
 _DEFAULT_PASSKEY_SIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS = 5.0
 _DEFAULT_PASSKEY_SIGNING_POSTGRES_STATEMENT_TIMEOUT_MS = 30000
+_DEFAULT_READY_REPROBE_MIN_INTERVAL_SECONDS = 5.0
+_DEFAULT_READY_REPROBE_DEADLINE_SECONDS = 3.0
 _DEFAULT_QUERY_ROW_CAP = 1000
 _DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS = 3600
 _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT = 1
@@ -108,6 +110,16 @@ class ServiceConfig:
         max_request_body_bytes: Largest accepted request body, checked against the
             `Content-Length` header before any body is read
             (`PS_SERVICE_MAX_REQUEST_BODY_BYTES`); positive, default 100 MiB.
+        ready_reprobe_min_interval_seconds: Shortest time between the starts of two `/ready`
+            re-probes of the same dependency, in seconds
+            (`PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS`); finite and not negative, default 5.
+            Zero turns the rate limit off. `/ready` is anonymous, so this caps how often a caller
+            can make the service probe a dependency.
+        ready_reprobe_deadline_seconds: Longest one `/ready` poll waits for the re-probe of an
+            unhealthy gating dependency, in seconds (`PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS`);
+            positive and finite, default 3. Keep it below the readiness probe's
+            `timeoutSeconds`, so a hung dependency still gets an answer rather than a client-side
+            probe timeout.
         query_timeout_ms: Server-side time limit for one Cypher query in milliseconds
             (`PS_QUERY_TIMEOUT_MS`); positive, default 5000.
         query_row_cap: Maximum rows one Cypher query returns (`PS_QUERY_ROW_CAP`); positive,
@@ -211,6 +223,8 @@ class ServiceConfig:
     company_merge_role_review_threshold: float | None = None
     is_local_test_bypass_active: bool = False
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
+    ready_reprobe_min_interval_seconds: float = _DEFAULT_READY_REPROBE_MIN_INTERVAL_SECONDS
+    ready_reprobe_deadline_seconds: float = _DEFAULT_READY_REPROBE_DEADLINE_SECONDS
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
     query_row_cap: int = _DEFAULT_QUERY_ROW_CAP
     falkordb_connect_timeout_seconds: float = _DEFAULT_FALKORDB_CONNECT_TIMEOUT_SECONDS
@@ -566,6 +580,30 @@ def _parse_positive_seconds(raw: str, *, env_var_name: str) -> float:
         raise ServiceConfigurationError(message) from exc
     if not math.isfinite(seconds) or seconds <= 0:
         message = f"{env_var_name} must be a positive finite number of seconds, got {raw!r}"
+        raise ServiceConfigurationError(message)
+    return seconds
+
+
+def _parse_non_negative_seconds(raw: str, *, env_var_name: str) -> float:
+    """Parse a duration in seconds that may be zero, failing closed on any bad value.
+
+    Args:
+        raw: The raw environment value.
+        env_var_name: Variable name, quoted in the error message.
+
+    Returns:
+        The duration in seconds; always finite and at least zero.
+
+    Raises:
+        ServiceConfigurationError: The value is not a number, is not finite, or is negative.
+    """
+    try:
+        seconds = float(raw)
+    except ValueError as exc:
+        message = f"{env_var_name} must be a number of seconds, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if not math.isfinite(seconds) or seconds < 0:
+        message = f"{env_var_name} must be a finite number of seconds, not negative, got {raw!r}"
         raise ServiceConfigurationError(message)
     return seconds
 
@@ -1265,6 +1303,20 @@ def load_config() -> ServiceConfig:
         company_merge_role_review_threshold=company_merge_role_review_threshold,
         is_local_test_bypass_active=is_local_test_bypass_active,
         max_request_body_bytes=max_request_body_bytes,
+        ready_reprobe_min_interval_seconds=_parse_non_negative_seconds(
+            os.environ.get(
+                "PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS",
+                str(_DEFAULT_READY_REPROBE_MIN_INTERVAL_SECONDS),
+            ),
+            env_var_name="PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS",
+        ),
+        ready_reprobe_deadline_seconds=_parse_positive_seconds(
+            os.environ.get(
+                "PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS",
+                str(_DEFAULT_READY_REPROBE_DEADLINE_SECONDS),
+            ),
+            env_var_name="PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS",
+        ),
         query_timeout_ms=query_timeout_ms,
         query_row_cap=_parse_query_row_cap(
             os.environ.get("PS_QUERY_ROW_CAP", str(_DEFAULT_QUERY_ROW_CAP))

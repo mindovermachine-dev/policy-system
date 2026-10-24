@@ -72,3 +72,11 @@ def test_startup_window_covers_the_retry_budget_and_fits_the_helm_timeout() -> N
 
     assert window >= budget + _STARTUP_MARGIN_SECONDS
     assert window < _helm_wait_seconds()
+
+
+def test_default_ready_reprobe_deadline_is_below_the_chart_readiness_timeout() -> None:
+    probes = cast("dict[str, object]", _ps_service_values()["probes"])
+    readiness = cast("dict[str, object]", probes["readiness"])
+    timeout_seconds = cast("int", readiness["timeoutSeconds"])
+
+    assert _compiled_defaults().ready_reprobe_deadline_seconds < timeout_seconds

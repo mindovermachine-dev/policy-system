@@ -21,7 +21,7 @@ import uuid
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 from unittest.mock import Mock
 
 import psycopg
@@ -34,6 +34,7 @@ from graph_gateway.live_endpoints import FALKORDB_TEST_TIMEOUTS, falkordb_endpoi
 from graph_gateway.live_postgres import committed_audit_event
 from graph_gateway.silent_peer import silent_peer
 from mcp.server.auth.provider import AccessToken
+from metrics._scrape import samples
 from persistence.provisioned_postgres import Provisioned, provision_graph_log
 from starlette.requests import Request
 
@@ -54,6 +55,7 @@ from ps_service.graph_gateway.models import (
 )
 from ps_service.graph_gateway.replay_state import read_replay_state
 from ps_service.graph_gateway.store import PsycopgGraphLogStore
+from ps_service.ingestion import falkordb_client as ingestion_falkordb_client
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
@@ -1565,22 +1567,6 @@ def test_graph_replay_is_a_gating_and_ready_dependency() -> None:
     assert dependency_health.GRAPH_REPLAY in gating_dependencies
 
 
-def test_graph_replay_probe_is_registered_for_the_retry_loop() -> None:
-    """`_retry_gating_dependencies` looks up a probe for every gating name (a missing key would
-    raise). Replay owns its own state, so the probe records nothing: a poll of `/ready` must
-    neither fail nor flip the dependency healthy while the replay is still running.
-    """
-    probes = dict(main_module._all_dependency_probes(_complete_config()))  # pyright: ignore[reportPrivateUsage]
-    dependency_health.mark_unhealthy(
-        dependency_health.GRAPH_REPLAY, error=RuntimeError("replay running")
-    )
-
-    probes[dependency_health.GRAPH_REPLAY]()
-
-    assert dependency_health.is_healthy(dependency_health.GRAPH_REPLAY) is False
-    assert main_module._retry_gating_dependencies(_complete_config()) is False  # pyright: ignore[reportPrivateUsage]
-
-
 def test_ready_is_not_ready_when_state_postgres_check_fails(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
@@ -1857,24 +1843,6 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
         }
 
 
-def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -> None:
-    with TestClient(app) as client:
-        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
-        assert _ready_detail(client).json() == {
-            "status": "not_ready",
-            "unhealthy_dependencies": ["falkordb"],
-            "gated_graphs": [],
-        }
-
-        dependency_health.mark_healthy(dependency_health.FALKORDB)
-
-        assert _ready_detail(client).json() == {
-            "status": "ready",
-            "unhealthy_dependencies": [],
-            "gated_graphs": [],
-        }
-
-
 def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: FastAPI) -> None:
     """A fully healthy `/ready` response names zero unhealthy dependencies."""
     with TestClient(app) as client:
@@ -1962,10 +1930,11 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
 def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without_restart(
     app: FastAPI,
 ) -> None:
-    """Through LLM Interface: once LLM Interface recovers, its
-    name drops from `unhealthy_dependencies` on the next poll, without a
-    restart. `status` stays `ready` throughout, since LLM Interface never
-    gates it.
+    """Through LLM Interface: once a real call marks LLM Interface healthy again, its name
+    drops from `unhealthy_dependencies` on the next poll, without a restart. `/ready` never
+    probes it (the probe costs quota), so the recovery has to come from a real call, which this
+    test stands in for with `mark_healthy`. `status` stays `ready` throughout, since LLM
+    Interface never gates it.
     """
     with TestClient(app) as client:
         dependency_health.mark_unhealthy(
@@ -1989,8 +1958,9 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
 def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_restart(
     app: FastAPI,
 ) -> None:
-    """Through Cellar/ELI: once Cellar/ELI recovers, its name
-    drops from `unhealthy_dependencies` on the next poll, without a restart.
+    """Through Cellar/ELI: once a real call marks Cellar/ELI healthy again, its name drops from
+    `unhealthy_dependencies` on the next poll, without a restart. `/ready` never probes it, so the
+    recovery has to come from a real call, which this test stands in for with `mark_healthy`.
     `status` stays `ready` throughout, since Cellar/ELI never gates it.
     """
     with TestClient(app) as client:
@@ -2124,7 +2094,7 @@ def test_startup_cellar_eli_failure_emits_a_warning_log_entry_naming_the_depende
 
 
 def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_probe(
-    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The exact race of FalkorDB being
     unreachable at ps-service startup, then reachable seconds later.
@@ -2132,6 +2102,7 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
     startup probe failed; the next `/ready` poll after recovery reports
     `ready`, with no process restart.
     """
+    app = create_app(_complete_config(ready_reprobe_min_interval_seconds=0))
     falkordb_reachable = False
 
     def flaky_falkordb_check(config: ServiceConfig) -> None:
@@ -2186,20 +2157,233 @@ def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_
             }
 
 
-def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succeeds(
+class _FakeFalkorDb:
+    """The connection FalkorDB's own client would return: lists graphs, or refuses."""
+
+    def __init__(self, state: dict[str, bool]) -> None:
+        self._state = state
+
+    def list_graphs(self) -> list[str]:
+        if self._state["down"]:
+            raise ConnectionError("secret-host-1234 refused")
+        return []
+
+
+class _FakeStatePostgresConnection:
+    """The connection the state store's driver would return: a context manager with a cursor."""
+
+    def __init__(self, state: dict[str, bool]) -> None:
+        self._state = state
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        return False
+
+    def cursor(self) -> _FakeStatePostgresConnection:
+        return self
+
+    def execute(self, sql: str) -> None:
+        del sql
+        if self._state["down"]:
+            raise psycopg.OperationalError("secret-host-1234 refused")
+
+
+def _fake_connect[T](connection: T) -> Callable[[ServiceConfig], T]:
+    """A `connect_from_config` stand-in that hands out `connection` whatever the config."""
+
+    def connect(config: ServiceConfig) -> T:
+        del config
+        return connection
+
+    return connect
+
+
+def _gating_gauge(client: TestClient) -> float:
+    gauge = "ps_service_dependencies_unhealthy"
+    return {s.labels["gating"]: s.value for s in samples(client.get("/metrics").content, gauge)}[
+        "true"
+    ]
+
+
+@pytest.mark.parametrize(
+    "dependency", [dependency_health.FALKORDB, dependency_health.STATE_POSTGRES]
+)
+def test_ready_recovers_through_the_real_probe_after_a_mid_run_outage(
+    dependency: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real connectivity probe, over a fake driver, is what turns `/ready` green again."""
+    state = {"down": False}
+    app = create_app(_complete_config(ready_reprobe_min_interval_seconds=0))
+
+    with TestClient(app) as client:
+        assert client.get("/ready").status_code == 200
+
+        state["down"] = True
+        if dependency == dependency_health.FALKORDB:
+            monkeypatch.setattr(
+                main_module,
+                "check_falkordb_connectivity",
+                ingestion_falkordb_client.check_connectivity_from_config,
+            )
+            monkeypatch.setattr(
+                "ps_service.ingestion.falkordb_client.connect_from_config",
+                _fake_connect(_FakeFalkorDb(state)),
+            )
+        else:
+            monkeypatch.setattr(
+                main_module,
+                "check_state_postgres_connectivity",
+                check_state_postgres_connectivity,
+            )
+            monkeypatch.setattr(
+                "ps_service.persistence.connection.connect_from_config",
+                _fake_connect(_FakeStatePostgresConnection(state)),
+            )
+        dependency_health.mark_unhealthy(dependency, error=RuntimeError("a real call failed"))
+
+        outage = _ready_detail(client)
+        assert outage.status_code == 503
+        assert outage.json()["unhealthy_dependencies"] == [dependency]
+        assert _gating_gauge(client) == 1
+
+        state["down"] = False
+
+        recovered = _ready_detail(client)
+        assert recovered.status_code == 200
+        assert recovered.json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
+        assert _gating_gauge(client) == 0
+
+
+def test_ready_stays_not_ready_and_names_the_dependency_while_the_probe_still_fails(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """The retry loop is written against `_GATING_DEPENDENCIES`
-    (today: FalkorDB alone), not hardcoded to FalkorDB by name -- proven here by widening the
+    def failing_falkordb_check(config: ServiceConfig) -> None:
+        del config
+        error = ConnectionError("secret-host-1234 refused")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
+        dependency_health.mark_unhealthy(
+            dependency_health.FALKORDB, error=ConnectionError("secret-host-1234 refused")
+        )
+
+        anonymous = client.get("/ready")
+        authenticated = _ready_detail(client)
+
+    assert anonymous.status_code == 503
+    assert anonymous.json() == {"status": "not_ready"}
+    assert authenticated.status_code == 503
+    assert authenticated.json()["unhealthy_dependencies"] == ["falkordb"]
+    assert "secret-host-1234" not in anonymous.text + authenticated.text
+
+
+class _SeamCalls:
+    """Counts of every probe seam `main` calls, with each seam's stand-in installed."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.counts: dict[str, int] = {}
+        counting = self._counting
+        monkeypatch.setattr(main_module, "check_falkordb_connectivity", counting("falkordb"))
+        monkeypatch.setattr(main_module, "check_llm_interface_connectivity", counting("llm"))
+        monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", counting("cellar"))
+        monkeypatch.setattr(
+            main_module, "check_passkey_signing_postgres_connectivity", counting("passkey")
+        )
+        monkeypatch.setattr(main_module, "check_state_postgres_connectivity", counting("state"))
+
+    def _counting(self, name: str) -> Callable[..., None]:
+        def count(*args: object) -> None:
+            del args
+            self.counts[name] = self.counts.get(name, 0) + 1
+
+        return count
+
+    def snapshot(self) -> dict[str, int]:
+        return dict(self.counts)
+
+
+def test_ready_makes_zero_probe_calls_while_every_gating_dependency_is_healthy(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    seams = _SeamCalls(monkeypatch)
+
+    with TestClient(app) as client:
+        after_startup = seams.snapshot()
+        dependency_health.mark_unhealthy(
+            dependency_health.LLM_INTERFACE, error=RuntimeError("quota")
+        )
+        statuses = [client.get("/ready").status_code for _ in range(5)]
+
+    assert statuses == [200] * 5
+    assert seams.snapshot() == after_startup
+
+
+def test_ready_does_not_probe_llm_interface_or_cellar_eli_while_unhealthy_and_replay_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocked = _BlockedReplay()
+    app = _app_replaying(monkeypatch, blocked)
+    seams = _SeamCalls(monkeypatch)
+
+    with TestClient(app) as client:
+        assert blocked.reached.wait(timeout=5)
+        after_startup = seams.snapshot()
+        for name in (dependency_health.LLM_INTERFACE, dependency_health.CELLAR_ELI):
+            dependency_health.mark_unhealthy(name, error=RuntimeError("down"))
+        statuses = [client.get("/ready").status_code for _ in range(5)]
+        blocked.release.set()
+        _await_ready(client)
+
+    assert statuses == [503] * 5
+    assert seams.snapshot() == after_startup
+
+
+def test_rapid_ready_polls_reuse_the_last_result_within_the_default_interval(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    probes = 0
+
+    def failing_falkordb_check(config: ServiceConfig) -> None:
+        nonlocal probes
+        del config
+        probes += 1
+        error = ConnectionError("still down")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("down"))
+
+        statuses = [client.get("/ready").status_code for _ in range(10)]
+
+    assert statuses == [503] * 10
+    assert probes == 1
+
+
+def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `/ready` re-probe is written against `_GATING_DEPENDENCIES`, not hardcoded to
+    FalkorDB by name -- proven here by widening the
     *real* `_GATING_DEPENDENCIES` set to also cover LLM Interface: an already-real dependency
     `_all_dependency_probes` already probes for, not a fabricated identity standing in for a
     future one. `_all_dependency_probes` itself is never replaced -- the real (name, probe)
     wiring for both dependencies runs unmodified, via the same already-approved-boundary
     `check_falkordb_connectivity`/`check_llm_interface_connectivity` substitution pattern this
-    file uses throughout -- so this proves the retry loop's own iteration is generic, not that a
+    file uses throughout -- so this proves the re-probe's own iteration is generic, not that a
     synthetic probe list happens to behave correctly. `app.state.ready` must flip `True` only
-    once every gating dependency succeeds, and each is retried independently on later polls.
+    once every gating dependency succeeds, and each is re-probed independently on later polls.
     """
+    app = create_app(_complete_config(ready_reprobe_min_interval_seconds=0))
     falkordb_reachable = False
     llm_interface_reachable = False
 
@@ -2242,24 +2426,23 @@ def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succ
         assert client.get("/ready").json()["status"] == "ready"
 
 
-def test_concurrent_ready_polls_while_not_ready_leave_app_state_consistent(
+def test_concurrent_ready_polls_run_exactly_one_probe_per_unhealthy_dependency_and_agree(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """Concurrent `/ready` requests while `app.state.ready` is
-    `False` must not corrupt `dependency_health` registry state or leave
-    `app.state.ready` inconsistent. `ready()`'s retry body has no `await`
-    point (an anonymous call never reaches the verifier), so within one process no two calls
-    ever truly interleave --
-    proven here by actually racing many concurrent calls via
-    `asyncio.gather` against the same running app.
-    """
+    """Twenty polls in flight at once share one probe per unhealthy gating dependency."""
+    release = threading.Event()
+    calls: dict[str, int] = {}
+    calls_lock = threading.Lock()
 
-    def failing_falkordb_check(config: ServiceConfig) -> None:
-        error = ConnectionError("boom")
-        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
-        raise error
+    def blocked_probe(name: str) -> Callable[[ServiceConfig], None]:
+        def probe(config: ServiceConfig) -> None:
+            del config
+            with calls_lock:
+                calls[name] = calls.get(name, 0) + 1
+            assert release.wait(timeout=10)
+            raise ConnectionError("still down")
 
-    monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
+        return probe
 
     ready_route = cast(
         "APIRoute", next(route for route in app.routes if getattr(route, "path", None) == "/ready")
@@ -2270,14 +2453,202 @@ def test_concurrent_ready_polls_while_not_ready_leave_app_state_consistent(
         return cast("JSONResponse", await ready_route.endpoint(anonymous_request))
 
     async def poll_many() -> list[JSONResponse]:
-        return await asyncio.gather(*(poll() for _ in range(20)))
+        polls = [asyncio.ensure_future(poll()) for _ in range(20)]
+        await asyncio.sleep(0.3)
+        release.set()
+        return await asyncio.gather(*polls)
 
     with TestClient(app):
+        monkeypatch.setattr(main_module, "check_falkordb_connectivity", blocked_probe("falkordb"))
+        monkeypatch.setattr(
+            main_module, "check_state_postgres_connectivity", blocked_probe("state_postgres")
+        )
+        for name in (dependency_health.FALKORDB, dependency_health.STATE_POSTGRES):
+            dependency_health.mark_unhealthy(name, error=RuntimeError("down"))
         responses = asyncio.run(poll_many())
 
-    assert all(response.status_code == 503 for response in responses)
-    assert app.state.ready is False
+    assert calls == {"falkordb": 1, "state_postgres": 1}
+    assert {(response.status_code, response.body) for response in responses} == {
+        (503, b'{"status":"not_ready"}')
+    }
     assert dependency_health.is_healthy(dependency_health.FALKORDB) is False
+
+
+class _HangingProbes:
+    """Gating probes that block on one event, then fail; counts the calls each one gets."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.release = threading.Event()
+        self.calls = {"falkordb": 0, "state_postgres": 0}
+        self._lock = threading.Lock()
+        monkeypatch.setattr(main_module, "check_falkordb_connectivity", self._blocked("falkordb"))
+        monkeypatch.setattr(
+            main_module, "check_state_postgres_connectivity", self._blocked("state_postgres")
+        )
+
+    def _blocked(self, name: str) -> Callable[[ServiceConfig], None]:
+        def probe(config: ServiceConfig) -> None:
+            del config
+            with self._lock:
+                self.calls[name] += 1
+            self.release.wait(timeout=10)
+            raise ConnectionError("secret-host-1234 refused")
+
+        return probe
+
+
+def _probes_are_blocked(probes: _HangingProbes) -> bool:
+    """Wait until both probes are blocked in their dependency calls."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if all(count == 1 for count in probes.calls.values()):
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _mark_both_gating_dependencies_unhealthy() -> None:
+    for name in (dependency_health.FALKORDB, dependency_health.STATE_POSTGRES):
+        dependency_health.mark_unhealthy(name, error=RuntimeError("down"))
+
+
+def test_ready_answers_503_within_one_deadline_when_both_dependencies_hang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deadline = 0.3
+    app = create_app(_complete_config(ready_reprobe_deadline_seconds=deadline))
+    with TestClient(app) as client:
+        probes = _HangingProbes(monkeypatch)
+        _mark_both_gating_dependencies_unhealthy()
+        try:
+            started = time.monotonic()
+            response = client.get("/ready")
+            elapsed = time.monotonic() - started
+        finally:
+            probes.release.set()
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+    assert deadline * 0.8 <= elapsed < deadline * 2.5
+    assert probes.calls == {"falkordb": 1, "state_postgres": 1}
+
+
+def test_a_hung_probe_never_stalls_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(_complete_config(ready_reprobe_deadline_seconds=1.0))
+    with TestClient(app) as client:
+        probes = _HangingProbes(monkeypatch)
+        _mark_both_gating_dependencies_unhealthy()
+        ready_answers: list[int] = []
+        poller = threading.Thread(
+            target=lambda: ready_answers.append(client.get("/ready").status_code)
+        )
+        poller.start()
+        try:
+            assert _probes_are_blocked(probes)
+            started = time.monotonic()
+            health = client.get("/health")
+            health_elapsed = time.monotonic() - started
+            assert ready_answers == []
+        finally:
+            probes.release.set()
+            poller.join(timeout=10)
+
+    assert health.status_code == 200
+    assert health_elapsed < 0.5
+    assert ready_answers == [503]
+
+
+def test_ready_answers_503_not_a_5xx_when_a_probe_raises(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    with TestClient(app) as client:
+        probes = _HangingProbes(monkeypatch)
+        probes.release.set()
+        _mark_both_gating_dependencies_unhealthy()
+
+        anonymous = client.get("/ready")
+        authenticated = _ready_detail(client)
+
+    assert (anonymous.status_code, authenticated.status_code) == (503, 503)
+    assert anonymous.json() == {"status": "not_ready"}
+    assert "secret-host-1234" not in anonymous.text + authenticated.text
+
+
+def test_ready_reprobe_log_entries_and_body_never_contain_the_probe_error_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    app = create_app(_complete_config(logging_dir=tmp_path, ready_reprobe_min_interval_seconds=0))
+    with TestClient(app) as client:
+        probes = _HangingProbes(monkeypatch)
+        probes.release.set()
+        _mark_both_gating_dependencies_unhealthy()
+
+        bodies = [client.get("/ready").text, _ready_detail(client).text, client.get("/ready").text]
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    lines = read_lines(tmp_path / "ps-service.jsonl")
+    entries = [line for line in lines if line.get("action") == "ready_reprobe"]
+    assert sorted(str(entry["dependency"]) for entry in entries) == ["falkordb", "state_postgres"]
+    assert {entry["outcome"] for entry in entries} == {"failed"}
+    assert {entry["error_class"] for entry in entries} == {"ConnectionError"}
+    assert "secret-host-1234" not in "".join(bodies)
+    assert "secret-host-1234" not in json.dumps(lines)
+
+
+def test_a_hung_probe_keeps_its_slot_so_later_polls_start_no_second_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(
+        _complete_config(ready_reprobe_deadline_seconds=0.1, ready_reprobe_min_interval_seconds=0)
+    )
+    with TestClient(app) as client:
+        probes = _HangingProbes(monkeypatch)
+        _mark_both_gating_dependencies_unhealthy()
+        try:
+            statuses = [client.get("/ready").status_code for _ in range(4)]
+        finally:
+            probes.release.set()
+
+    assert statuses == [503] * 4
+    assert probes.calls == {"falkordb": 1, "state_postgres": 1}
+
+
+def test_ready_authenticated_poll_with_a_slow_verifier_answers_within_the_deadline_anonymously(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def slow_verify_token(self: PsTokenVerifier, token: str) -> AccessToken | None:
+        await asyncio.sleep(10)
+        return AccessToken(token=token, client_id="detail-reader", scopes=[])
+
+    # detroit-exception: the verifier's cryptographic path needs a real IdP signing key; only its
+    # (here, very late) answer matters to the deadline under test
+    monkeypatch.setattr(PsTokenVerifier, "verify_token", slow_verify_token)
+    app = create_app(_complete_config(ready_reprobe_deadline_seconds=0.2))
+
+    with TestClient(app) as client:
+        started = time.monotonic()
+        response = _ready_detail(client)
+        elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+    assert elapsed < 1.0
+
+
+def test_ready_authenticated_poll_still_gets_the_detail_while_a_probe_hangs_within_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(_complete_config(ready_reprobe_deadline_seconds=0.3))
+    with TestClient(app) as client:
+        probes = _HangingProbes(monkeypatch)
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=RuntimeError("down"))
+        try:
+            response = _ready_detail(client)
+        finally:
+            probes.release.set()
+
+    assert response.status_code == 503
+    assert response.json()["unhealthy_dependencies"] == ["falkordb"]
 
 
 # --- Config-completeness-gated readiness -------------

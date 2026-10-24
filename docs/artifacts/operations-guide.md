@@ -856,6 +856,8 @@ start with a `ServiceConfigurationError` that names the variable.
 | `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` | 30000 | One statement on a request-path state Postgres connection (not startup migrations) | Positive integer number of milliseconds |
 | `PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS` | 5 | Establishing a connection to the passkey signing Postgres (`ps_signing`) | Positive number of seconds; libpq enforces a 2 second minimum |
 | `PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS` | 30000 | One statement on a request-path passkey signing Postgres connection | Positive integer number of milliseconds |
+| `PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` | 5 | Shortest time between the starts of two `/ready` re-probes of the same dependency | Finite number of seconds, 0 or more (0 removes the limit) |
+| `PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS` | 3 | How long one `/ready` poll waits for re-probes and for the caller's token check | Finite number of seconds, above 0 |
 
 The Helm chart does not expose these variables yet, so a deployment that needs a value other than
 the default sets it through the pod environment. The metrics scrape keeps its own fixed bounds
@@ -865,10 +867,10 @@ What an operator sees when a bound is hit:
 
 | Dependency | What happens | Where to look |
 | --- | --- | --- |
-| FalkorDB does not answer | The call fails after the bound, the gateway retries (4 attempts), then the caller gets `GraphUnavailableError`, or the group is reported as committed but not yet applied if it was already logged | `falkordb` in `unhealthy_dependencies`, `/ready` answers `503`; a later successful call makes it healthy again |
+| FalkorDB does not answer | The call fails after the bound, the gateway retries (4 attempts), then the caller gets `GraphUnavailableError`, or the group is reported as committed but not yet applied if it was already logged | `falkordb` in `unhealthy_dependencies`, `/ready` answers `503`; the next `/ready` poll re-probes FalkorDB, so it answers `200` again on its own once FalkorDB answers |
 | State Postgres does not answer at startup | The state migration step fails within the connect timeout, which is fatal: the pod exits and restarts | Pod logs and restarts |
-| State Postgres does not answer on a request | The store raises its fixed unavailable error within the connect timeout | `state_postgres` in `unhealthy_dependencies`, `/ready` answers `503` |
-| A state Postgres statement runs past the limit | The server cancels it and the store raises its fixed error, which carries no SQL, host or driver text | `state_postgres` goes unhealthy and heals on the next successful Postgres call (see the note below) |
+| State Postgres does not answer on a request | The store raises its fixed unavailable error within the connect timeout | `state_postgres` in `unhealthy_dependencies`, `/ready` answers `503`; the next `/ready` poll re-probes it, so it answers `200` again on its own once the database answers |
+| A state Postgres statement runs past the limit | The server cancels it and the store raises its fixed error, which carries no SQL, host or driver text | `state_postgres` goes unhealthy and heals through the `/ready` re-probe or the next successful Postgres call (see the note below) |
 | Passkey signing Postgres does not answer | Startup logs a warning and continues; approvals fail with the stores' fixed errors | `passkey_signing_postgres` in `unhealthy_dependencies` |
 
 **Tuning.** Keep `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` above `PS_QUERY_TIMEOUT_MS`: raise both
@@ -879,11 +881,21 @@ Raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` if the audit chain check (`verify
 `verify-audit-log` tool) or another large scan is cancelled on a large audit table; one bound
 covers all request-path statements, so there is no per-call override.
 
+**Readiness re-probe.** While FalkorDB or the state Postgres reads unhealthy, each `/ready` poll
+runs that dependency's connectivity check, at most once per
+`PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` and off the event loop, and waits at most
+`PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS` for it. The default interval is below the chart's
+readiness `periodSeconds`, so every kubelet poll re-probes. Keep the deadline below the readiness
+probe `timeoutSeconds` (5 s in the chart): a larger deadline lets a hung dependency turn the answer
+into a probe timeout instead of a `503`. The chart does not set either variable. A healthy
+dependency is never probed. The re-probe writes one `ready_reprobe` log entry with outcome `failed`
+and the exception class name when an outage starts, and one with outcome `succeeded` when it ends.
+
 **A cancelled statement marks the dependency unhealthy.** Dependency health records whether the
 most recent call succeeded. A statement cancelled by the statement timeout therefore turns
-`state_postgres` unhealthy and `/ready` to `503` until the next successful call to the database
-clears it. If the pod has already left rotation and receives no call, restart it (see the
-troubleshooting entry for `/ready` staying 503).
+`state_postgres` unhealthy and `/ready` to `503` until a successful call to the database clears it.
+The `/ready` re-probe is such a call, so a pod that has left rotation recovers on its own once the
+database answers; no restart is needed.
 
 ### FalkorDB graph name
 
@@ -904,7 +916,9 @@ verify, and every call while the local-test bypass is active receive only
 treated as no token. A call with a valid `Authorization: Bearer <access token>` (any verified
 user, no role needed) also receives `unhealthy_dependencies` and `gated_graphs`. The
 replay-gate `503` on every other path carries the status only. `ps-cli get health` sends your
-login automatically. To read the detail by hand:
+login automatically. A `/ready` poll can start a bounded re-probe of an unhealthy FalkorDB or
+state Postgres (see Readiness re-probe under the dependency timeouts); the answer reveals nothing
+beyond the fields above. To read the detail by hand:
 
 ```bash
 curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://ps.test:30443/ready
@@ -1633,11 +1647,11 @@ decision and not part of this procedure.
 | `ps-cli export instrument`, or `POST /exports`, fails with HTTP 409 `export_unresolved_near_misses`, or `tools/curated-export/export_instrument.py` exits 1 and prints the same message to stderr | The instrument still has unresolved near-miss reviews: the message gives the count and the review ids. Review decisions live in the `policy_system` graph, which an export never serializes, so exporting now would publish Capabilities or Roles that were never reviewed. Nothing was done: no `export.instrument` audit row, no embedding backfill and no file or `catalog.json` was written. Resolve the reviews (the `list-near-misses` and `resolve-near-miss` tools, or the `ps-near-miss-review` skill) and export again; there is no override. A stored review whose kind has no review spec refuses the export too, with HTTP 409 `review_kind_unsupported` naming the kind; listing and resolving refuse it the same way. If `policy_system` cannot be read the export fails closed with the usual graph error (HTTP 500 from the route, exit 1 from the shim) and writes nothing. The check reads the graph named by `PS_FALKORDB_GRAPH` (default `policy_system`, see [FalkorDB graph name](#falkordb-graph-name)). |
 | The near-miss review list is flooded with obviously unrelated pairs, or a known duplicate never appears in it | A review is raised only for a pair whose best similarity score is at or above `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` (chart `psService.companyMerge.capabilityReviewThreshold`) and below the merge threshold; it must not exceed the merge threshold or startup fails. Raise it to cut noise, lower it to surface more candidates. A pair that scored below it recorded nothing, so lowering the value later does not bring it back. Reviews already stored are not removed when you raise it. Role reviews (two Roles of one instrument) use `PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD` (chart `psService.companyMerge.roleReviewThreshold`, default 0.80, provisional until calibrated on a live CRA run) and follow the same rules; a Role review is never merged automatically. The shipped default, 0.43, sits at or below the lowest labelled true duplicate (0.4359; the labelled set has only 10 true pairs, so lower it if a real duplicate is missing); choose the value with `tools/company-merge/company_merge_similarity_sweep.py` and its `--floor` check. |
 | A restore is reported as committed but not yet applied (`committed_apply_pending` in the audit trail, `RestoreApplyPendingError`), or writes to `policy_system` or to the instrument's `_native`/`_baseline` graph are refused as blocked | The restore is recorded in the graph log, but the swap that makes it visible did not finish (FalkorDB was unreachable, or refused the swap). Until it finishes nothing of the instrument is visible, and the three graphs of the restore refuse further writes with nothing logged. Restore FalkorDB, then restart `ps-service`: startup recovery retries the swap, and finishes all three graphs together as one unit. Restoring the same instrument again is not needed. Last resort, only if the FalkorDB engine cannot perform the swap: rebuild each of the three graphs from its log in ascending graph-name order (the gateway's `replay_graph`); while they are rebuilt one by one a reader can see the three graphs in different states, so do it in a quiet window. The block lifts once every graph is at the head of its log. |
-| `/ready` stays 503 after FalkorDB or PS Postgres failed while the pod was running and then came back | After startup, readiness follows the live dependency health, which only real calls update; a pod that left rotation receives none, so it does not flip back by itself. Restart the `ps-service` pod. |
+| `/ready` answers 503 after FalkorDB or PS Postgres failed while the pod was running | Each `/ready` poll re-probes a failed FalkorDB or state Postgres, so the pod returns to `200` on its own within about `PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` of the dependency answering again; no restart is needed. If it stays `503`, the dependency is still unreachable: read `unhealthy_dependencies` (see [What `/ready` reveals](#what-ready-reveals)), the `ready_reprobe` entries in the pod log (exception class only) and the dependency itself. |
 | The pod was restarted (or received SIGTERM) while an ingestion started with `start-ingestion` was running, and `get-ingestion-status` still shows `running` | The run record stays `running` until the next `get-ingestion-status` call for it, which marks it `failed` with the message that the run was interrupted before it finished and its outcome is unknown. Start the ingestion again. |
 | Calls fail with `GraphUnavailableError`, or `falkordb` stays in `unhealthy_dependencies` and `/ready` answers 503, while FalkorDB accepts connections but does not answer | A FalkorDB that hangs fails each call after `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` (30 s by default) and the gateway makes four attempts before it reports the graph unavailable. Check the FalkorDB pod (`kubectl logs`, CPU, memory). A graph that is simply large needs a longer socket timeout, which must stay above `PS_QUERY_TIMEOUT_MS`. The service refuses to start if it is not, naming both variables. See [Dependency connection and socket timeouts](#dependency-connection-and-socket-timeouts). |
 | The `ps-service` pod fails to start and restarts, and its logs show the state migration step failing | The state Postgres did not accept a connection within `PS_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS` (5 s by default, 2 s minimum). Startup state migration is fatal by design. Check the `ps-postgres` pod and the Service and NetworkPolicy in front of it. |
-| A request fails with a store's fixed "unavailable" error and `state_postgres` is in `unhealthy_dependencies` | The state Postgres did not answer within the connect timeout, or a statement ran past `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` (30 s by default) and was cancelled. The error text carries no SQL or host by design; the pod log has the error class. A cancelled statement heals on the next successful call. If a legitimate long statement is cancelled, for example `verify-audit-log` on a large audit table, raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS`. |
+| A request fails with a store's fixed "unavailable" error and `state_postgres` is in `unhealthy_dependencies` | The state Postgres did not answer within the connect timeout, or a statement ran past `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` (30 s by default) and was cancelled. The error text carries no SQL or host by design; the pod log has the error class. A cancelled statement heals through the `/ready` re-probe or the next successful call. If a legitimate long statement is cancelled, for example `verify-audit-log` on a large audit table, raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS`. |
 | Passkey approvals fail and `passkey_signing_postgres` is in `unhealthy_dependencies`, with only a warning at startup | The passkey signing Postgres did not answer within `PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS` (5 s by default), or a statement ran past `PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS`. Startup continues by design. Check the `ps_signing` database. |
 | The service refuses to start with an error naming `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` and `PS_QUERY_TIMEOUT_MS` | The socket timeout must be greater than the query timeout (in seconds), or a healthy slow query would be cut off on the socket. Raise the socket timeout or lower `PS_QUERY_TIMEOUT_MS`. |
 | Approving a graph cleanup edit (a near-miss merge batch included) fails or never completes (passkey signing) | Passkey signing uses its own database (`ps_signing`). When it is unreachable the signing ceremony cannot run, `passkey_signing_postgres` appears in `unhealthy_dependencies`, readiness is unaffected, and the rest of the system keeps working. Restore the database and request a new approval. |

@@ -1295,6 +1295,69 @@ def test_load_config_rejects_an_invalid_connection_bound_naming_the_variable(
         load_config()
 
 
+_READY_REPROBE_INTERVAL_VARIABLE = "PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS"
+
+
+def test_load_config_defaults_the_ready_reprobe_interval_to_five_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unset minimum re-probe interval resolves to 5 seconds."""
+    monkeypatch.delenv(_READY_REPROBE_INTERVAL_VARIABLE, raising=False)
+
+    assert load_config().ready_reprobe_min_interval_seconds == 5.0
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0", 0.0), ("0.5", 0.5), ("30", 30.0)])
+def test_load_config_honors_a_ready_reprobe_interval_override_and_zero(
+    raw: str, expected: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zero is valid: it turns the rate limit off."""
+    monkeypatch.setenv(_READY_REPROBE_INTERVAL_VARIABLE, raw)
+
+    assert load_config().ready_reprobe_min_interval_seconds == expected
+
+
+@pytest.mark.parametrize("invalid_value", ["-1", "-0.1", "abc", "", "nan", "inf"])
+def test_load_config_rejects_an_invalid_ready_reprobe_interval_naming_the_variable(
+    invalid_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(_READY_REPROBE_INTERVAL_VARIABLE, invalid_value)
+
+    with pytest.raises(ServiceConfigurationError, match=_READY_REPROBE_INTERVAL_VARIABLE):
+        load_config()
+
+
+_READY_REPROBE_DEADLINE_VARIABLE = "PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS"
+
+
+def test_load_config_defaults_the_ready_reprobe_deadline_to_three_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unset re-probe deadline resolves to 3 seconds."""
+    monkeypatch.delenv(_READY_REPROBE_DEADLINE_VARIABLE, raising=False)
+
+    assert load_config().ready_reprobe_deadline_seconds == 3.0
+
+
+def test_load_config_honors_a_decimal_ready_reprobe_deadline_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_READY_REPROBE_DEADLINE_VARIABLE, "0.25")
+
+    assert load_config().ready_reprobe_deadline_seconds == 0.25
+
+
+@pytest.mark.parametrize("invalid_value", ["0", "-1", "abc", "", "nan", "inf"])
+def test_load_config_rejects_an_invalid_ready_reprobe_deadline_naming_the_variable(
+    invalid_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zero, negative, non-numeric, empty and non-finite deadlines fail closed."""
+    monkeypatch.setenv(_READY_REPROBE_DEADLINE_VARIABLE, invalid_value)
+
+    with pytest.raises(ServiceConfigurationError, match=_READY_REPROBE_DEADLINE_VARIABLE):
+        load_config()
+
+
 @pytest.mark.parametrize(("variable", "field_name", "default"), _MILLISECONDS_SETTINGS)
 def test_load_config_rejects_a_fractional_milliseconds_value_naming_the_variable(
     variable: str, field_name: str, default: int, monkeypatch: pytest.MonkeyPatch

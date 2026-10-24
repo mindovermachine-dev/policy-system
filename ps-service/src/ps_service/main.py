@@ -55,6 +55,7 @@ from ps_service.dependency_health import (
     mark_healthy,
     mark_unhealthy,
 )
+from ps_service.gating_reprobe import GatingReprobe
 from ps_service.graph_gateway import GRAPH_LOG_TABLES
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.graph_gateway.pending_entries import count_pending_entries
@@ -110,6 +111,7 @@ from ps_service.state_migrations import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
+    from typing import Any
 
     import psycopg
     from psycopg.rows import TupleRow
@@ -251,9 +253,9 @@ _READY_DEPENDENCIES = (
 
 # Which of `_READY_DEPENDENCIES` gate `/ready`'s overall status, as opposed to only being named in
 # `unhealthy_dependencies`. FalkorDB and PS state Postgres gate; `_check_dependencies_at_startup`
-# and `_retry_gating_dependencies` below are written against this set, not against any dependency
-# by name, so a future gating dependency (e.g. an identity provider) is added here and inherits
-# both functions' behavior unchanged.
+# and the `/ready` re-probe (`GatingReprobe`) are written against this set, not against any
+# dependency by name, so a future gating dependency (e.g. an identity provider) is added here and
+# inherits both behaviors unchanged.
 # PS state Postgres gates because it backs every privileged read and write (access roles, the
 # audit trail, runtime config incl. the catalog-source override), so a pod with no usable state
 # store must not enter Service rotation -- and a first `helm install` must not report ready
@@ -335,14 +337,15 @@ def _refuse_non_loopback_bypass_bind(config: ServiceConfig) -> None:
 def _all_dependency_probes(
     config: ServiceConfig,
 ) -> tuple[tuple[str, Callable[[], None]], ...]:
-    """The fixed (name, probe) pairs for the six tracked dependencies.
+    """The fixed (name, probe) pairs for the dependencies that have a connectivity probe.
 
-    Covers FalkorDB, LLM Interface, Cellar/ELI, Passkey Signing Postgres, PS state Postgres and
-    the startup graph replay.
+    Covers FalkorDB, LLM Interface, Cellar/ELI, Passkey Signing Postgres and PS state Postgres.
+    The startup graph replay has no row: its state belongs to the replay task, not to a probe.
 
     The single source of truth both `_check_dependencies_at_startup` (probes all, unconditionally)
-    and `_retry_gating_dependencies` (re-probes only `_GATING_DEPENDENCIES`) build on, so the two
-    never drift apart on which callable answers for which dependency name. Passkey Signing
+    and the `/ready` re-probe (which looks a probe up by name and only runs it for an unhealthy
+    member of `_GATING_DEPENDENCIES`) build on, so the two never drift apart on which callable
+    answers for which dependency name. Passkey Signing
     Postgres's own probe (`check_passkey_signing_postgres_connectivity`) is a no-op when
     `config.passkey_signing_postgres_host` is unset -- unconditionally listed here regardless,
     mirroring how LLM Interface/Cellar/ELI are also always probed even though a deployment may
@@ -350,7 +353,7 @@ def _all_dependency_probes(
     deliberately does NOT no-op when `config.state_postgres_host` is unset -- unlike Passkey
     Signing, an unconfigured PS state Postgres raises there too, so an unconfigured deployment
     logs a startup warning here and, since `STATE_POSTGRES` is a gating dependency, stays
-    `not_ready` rather than silently appearing healthy. The replay probe records nothing.
+    `not_ready` rather than silently appearing healthy.
 
     Args:
         config: The resolved service configuration the probes read their connection settings from.
@@ -368,15 +371,7 @@ def _all_dependency_probes(
             lambda: check_passkey_signing_postgres_connectivity(config),
         ),
         (STATE_POSTGRES, lambda: check_state_postgres_connectivity(config)),
-        (GRAPH_REPLAY, _graph_replay_probe),
     )
-
-
-def _graph_replay_probe() -> None:
-    """The retry loop's entry for `GRAPH_REPLAY`: records nothing, the replay task owns the state.
-
-    A `/ready` poll must neither fail because of the replay nor make it look finished.
-    """
 
 
 def _apply_passkey_signing_migrations_at_startup(config: ServiceConfig) -> None:
@@ -792,9 +787,9 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
 
     Each probe also records its outcome in `ps_service.dependency_health`
     (`falkordb_client.check_connectivity_from_config`, `llm_interface.check_connectivity`,
-    `cellar_eli.fetch.check_connectivity` all do this themselves). That registry is what lets
-    `/ready` self-heal from a later real-traffic success without a restart, beyond this one-time
-    startup snapshot, and is also what `all_healthy(_GATING_DEPENDENCIES)` reads back here.
+    `cellar_eli.fetch.check_connectivity` all do this themselves). That registry is what
+    `all_healthy(_GATING_DEPENDENCIES)` reads back here and what `/ready` keeps reading after
+    startup, where a gating dependency that fails later is re-probed on each poll.
 
     Args:
         config: The resolved service configuration the probes read their connection settings from.
@@ -819,40 +814,51 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     return all_healthy(_GATING_DEPENDENCIES)
 
 
-def _retry_gating_dependencies(config: ServiceConfig) -> bool:
-    """Re-probe every `_GATING_DEPENDENCIES` member, returning whether all now succeed.
+async def _refresh_and_verify(
+    app: FastAPI,
+    reprobe: GatingReprobe,
+    config: ServiceConfig,
+    request: Request,
+    verifier: PsTokenVerifier | None,
+) -> bool:
+    """Run the `/ready` re-probe and the caller's token check together, under one deadline.
 
-    Called from `ready()` while `app.state.ready` is still `False`: each periodic `/ready` poll
-    becomes a retry attempt this way, instead of `app.state.ready` only ever reflecting the
-    one-time startup snapshot `_check_dependencies_at_startup` took. This fixes the race where
-    FalkorDB became reachable seconds after the startup probe had already failed and latched
-    `not_ready` for the rest of the process's life.
-
-    Deliberately never raises, mirroring `_check_dependencies_at_startup`: a still-down dependency
-    must keep `/ready` at `503`, not fail the request that was only trying to check.
+    The deadline is `config.ready_reprobe_deadline_seconds` from the start of this call, so the
+    whole poll stays bounded however slow a dependency or the token verifier is. The re-probe
+    runs only while `app.state.config_complete` is `True`: missing configuration cannot be cured
+    by a dependency recovering. When the deadline passes first, unfinished work is cancelled (a
+    probe thread keeps running and keeps its slot) and a caller whose token check has not
+    finished is treated as unverified. Afterwards, if `app.state.ready` is `False` and the
+    configuration is complete, it is set from the registry. It is never reset to `False`.
 
     Args:
-        config: The resolved service configuration the probes read their connection settings from.
+        app: The app whose readiness state is read and, at most, latched `True`.
+        reprobe: The re-probe harness for the gating dependencies.
+        config: Supplies the deadline.
+        request: The poll, whose bearer token is checked.
+        verifier: The process-wide token verifier, or `None` when the bypass is active.
 
     Returns:
-        `True` if every gating dependency is healthy after re-probing; `False` otherwise.
+        Whether the caller's bearer token verified before the deadline.
 
     Side Effects:
-        Calls each gating dependency, updates the dependency health registry and writes a
-        `warning` `ready_retry` log entry (with the error text) per failed probe.
+        May start probe threads that call dependencies and update the dependency health registry;
+        may set `app.state.ready`.
     """
-    gating_probes = dict(_all_dependency_probes(config))
-    for dependency in _GATING_DEPENDENCIES:
-        try:
-            gating_probes[dependency]()
-        except Exception as exc:  # noqa: BLE001 - see docstring: a retry failure must not fail the request
-            emit_log_entry(
-                component="entrypoint",
-                action="ready_retry",
-                outcome="warning",
-                extra={"dependency": dependency, "error": str(exc)},
-            )
-    return all_healthy(_GATING_DEPENDENCIES)
+    loop = asyncio.get_running_loop()
+    deadline_at = loop.time() + config.ready_reprobe_deadline_seconds
+    verify = loop.create_task(_is_verified_caller(request, verifier))
+    tasks: set[asyncio.Task[Any]] = {verify}
+    if app.state.config_complete:
+        tasks.add(loop.create_task(reprobe.refresh(deadline_at)))
+    try:
+        await asyncio.wait(tasks, timeout=max(0.0, deadline_at - loop.time()))
+    finally:
+        for task in tasks:
+            task.cancel()
+    if app.state.config_complete and not app.state.ready:
+        app.state.ready = all_healthy(_GATING_DEPENDENCIES)
+    return verify.done() and not verify.cancelled() and verify.result()
 
 
 def _build_app_metrics(
@@ -1222,29 +1228,42 @@ def create_app(
         """
         return {"status": "alive", "version": installed_version("ps-service")}
 
+    reprobe = GatingReprobe(
+        dependencies=lambda: _GATING_DEPENDENCIES,
+        probe_for=dict(_all_dependency_probes(config)).get,
+        is_healthy=is_healthy,
+        min_interval_seconds=config.ready_reprobe_min_interval_seconds,
+    )
+
     async def ready(request: Request) -> JSONResponse:
         """Report "ready" only once startup succeeded AND every gating dependency is healthy now.
 
         Two independent gates: `app.state.ready` AND the live `dependency_health` registry's
-        `_GATING_DEPENDENCIES` entries (updated by real traffic as it happens, read via
-        `all_healthy`) both have to hold. The live gate is what lets `/ready` flip back to
-        `not_ready` if a gating dependency fails mid-run, and self-heal on its next success,
-        without waiting for a restart.
+        `_GATING_DEPENDENCIES` entries (read via `all_healthy`) both have to hold. The live gate is
+        what lets `/ready` flip back to `not_ready` if a gating dependency fails mid-run.
+
+        A pod that is not ready receives no traffic, so no real call would ever mark a failed
+        dependency healthy again. Every poll therefore re-probes each gating dependency that the
+        registry currently records as unhealthy, through the dependency's own connectivity probe
+        (which records its outcome itself), off the event loop and under
+        `config.ready_reprobe_deadline_seconds` counted from the start of the poll. Concurrent
+        polls share one probe per dependency. A healthy dependency, a non-gating one (LLM
+        Interface, Cellar/ELI, Passkey Signing Postgres) and the graph replay are never probed from
+        here: the LLM probe costs quota, and the replay's state belongs to the replay task. A
+        recovered dependency turns the next answer back to `ready`, with no restart.
 
         `app.state.ready` alone would be a one-time snapshot from `lifespan`'s startup probe, which
-        would latch `False` forever if a gating dependency was still down at boot, even once it
-        recovered seconds later. While it is `False`, this handler therefore re-runs
-        `_retry_gating_dependencies` on every call, so each periodic `/ready` poll is itself a
-        retry attempt -- no separate background task needed, since Kubernetes' own
-        `readinessProbe` cadence drives it. `app.state.config_complete` (stashed once in
-        `lifespan`) gates the retry itself: it cannot change mid-run, so once it is `False` no
-        amount of dependency recovery may ever flip `app.state.ready` `True`. Once
-        `app.state.ready` is `True`, this handler never resets it (only `lifespan`'s shutdown
-        does); from then on, live degradation is caught solely by the
-        `all_healthy(_GATING_DEPENDENCIES)` half. LLM Interface and Cellar/ELI are deliberately
-        excluded from `_GATING_DEPENDENCIES`: they are still probed at startup and tracked live in
-        `dependency_health`, but neither their startup nor live health ever flips `/ready`'s
-        status.
+        would latch `False` forever if a gating dependency was still down at boot. While it is
+        `False`, this handler therefore sets it from the registry once the re-probe has run, so
+        a dependency that recovers after a failed startup probe lets the pod become ready.
+        `app.state.config_complete` (stashed once in `lifespan`) gates both the re-probe and that
+        latch: it cannot change mid-run, so once it is `False` no amount of dependency recovery
+        may ever flip `app.state.ready` `True`. Once `app.state.ready` is `True`, this handler
+        never resets it (only `lifespan`'s shutdown does); from then on, live degradation is
+        caught solely by the `all_healthy(_GATING_DEPENDENCIES)` half. LLM Interface and
+        Cellar/ELI are deliberately excluded from `_GATING_DEPENDENCIES`: they are still probed at
+        startup and tracked live in `dependency_health`, but neither their startup nor live health
+        ever flips `/ready`'s status.
 
         The body depends on who asks. An anonymous caller (no `Authorization: Bearer` header, a
         token the verifier rejects, or the local-test bypass, which has no verifier) gets only
@@ -1276,14 +1295,13 @@ def create_app(
             `readinessProbe` pulls the pod from Service rotation on a real outage.
 
         Side Effects:
-            While not yet ready, re-probes the gating dependencies (see
-            `_retry_gating_dependencies`) and may set `app.state.ready`.
+            Re-probes the gating dependencies that are recorded unhealthy (the probes update the
+            dependency health registry) and, while not yet ready, may set `app.state.ready`.
         """
-        if not app.state.ready and app.state.config_complete:
-            app.state.ready = _retry_gating_dependencies(config)
+        is_verified = await _refresh_and_verify(app, reprobe, config, request, verifier)
         is_ready = app.state.ready and all_healthy(_GATING_DEPENDENCIES)
         content: dict[str, object] = {"status": "ready" if is_ready else "not_ready"}
-        if await _is_verified_caller(request, verifier):
+        if is_verified:
             content["unhealthy_dependencies"] = [
                 dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)
             ]
