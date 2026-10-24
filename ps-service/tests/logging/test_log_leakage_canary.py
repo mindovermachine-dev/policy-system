@@ -24,6 +24,11 @@ from invitations.test_client import (
 )
 from litellm.types.utils import Choices, Message, ModelResponse
 from mcp.types import CallToolResult, TextContent
+from mcp_interface._environment import graph_factory_for
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _ACCESS_DENIED_MESSAGE,  # pyright: ignore[reportPrivateUsage]  -- reuse the gate tests' own fixtures rather than re-declaring them
     _CALLER_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -49,7 +54,7 @@ from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import bind_run_context, facade
 from ps_service.main import create_app
-from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
+from ps_service.mcp_interface import catalog_tools
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # the seeded-graph probe the fake must answer
 )
@@ -320,15 +325,12 @@ def test_cypher_with_canary_query_then_no_canary_in_any_sink(
     caplog.set_level(logging.DEBUG)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
 
-    def _connect(_config: object) -> _FailingDatabase:
-        return _FailingDatabase()
-
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
+    _override(monkeypatch, graph_factory=graph_factory_for(_FailingDatabase()))
 
     result = asyncio.run(
-        mcp_server.server.call_tool(
+        _server().call_tool(
             "cypher", {"query": f"MATCH (n) WHERE n.name = '{CANARY_POLICY}' RETURN n"}
         )
     )
@@ -369,19 +371,16 @@ def test_mcp_tool_calls_by_a_canary_principal_then_no_canary_in_any_sink(
     """A verified canary caller's admitted `cypher` call and refused invite are never logged."""
     caplog.set_level(logging.DEBUG)
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
 
-    def _connect(_config: object) -> _SeededDatabase:
-        return _SeededDatabase()
-
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
+    _override(monkeypatch, graph_factory=graph_factory_for(_SeededDatabase()))
 
     with _verified_actor(sub=CANARY_USER):
         admitted = asyncio.run(
-            mcp_server.server.call_tool("cypher", {"query": "MATCH (n) RETURN count(n) AS c"})
+            _server().call_tool("cypher", {"query": "MATCH (n) RETURN count(n) AS c"})
         )
-        refused = asyncio.run(mcp_server.server.call_tool("invite-user", {"email": CANARY_EMAIL}))
+        refused = asyncio.run(_server().call_tool("invite-user", {"email": CANARY_EMAIL}))
 
     assert isinstance(admitted, CallToolResult)
     assert admitted.is_error is False
@@ -404,14 +403,14 @@ def test_invite_user_with_canary_email_then_no_canary_in_any_sink(
     monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
     monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     roles = _seeded_store()
     roles.grant(
         actor=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER),
         target=(CANARY_USER, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(roles))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(roles))
     transport = _RecordingTransport(json.dumps({"pk": "tok-canary"}).encode())
     monkeypatch.setattr(
         catalog_tools,
@@ -420,7 +419,7 @@ def test_invite_user_with_canary_email_then_no_canary_in_any_sink(
     )
 
     with _verified_actor(sub=CANARY_USER):
-        result = asyncio.run(mcp_server.server.call_tool("invite-user", {"email": CANARY_EMAIL}))
+        result = asyncio.run(_server().call_tool("invite-user", {"email": CANARY_EMAIL}))
 
     assert json.loads(_tool_text(result))["itoken"] == "tok-canary"
     [invite_row] = [row for row in store.rows if row.action == "user.invite"]

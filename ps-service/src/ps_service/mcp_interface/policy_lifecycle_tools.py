@@ -1,11 +1,12 @@
 """Policy-lifecycle tools of the PS MCP server.
 
-Registers `create-policy-draft`, `update-policy-draft`, `add-standard-to-draft`,
+Declares `create-policy-draft`, `update-policy-draft`, `add-standard-to-draft`,
 `update-standard-draft`, `add-control-to-draft`, `update-control-draft`, `get-policy`,
-`propose-policy`, `approve-policy`, `reject-policy` and `revert-policy-to-draft` on the shared
-`server` from `tool_core`. Each tool delegates to `ps_service.policy_lifecycle.service`, which owns
-the behaviour. This module imports only `tool_core` (never another tool group); the patch seam
-names are looked up there at call time as `tool_core.<Name>`.
+`propose-policy`, `approve-policy`, `reject-policy` and `revert-policy-to-draft`;
+`register_policy_lifecycle_tools` registers them on a server built by `mcp_server.build_server`.
+Each tool delegates to `ps_service.policy_lifecycle.service`, which owns the behaviour, and builds
+its graph and stores through the `GateEnvironment` it is bound to. This module imports only
+`tool_core` and `tool_gates` (never another tool group).
 
 Business Rules:
     - Draft authoring is gated by the policy-author and draft-access gates; `approve-policy` and
@@ -17,7 +18,7 @@ Business Rules:
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import Field
 
@@ -29,7 +30,6 @@ from ps_service.api.errors import (
 from ps_service.api.graph_write_access import graph_write_access
 from ps_service.authz.models import AccessRole
 from ps_service.config import load_config
-from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.draft_input_models import (
     ControlContentFields,
     NewControlContentFields,
@@ -40,8 +40,7 @@ from ps_service.mcp_interface.draft_input_models import (
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import POLICY_AUTHOR_GATE as _POLICY_AUTHOR_GATE
 from ps_service.mcp_interface.tool_core import POLICY_DRAFT_ACCESS_GATE as _POLICY_DRAFT_ACCESS_GATE
-from ps_service.mcp_interface.tool_core import gate_environment as _gate_environment
-from ps_service.mcp_interface.tool_core import gated_server_tool as _gated_tool
+from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import resolve_graph as _resolve_graph
 from ps_service.mcp_interface.tool_core import (
     resolve_policy_lifecycle_actor as _resolve_policy_lifecycle_actor,
@@ -49,9 +48,11 @@ from ps_service.mcp_interface.tool_core import (
 from ps_service.mcp_interface.tool_core import run_mcp_action as _run_mcp_action
 from ps_service.mcp_interface.tool_gates import (
     BypassPolicy,
+    GateEnvironment,
     GateKind,
     ToolGate,
     lifecycle_role_enforcer,
+    register_declared_tools,
 )
 from ps_service.policy_lifecycle.errors import (
     PolicyCapabilityAlreadyGovernedError,
@@ -80,6 +81,10 @@ from ps_service.policy_lifecycle.service import revert_policy_to_draft as run_re
 from ps_service.policy_lifecycle.service import update_control_draft as run_update_control_draft
 from ps_service.policy_lifecycle.service import update_policy_draft as run_update_policy_draft
 from ps_service.policy_lifecycle.service import update_standard_draft as run_update_standard_draft
+
+if TYPE_CHECKING:
+    from mcp.server import MCPServer
+
 
 _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: this action requires a real authenticated caller (the local-test bypass counts as one)"
@@ -110,7 +115,8 @@ _CREATE_POLICY_DRAFT_ERRORS = (
 
 
 @_gated_tool("create-policy-draft", _POLICY_AUTHOR_GATE)
-def create_policy_draft(
+def create_policy_draft(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     title: Annotated[str, Field(min_length=1)],
     standards: list[PolicyDraftStandardInput] | None = None,
     supersedes_policy_id: Annotated[str, Field(min_length=1)] | None = None,
@@ -182,10 +188,10 @@ def create_policy_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        audit_store = tool_core.PsycopgAuditStore(config)
+        audit_store = environment.audit_store_factory(config)
         try:
             # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -227,7 +233,8 @@ _UPDATE_POLICY_DRAFT_ERRORS = (
 
 
 @_gated_tool("update-policy-draft", _POLICY_DRAFT_ACCESS_GATE)
-def update_policy_draft(
+def update_policy_draft(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     policy_id: Annotated[str, Field(min_length=1)],
     fields: PolicyContentFields | None = None,
 ) -> dict[str, object] | str:
@@ -270,12 +277,10 @@ def update_policy_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        access_role_store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        access_role_store = environment.access_role_store(config)
         try:
             # Fail closed before any read or write: no write path, no draft edit.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -308,7 +313,8 @@ _ADD_STANDARD_TO_DRAFT_ERRORS = (
 
 
 @_gated_tool("add-standard-to-draft", _POLICY_DRAFT_ACCESS_GATE)
-def add_standard_to_draft(
+def add_standard_to_draft(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     policy_id: Annotated[str, Field(min_length=1)],
     title: Annotated[str, Field(min_length=1)],
     fields: StandardContentFields | None = None,
@@ -356,12 +362,10 @@ def add_standard_to_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        access_role_store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        access_role_store = environment.access_role_store(config)
         try:
             # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -397,7 +401,8 @@ _UPDATE_STANDARD_DRAFT_ERRORS = (
 
 
 @_gated_tool("update-standard-draft", _POLICY_DRAFT_ACCESS_GATE)
-def update_standard_draft(
+def update_standard_draft(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     standard_id: Annotated[str, Field(min_length=1)],
     fields: StandardContentFields | None = None,
 ) -> dict[str, object] | str:
@@ -442,12 +447,10 @@ def update_standard_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        access_role_store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        access_role_store = environment.access_role_store(config)
         try:
             # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -482,7 +485,8 @@ _ADD_CONTROL_TO_DRAFT_ERRORS = (
 
 
 @_gated_tool("add-control-to-draft", _POLICY_DRAFT_ACCESS_GATE)
-def add_control_to_draft(
+def add_control_to_draft(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     standard_id: Annotated[str, Field(min_length=1)],
     title: Annotated[str, Field(min_length=1)],
     control_type: Literal["automated", "manual"] = "manual",
@@ -537,12 +541,10 @@ def add_control_to_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        access_role_store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        access_role_store = environment.access_role_store(config)
         try:
             # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -580,7 +582,8 @@ _UPDATE_CONTROL_DRAFT_ERRORS = (
 
 
 @_gated_tool("update-control-draft", _POLICY_DRAFT_ACCESS_GATE)
-def update_control_draft(
+def update_control_draft(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     control_id: Annotated[str, Field(min_length=1)],
     fields: ControlContentFields | None = None,
 ) -> dict[str, object] | str:
@@ -628,12 +631,10 @@ def update_control_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        access_role_store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        access_role_store = environment.access_role_store(config)
         try:
             # Fail closed before any read or write: no write path, no draft write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -667,7 +668,10 @@ _GET_POLICY_ERRORS = (
 
 
 @_gated_tool("get-policy", _POLICY_DRAFT_ACCESS_GATE)
-def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+def get_policy(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
+    policy_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
     """Read one Policy together with its full Standard and Control tree.
 
     A Policy is visible to any authenticated caller in every status, `draft` included, so a draft
@@ -699,7 +703,7 @@ def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, obje
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
         try:
@@ -753,7 +757,10 @@ _PROPOSE_POLICY_ERRORS = (
 
 
 @_gated_tool("propose-policy", _POLICY_AUTHOR_GATE)
-def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+def propose_policy(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
+    policy_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
     """Move a draft Policy and its whole tree to `proposed`.
 
     Only the Policy's owner may propose it, and only while it is in `draft` status with at least one
@@ -786,10 +793,10 @@ def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        audit_store = tool_core.PsycopgAuditStore(config)
+        audit_store = environment.audit_store_factory(config)
         try:
             # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -826,7 +833,10 @@ _APPROVE_POLICY_ERRORS = (
 
 
 @_gated_tool("approve-policy", _POLICY_TRANSITION_GATE)
-def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+def approve_policy(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
+    policy_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
     """Move a proposed Policy and its whole tree to `approved`.
 
     Requires the `PolicyManager` role, and the caller must not be the Policy's owner: self-approval
@@ -877,10 +887,10 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        audit_store = tool_core.PsycopgAuditStore(config)
+        audit_store = environment.audit_store_factory(config)
         try:
             # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -889,7 +899,9 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
                 policy_id=policy_id,
                 graph=graph,
                 audit_store=audit_store,
-                enforce_policy_manager=lifecycle_role_enforcer(_gate_environment, "approve-policy"),
+                enforce_policy_manager=lifecycle_role_enforcer(
+                    environment, "approve-policy", _POLICY_TRANSITION_GATE
+                ),
                 submitter=submitter,
                 graph_name=config.falkordb_graph,
             )
@@ -919,7 +931,10 @@ _REJECT_POLICY_ERRORS = (
 
 
 @_gated_tool("reject-policy", _POLICY_TRANSITION_GATE)
-def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+def reject_policy(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
+    policy_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
     """Move a proposed Policy and its whole tree back to `draft`.
 
     Requires the `PolicyManager` role, and the caller must not be the Policy's owner: self-rejection
@@ -959,10 +974,10 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        audit_store = tool_core.PsycopgAuditStore(config)
+        audit_store = environment.audit_store_factory(config)
         try:
             # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -971,7 +986,9 @@ def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, o
                 policy_id=policy_id,
                 graph=graph,
                 audit_store=audit_store,
-                enforce_policy_manager=lifecycle_role_enforcer(_gate_environment, "reject-policy"),
+                enforce_policy_manager=lifecycle_role_enforcer(
+                    environment, "reject-policy", _POLICY_TRANSITION_GATE
+                ),
                 submitter=submitter,
                 graph_name=config.falkordb_graph,
             )
@@ -997,7 +1014,8 @@ _REVERT_POLICY_TO_DRAFT_ERRORS = (
 
 
 @_gated_tool("revert-policy-to-draft", _POLICY_AUTHOR_GATE)
-def revert_policy_to_draft(
+def revert_policy_to_draft(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     policy_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
     """Move a proposed Policy and its whole tree back to `draft`, as its owner.
@@ -1033,10 +1051,10 @@ def revert_policy_to_draft(
         if actor is None:
             return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
         except McpGraphUnavailableError as exc:
             return f"error: {exc}"
-        audit_store = tool_core.PsycopgAuditStore(config)
+        audit_store = environment.audit_store_factory(config)
         try:
             # Fail closed before any read or write: no write path, no lifecycle write.
             submitter = lifecycle_submitter(graph_write_access(config).gateway)
@@ -1058,3 +1076,36 @@ def revert_policy_to_draft(
         }
 
     return _run_mcp_action("revert_policy_to_draft", _body)
+
+
+def register_policy_lifecycle_tools(
+    server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
+) -> None:
+    """Register the policy-lifecycle tools.
+
+    Args:
+        server: The server the tools are registered on.
+        environment: The server-side collaborators the tools use.
+        gates: The registry that records this server's gate declarations.
+
+    Raises:
+        ValueError: A tool name is already declared in `gates`.
+    """
+    register_declared_tools(
+        server,
+        environment,
+        gates,
+        (
+            create_policy_draft,
+            update_policy_draft,
+            add_standard_to_draft,
+            update_standard_draft,
+            add_control_to_draft,
+            update_control_draft,
+            get_policy,
+            propose_policy,
+            approve_policy,
+            reject_policy,
+            revert_policy_to_draft,
+        ),
+    )

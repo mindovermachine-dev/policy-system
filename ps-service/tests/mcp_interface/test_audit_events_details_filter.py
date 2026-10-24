@@ -10,6 +10,10 @@ from audit._fakes import InMemoryAuditStore, audit_store_factory
 from mcp.types import CallToolResult, TextContent
 
 import ps_service.ingestion_runs.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers ingestion_run.* actions
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _server,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _SYSTEM_OWNER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _fake_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -18,7 +22,6 @@ from mcp_interface.test_catalog_source_authz_gate import (
 )
 from ps_service.audit import AuditDetails, register_audit_action, register_audit_resource_type
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 
 class _RestoreLikeDetails(AuditDetails):
@@ -37,8 +40,8 @@ _ACTOR = ("actor-sub", "https://issuer.example.com/")
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
     return store
 
 
@@ -89,7 +92,7 @@ def _seed(store: InMemoryAuditStore) -> None:
 def _call(**kwargs: object) -> CallToolResult:
     configure()
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
-        result = asyncio.run(mcp_server.server.call_tool("list-audit-events", kwargs))
+        result = asyncio.run(_server().call_tool("list-audit-events", kwargs))
     assert isinstance(result, CallToolResult)
     return result
 

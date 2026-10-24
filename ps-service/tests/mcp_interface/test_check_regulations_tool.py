@@ -47,6 +47,9 @@ import pytest
 from api._fakes import build_fake_change_check_dependencies
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service import dependency_health
 from ps_service.api.catalog import CatalogEntry
 from ps_service.change_monitor.models import (
@@ -57,7 +60,7 @@ from ps_service.change_monitor.models import (
 )
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import ingestion_tools, mcp_server
+from ps_service.mcp_interface import ingestion_tools
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 
 if TYPE_CHECKING:
@@ -79,7 +82,7 @@ class NationalTranspositionNotSupportedError(Exception):
 
 
 def _call_check_regulations() -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
+    result = asyncio.run(_server().call_tool("check_regulations", {}))
     assert isinstance(result, CallToolResult)
     return result
 

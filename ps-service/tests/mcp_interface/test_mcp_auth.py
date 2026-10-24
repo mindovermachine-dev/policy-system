@@ -29,11 +29,15 @@ from audit._fakes import InMemoryAuditStore, audit_store_factory
 from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 
+from mcp_interface._environment import graph_factory_for
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -106,7 +110,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     """
     verifier = PsTokenVerifier(auth_context)
     mcp_asgi_app = build_streamable_http_app(
-        host=host, verifier=verifier, auth_context=auth_context
+        server=_server(), host=host, verifier=verifier, auth_context=auth_context
     )
 
     @contextlib.asynccontextmanager
@@ -123,10 +127,7 @@ def _serve_a_seeded_fake_graph(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the `cypher` tool's FalkorDB connection at a seeded fake graph."""
     fake_db = _FakeFalkorDB(_FakeGraphHandle())
 
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        return fake_db
-
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
+    _override(monkeypatch, graph_factory=graph_factory_for(fake_db))
 
 
 def _call_cypher_tool_over_bearer_http(*, auth_context: AuthContext, token: str) -> Response:
@@ -239,7 +240,7 @@ def test_bearer_authenticated_cypher_call_logs_no_principal_and_audits_the_actor
     """
     emitter = configure()
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-42"
     token = mock_oidc_provider.mint_token(sub=token_sub)

@@ -1,9 +1,9 @@
 """Near-miss review tools of the PS MCP server: list, resolve and check a near-miss approval.
 
-Registers `near_misses_list`, `near_misses_resolve` and `near_misses_check_approval` on the shared
-`server` from `tool_core`. This module imports only `tool_core` (never another tool group); the
-patch seam names (`PsycopgPendingApprovalStore`, `PsycopgAuditStore`, `connect_from_config`) are
-looked up there at call time as `tool_core.<Name>`.
+Registers `near_misses_list`, `near_misses_resolve` and `near_misses_check_approval`;
+`register_near_miss_tools` registers them on a server built by `mcp_server.build_server`. Each tool
+opens its graph and builds its stores through the `GateEnvironment` it is bound to. This module
+imports only `tool_core` and `tool_gates` (never another tool group).
 
 Business Rules:
     - `keep-separate` needs no role beyond the plain-read gate; the `merge` decision is role-gated
@@ -35,13 +35,11 @@ from ps_service.audit.errors import (
     AuditTrailUnavailableError,
 )
 from ps_service.config import load_config
-from ps_service.graph_cleanup.dependencies import build_default_graph_cleanup_dependencies
 from ps_service.graph_cleanup.errors import (
     GraphCleanupAcknowledgmentRequiredError,
     GraphCleanupPersistenceError,
     GraphCleanupValidationError,
 )
-from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import (
     CLEANUP_APPROVAL_UNSETTLED_MESSAGE as _CLEANUP_APPROVAL_UNSETTLED_MESSAGE,
@@ -53,8 +51,8 @@ from ps_service.mcp_interface.tool_core import NEAR_MISS_MERGE_GATE as _NEAR_MIS
 from ps_service.mcp_interface.tool_core import OWN_APPROVAL_READ_GATE as _OWN_APPROVAL_READ_GATE
 from ps_service.mcp_interface.tool_core import PLAIN_READ_GATE as _PLAIN_READ_GATE
 from ps_service.mcp_interface.tool_core import audit_context as _audit_context
-from ps_service.mcp_interface.tool_core import gate_environment as _gate_environment
-from ps_service.mcp_interface.tool_core import gated_server_tool as _gated_tool
+from ps_service.mcp_interface.tool_core import cleanup_dependencies as _cleanup_dependencies
+from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import resolve_authz_actor as _resolve_authz_actor
 from ps_service.mcp_interface.tool_core import resolve_base_url as _resolve_base_url
 from ps_service.mcp_interface.tool_core import run_mcp_action as _run_mcp_action
@@ -62,11 +60,18 @@ from ps_service.mcp_interface.tool_core import (
     sanitize_cleanup_graph_open as _sanitize_cleanup_graph_open,
 )
 from ps_service.mcp_interface.tool_core import sanitize_graph_open as _sanitize_graph_open
-from ps_service.mcp_interface.tool_gates import run_body_gate
+from ps_service.mcp_interface.tool_gates import (
+    GateEnvironment,
+    register_declared_tools,
+    run_body_gate,
+)
 
 if TYPE_CHECKING:
+    from mcp.server import MCPServer
+
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
     from ps_service.config import ServiceConfig
+    from ps_service.mcp_interface.tool_gates import ToolGate
 
 
 def _resolve_signing_actor() -> tuple[str, str] | None:
@@ -105,8 +110,22 @@ def _sanitize_near_miss_review_graph_opens(
     )
 
 
+def _review_dependencies(environment: GateEnvironment) -> NearMissReviewDependencies:
+    """Return the near-miss review dependencies over the environment's graph factory.
+
+    The graph opener is wrapped so any failure opening the graph becomes `McpGraphUnavailableError`.
+    """
+    return _sanitize_near_miss_review_graph_opens(
+        build_default_near_miss_review_dependencies(
+            open_single_tenant_graph=environment.graph_factory
+        )
+    )
+
+
 @_gated_tool("near_misses_list", _PLAIN_READ_GATE)
-def near_misses_list() -> dict[str, object] | str:
+def near_misses_list(  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
+) -> dict[str, object] | str:
     """List every unresolved near-miss pending review.
 
     A near-miss is a Company Merge deduplication candidate awaiting a keep-separate or merge
@@ -133,9 +152,7 @@ def near_misses_list() -> dict[str, object] | str:
         try:
             result = run_list_near_misses(
                 config=config,
-                dependencies=_sanitize_near_miss_review_graph_opens(
-                    build_default_near_miss_review_dependencies()
-                ),
+                dependencies=_review_dependencies(environment),
             )
         except McpGraphUnavailableError:
             return _GRAPH_UNAVAILABLE_MESSAGE
@@ -147,13 +164,19 @@ def near_misses_list() -> dict[str, object] | str:
 
 
 def _resolve_merge_pending_approval(
-    review_id: str, ctx: Context, config: ServiceConfig, *, acknowledge: bool
+    environment: GateEnvironment,
+    review_id: str,
+    ctx: Context,
+    config: ServiceConfig,
+    *,
+    acknowledge: bool,
 ) -> dict[str, object] | str:
     """Handle `near_misses_resolve` with `decision="merge"` by requesting a cleanup merge approval.
 
     Split out of the tool body to keep its branch count manageable; no other tool uses it.
 
     Args:
+        environment: The collaborators the tool is bound to.
         review_id: Id of the near-miss pending review to merge.
         ctx: MCP request context, used to derive the approval link's base URL.
         config: Resolved service configuration.
@@ -174,7 +197,7 @@ def _resolve_merge_pending_approval(
         Inserts one pending-approval row on success. The merge itself runs only after a human signs.
         Nothing is written to the graph.
     """
-    actor = run_body_gate(_gate_environment, "near_misses_resolve")
+    actor = run_body_gate(environment, "near_misses_resolve", _NEAR_MISS_MERGE_GATE)
     if isinstance(actor, str):
         return actor
     try:
@@ -184,10 +207,8 @@ def _resolve_merge_pending_approval(
             acknowledge_governance_change=acknowledge,
             base_url=_resolve_base_url(ctx),
             config=config,
-            dependencies=_sanitize_near_miss_review_graph_opens(
-                build_default_near_miss_review_dependencies()
-            ),
-            store=tool_core.PsycopgPendingApprovalStore(config),
+            dependencies=_review_dependencies(environment),
+            store=environment.pending_approval_store_factory(config),
         )
     except GraphCleanupAcknowledgmentRequiredError as exc:
         return {
@@ -216,7 +237,8 @@ _MERGE_ONLY_RESOLVE_FIELDS = {"preview", "acknowledgment_required", "message"}
 
 
 @_gated_tool("near_misses_resolve", _NEAR_MISS_MERGE_GATE)
-def near_misses_resolve(
+def near_misses_resolve(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     review_id: Annotated[str, Field(min_length=1)],
     decision: Literal["keep-separate", "merge"],
     ctx: Context,
@@ -297,9 +319,9 @@ def near_misses_resolve(
     def _body() -> dict[str, object] | str:
         if decision == "merge":
             return _resolve_merge_pending_approval(
-                review_id, ctx, config, acknowledge=acknowledge_governance_change
+                environment, review_id, ctx, config, acknowledge=acknowledge_governance_change
             )
-        audit = _audit_context(config, actor)
+        audit = _audit_context(config, actor, environment=environment)
         if isinstance(audit, str):
             return audit
         try:
@@ -307,9 +329,7 @@ def near_misses_resolve(
                 review_id,
                 decision,
                 config=config,
-                dependencies=_sanitize_near_miss_review_graph_opens(
-                    build_default_near_miss_review_dependencies()
-                ),
+                dependencies=_review_dependencies(environment),
                 audit=audit,
             )
         except (
@@ -326,7 +346,8 @@ def near_misses_resolve(
 
 
 @_gated_tool("near_misses_check_approval", _OWN_APPROVAL_READ_GATE)
-def near_misses_check_approval(
+def near_misses_check_approval(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     pending_approval_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
     """Check whether a near-miss merge's pending approval has been signed and what it did.
@@ -370,11 +391,9 @@ def near_misses_check_approval(
             status = check_near_miss_merge_approval(
                 pending_approval_id=pending_approval_id,
                 actor=actor,
-                store=tool_core.PsycopgPendingApprovalStore(config),
+                store=environment.pending_approval_store_factory(config),
                 config=config,
-                dependencies=_sanitize_cleanup_graph_open(
-                    build_default_graph_cleanup_dependencies()
-                ),
+                dependencies=_sanitize_cleanup_graph_open(_cleanup_dependencies(environment)),
             )
         except (
             McpGraphUnavailableError,
@@ -396,3 +415,24 @@ def near_misses_check_approval(
         }
 
     return _run_mcp_action("near_misses_check_approval", _body)
+
+
+def register_near_miss_tools(
+    server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
+) -> None:
+    """Register the near-miss review tools.
+
+    Args:
+        server: The server the tools are registered on.
+        environment: The server-side collaborators the tools use.
+        gates: The registry that records this server's gate declarations.
+
+    Raises:
+        ValueError: A tool name is already declared in `gates`.
+    """
+    register_declared_tools(
+        server,
+        environment,
+        gates,
+        (near_misses_list, near_misses_resolve, near_misses_check_approval),
+    )

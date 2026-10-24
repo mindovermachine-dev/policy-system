@@ -22,6 +22,10 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_graph_cleanup_authz_gate import (
     _TOOLS as GATE_SWEEP,
 )
@@ -29,8 +33,8 @@ from ps_service.audit.models import AuditEventRow, resolve_details_model
 from ps_service.authz.models import AccessRole
 from ps_service.graph_cleanup import audit_actions
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
-from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
+from ps_service.mcp_interface.mcp_server import TOOL_GATES
+from ps_service.mcp_interface.tool_gates import BypassPolicy, GateKind
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -81,7 +85,7 @@ def _factory(value: object) -> Callable[..., object]:
 
 def _call(name: str, args: dict[str, object], *, sub: str) -> str:
     with _actor(sub):
-        result = asyncio.run(mcp_server.server.call_tool(name, args))
+        result = asyncio.run(_server().call_tool(name, args))
     assert isinstance(result, CallToolResult)
     block = result.content[0]
     assert isinstance(block, TextContent)
@@ -121,17 +125,17 @@ def test_an_unreachable_graph_never_leaks_internals_from_any_tool(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     configure()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_roles()))
-    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(FakeApprovalStore()))
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory(RecordingAuditStore()))
 
     def _boom(_config: object) -> object:
         message = "connection refused to 10.0.0.1:6379 relation x"
         raise ConnectionError(message)
 
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _factory(_boom),
+    _override(
+        monkeypatch,
+        role_store_factory=_factory(_roles()),
+        pending_approval_store_factory=_factory(FakeApprovalStore()),
+        audit_store_factory=_factory(RecordingAuditStore()),
+        graph_factory=_boom,
     )
     args: dict[str, object] = {
         "find-capability-merge-candidates": {},
@@ -174,9 +178,10 @@ def test_list_audit_events_filtered_by_each_cleanup_action_returns_its_rows(
         )
         for index, each in enumerate(CLEANUP_ACTIONS)
     ]
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_roles()))
-    monkeypatch.setattr(
-        tool_core, "PsycopgAuditStore", _factory(RecordingAuditStore(history=history))
+    _override(
+        monkeypatch,
+        role_store_factory=_factory(_roles()),
+        audit_store_factory=_factory(RecordingAuditStore(history=history)),
     )
 
     body = json.loads(_call("list-audit-events", {"action": action}, sub=_OWNER))
@@ -192,8 +197,11 @@ def test_the_new_resource_types_are_accepted_as_audit_filters(
     monkeypatch: pytest.MonkeyPatch, resource_type: str
 ) -> None:
     configure()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_roles()))
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory(RecordingAuditStore()))
+    _override(
+        monkeypatch,
+        role_store_factory=_factory(_roles()),
+        audit_store_factory=_factory(RecordingAuditStore()),
+    )
 
     body = json.loads(_call("list-audit-events", {"resource_type": resource_type}, sub=_OWNER))
 

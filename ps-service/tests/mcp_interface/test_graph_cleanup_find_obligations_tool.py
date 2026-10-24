@@ -16,9 +16,12 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -68,15 +71,8 @@ def _store_factory(store: object) -> Callable[..., object]:
     return _factory
 
 
-def _opener_factory(opener: Callable[[object], object]) -> Callable[[], Callable[[object], object]]:
-    def _factory() -> Callable[[object], object]:
-        return opener
-
-    return _factory
-
-
 def _call(name: str, args: dict[str, object] | None = None) -> str:
-    result = asyncio.run(mcp_server.server.call_tool(name, args or {}))
+    result = asyncio.run(_server().call_tool(name, args or {}))
     assert isinstance(result, CallToolResult)
     block = result.content[0]
     assert isinstance(block, TextContent)
@@ -97,11 +93,12 @@ def _officer_store() -> FakeAccessRoleStore:
 def test_compliance_officer_gets_the_ac_bi_004_wire_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
     graph = _Graph()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(_officer_store()))
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _opener_factory(lambda _config: graph),
-    )
+    _override(monkeypatch, role_store_factory=_store_factory(_officer_store()))
+
+    def _open_graph(_config: object) -> _Graph:
+        return graph
+
+    _override(monkeypatch, graph_factory=_open_graph)
 
     with _actor(_OFFICER):
         body = json.loads(_call("find-duplicate-obligations", {"role_id": "role_m"}))
@@ -132,16 +129,13 @@ def test_compliance_officer_gets_the_ac_bi_004_wire_shape(monkeypatch: pytest.Mo
 
 def test_unreachable_graph_returns_the_sanitised_error(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(_officer_store()))
+    _override(monkeypatch, role_store_factory=_store_factory(_officer_store()))
 
     def _boom(_config: object) -> object:
         message = "connection refused to 10.0.0.1:6379"
         raise ConnectionError(message)
 
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _opener_factory(_boom),
-    )
+    _override(monkeypatch, graph_factory=_boom)
 
     with _actor(_OFFICER):
         text = _call("find-duplicate-obligations")

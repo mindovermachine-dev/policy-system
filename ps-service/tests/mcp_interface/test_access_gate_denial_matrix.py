@@ -8,13 +8,20 @@ refusing it.
 
 from __future__ import annotations
 
+import asyncio
+from typing import TYPE_CHECKING, cast
+
 import pytest
 from audit._fakes import InMemoryAuditStore, audit_store_factory
+from curated_source._fakes import InMemoryRuntimeConfigStore
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  -- reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _ACCESS_DENIED_MESSAGE,  # pyright: ignore[reportPrivateUsage]  -- reuse this file family's fixtures verbatim
     _NON_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _call,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _fake_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _seeded_store,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _text,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -22,12 +29,17 @@ from mcp_interface.test_catalog_source_authz_gate import (
 )
 from mcp_interface.test_catalog_source_skills import (
     _OVERRIDE_URL,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _install_store,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _app_config,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import tool_core
-from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
+from ps_service.mcp_interface.mcp_server import TOOL_GATES
+from ps_service.mcp_interface.tool_gates import BypassPolicy, GateKind
+
+if TYPE_CHECKING:
+    from mcp.types import CallToolResult
+
+    from ps_service.config import ServiceConfig
 
 _ISSUER = "https://issuer.example.com/"
 _DEFAULT_UNAUTHENTICATED = "error: this action requires a real authenticated caller"
@@ -75,12 +87,32 @@ _REFUSING_TOOLS = sorted(
 )
 
 
+def _call(tool: str, args: dict[str, object] | None = None) -> CallToolResult:
+    """Call `tool` on a server built over the test environment, which carries every tool group."""
+    return cast("CallToolResult", asyncio.run(_server().call_tool(tool, args or {})))
+
+
+def _install_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryRuntimeConfigStore:
+    """Install one in-memory runtime-config store as the server environment's store."""
+    store = InMemoryRuntimeConfigStore(_app_config())
+
+    def _factory(config: ServiceConfig, **_kwargs: object) -> InMemoryRuntimeConfigStore:
+        store.config = config
+        return store
+
+    _override(monkeypatch, runtime_config_store_factory=_factory)
+    return store
+
+
 @pytest.fixture(name="audit_store")
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # injected by name
     configure()
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(
+        monkeypatch,
+        audit_store_factory=audit_store_factory(store),
+        role_store_factory=_fake_store_factory(_seeded_store()),
+    )
     _install_store(monkeypatch)
     return store
 

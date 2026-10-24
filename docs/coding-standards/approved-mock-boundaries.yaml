@@ -25,9 +25,6 @@ falkordb:
   # Graph-opener-only accessor that `build_default_pipeline_dependencies` delegates to; the only
   # piece of it a caller may substitute.
   - ps_service.api.ingestion_orchestration.build_default_graph_openers
-  # Graph-opener-only accessor that `build_default_near_miss_review_dependencies` delegates to;
-  # the only piece of it a caller may substitute.
-  - ps_service.api.near_miss_review_orchestration.build_default_near_miss_review_graph_opener
   # Graph-opener-only accessor that `build_default_graph_cleanup_dependencies` delegates to:
   # zero business logic, sole FalkorDB connection surface of `ps_service.graph_cleanup`.
   - ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener
@@ -52,9 +49,6 @@ postgres:
                                                        # name where it is looked up, not where it is defined
                                                        # (authz/store.py and audit/store.py import it from ps_service.persistence)
   - ps_service.audit.store.PsycopgAuditStore
-  - ps_service.runtime_config.store.PsycopgRuntimeConfigStore
-  - ps_service.ingestion_runs.store.PsycopgIngestionRunStore
-  - ps_service.passkey_signing.store.PsycopgPendingApprovalStore
   - ps_service.passkey_signing.store.connect_from_config
   - ps_service.passkey_signing.signing_credential_store.PsycopgSigningCredentialStore
   # `ps_service/main.py` import aliases (see the alias note in the `falkordb:` section):
@@ -103,18 +97,13 @@ process_os:
   - exclusion_audit._DEFAULT_RECORDS_DIR
   - exclusion_audit._DEFAULT_REPORT_PATH
 
-# Deliberately NOT listed: `build_default_pipeline_dependencies`,
-# `build_default_near_miss_review_dependencies` and
+# Deliberately NOT listed: `build_default_pipeline_dependencies` and
 # `build_default_restore_from_catalog_dependencies`. Each still bundles real business logic
-# alongside its own narrowed, boundary-only accessor, so none of the three factory names is
-# itself an approved-boundary target; only each one's accessor, listed under `falkordb:` above,
-# is:
+# alongside its own narrowed, boundary-only accessor, so neither factory name is itself an
+# approved-boundary target; only each one's accessor, listed under `falkordb:` above, is:
 #   - `build_default_pipeline_dependencies` bundles `PipelineStages`/`PipelineAdapters` (always
 #     real, no override parameter) with exactly one substitutable piece (`graphs`, defaulted via
 #     `build_default_graph_openers`).
-#   - `build_default_near_miss_review_dependencies` bundles the real `list_pending_reviews` and
-#     `resolve_review` (Company Merge business logic) with exactly one substitutable piece
-#     (`open_single_tenant_graph`, defaulted via `build_default_near_miss_review_graph_opener`).
 #   - `build_default_restore_from_catalog_dependencies` bundles the real `restore_instrument`
 #     (Restore business logic) with exactly one substitutable piece (`infra`, a
 #     `CatalogRestoreInfra` bundle of `fetch_artifact`/`resolve_effective_source`/`open_db`,

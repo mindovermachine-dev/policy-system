@@ -52,6 +52,8 @@ from authz._fakes import FakeAccessRoleStore
 from mcp_interface.test_cypher_tool import (
     _FakeGraphHandle,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _install_graph,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _override,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _server,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from ps_service.api.change_check_orchestration import run_change_check_sweep
 from ps_service.api.errors import AccessDeniedError, RestoreStageFailedError
@@ -65,7 +67,6 @@ from ps_service.ingestion_runs.audit_actions import completion_audit_entry
 from ps_service.invitations.errors import AuthentikInvitationError
 from ps_service.invitations.service import invite_user_audited
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from api._fakes import MakeEmitter, ReadLines
@@ -297,10 +298,10 @@ def test_cypher_failure_rows_and_logs_contain_no_secret(
         if failing == "audit_store"
         else {}
     )
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     _install_graph(monkeypatch, _FakeGraphHandle(error=RuntimeError(_LEAK)))
 
-    asyncio.run(mcp_server.server.call_tool("cypher", {"query": f"MATCH (n) RETURN n // {_LEAK}"}))
+    asyncio.run(_server().call_tool("cypher", {"query": f"MATCH (n) RETURN n // {_LEAK}"}))
 
     if failing == "database":
         (row,) = store.rows

@@ -202,7 +202,7 @@ convention = "google"      # AC-BI-001. Justification below.
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-base-classes = ["pydantic.BaseModel"]  # keep Pydantic field types out of `if TYPE_CHECKING` (needed at runtime). NOTE: does NOT cover plain function-signature introspection — see B2 / F-03.
-runtime-evaluated-decorators = ["ps_service.mcp_interface.tool_core.gated_server_tool"]  # the MCP SDK resolves a registered tool's signature annotations at runtime, so imports they need must not move into `if TYPE_CHECKING`
+runtime-evaluated-decorators = ["ps_service.mcp_interface.tool_core.declared_tool"]  # the MCP SDK resolves a registered tool's signature annotations at runtime, so imports they need must not move into `if TYPE_CHECKING`
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = [

@@ -26,9 +26,12 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -79,16 +82,13 @@ class _Env:
     def __init__(self, monkeypatch: pytest.MonkeyPatch, graph: ScriptedObligationGraph) -> None:
         self.graph = graph
         self.pending = FakeApprovalStore()
-        monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_officers()))
-        monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(self.pending))
-        monkeypatch.setattr(
-            "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-            _factory(_opener_for(graph)),
-        )
+        _override(monkeypatch, role_store_factory=_factory(_officers()))
+        _override(monkeypatch, pending_approval_store_factory=_factory(self.pending))
+        _override(monkeypatch, graph_factory=_opener_for(graph))
 
     def call(self, name: str, args: dict[str, object], *, sub: str = _OFFICER) -> str:
         with _actor(sub):
-            result = asyncio.run(mcp_server.server.call_tool(name, args))
+            result = asyncio.run(_server().call_tool(name, args))
         assert isinstance(result, CallToolResult)
         block = result.content[0]
         assert isinstance(block, TextContent)
@@ -171,10 +171,7 @@ def test_an_unreachable_graph_returns_the_sanitised_error(monkeypatch: pytest.Mo
         message = "connection refused to 10.0.0.1:6379"
         raise ConnectionError(message)
 
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _factory(_boom),
-    )
+    _override(monkeypatch, graph_factory=_boom)
 
     text = environment.call("merge-obligations", _MERGE_ARGS)
 

@@ -51,6 +51,10 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_restore_instrument_tool import (
     _INSTRUMENT_ID,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _set_merge_threshold,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -59,7 +63,6 @@ from mcp_interface.test_restore_instrument_tool import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -77,7 +80,7 @@ _ACCESS_DENIED_MESSAGE = "error: You do not have the required access role for th
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse
     """The permitted call writes `instrument.restore` rows: keep them off Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
@@ -103,10 +106,9 @@ def _verified_actor(*, sub: str, iss: str = _CALLER_ISSUER) -> Generator[None]:
 def _fake_store_factory(store: object) -> object:
     """An `AccessRoleStore`-shaped factory returning the same fake store every call.
 
-    Monkeypatched onto `mcp_server.PsycopgAccessRoleStore` -- the gated tool
-    body calls it as `PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))`,
-    so this must accept (and ignore) both the positional `config` and the
-    `audit_store` keyword.
+    Installed as the environment's `role_store_factory` -- the gated tool body calls it as
+    `factory(config, audit_store=<the audit store>)`, so this must accept (and ignore) both the
+    positional `config` and the `audit_store` keyword.
     """
 
     def _factory(_config: object, **_kwargs: object) -> object:
@@ -129,7 +131,7 @@ def _seeded_store() -> FakeAccessRoleStore:
 
 def _call_restore_instrument() -> CallToolResult:
     result = asyncio.run(
-        mcp_server.server.call_tool("restore_instrument", {"instrument_id": _INSTRUMENT_ID})
+        _server().call_tool("restore_instrument", {"instrument_id": _INSTRUMENT_ID})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -151,7 +153,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call_restore_instrument()
@@ -175,7 +177,7 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
         target=(_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
 
     with _verified_actor(sub=_SYSTEM_ADMIN_SUBJECT):
         result = _call_restore_instrument()
@@ -194,7 +196,7 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
         result = _call_restore_instrument()
@@ -218,7 +220,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     _set_merge_threshold(monkeypatch)
     _use_fake_restore_infra(monkeypatch, _valid_transport())
 
@@ -242,9 +244,7 @@ def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     `test_authenticated_user_only_caller_is_denied`'s own docstring.
     """
     configure()
-    monkeypatch.setattr(
-        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
-    )
+    _override(monkeypatch, role_store_factory=_fake_store_factory(RaisingAccessRoleStore()))
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call_restore_instrument()

@@ -8,8 +8,10 @@ role and so never writes one.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -21,6 +23,10 @@ from graph_cleanup._merge_runs import OFFICER, OWNER
 from graph_gateway._fakes import close_all_rigs
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_near_miss_merge_via_cleanup import (
     _DENIED,  # pyright: ignore[reportPrivateUsage]  -- same fixtures as the merge-via-cleanup file
     _REVIEW,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -29,8 +35,9 @@ from mcp_interface.test_near_miss_merge_via_cleanup import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
-from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
+from ps_service.mcp_interface import near_miss_tools
+from ps_service.mcp_interface.mcp_server import TOOL_GATES
+from ps_service.mcp_interface.tool_gates import BypassPolicy, GateKind
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -48,7 +55,7 @@ def cleanup_rig() -> Iterator[CleanupRig]:
 @pytest.fixture
 def audit_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
@@ -74,6 +81,30 @@ def test_near_misses_resolve_declares_a_body_gate_that_refuses_the_bypass() -> N
     )
 
 
+def test_the_gate_the_body_runs_is_the_gate_the_tool_is_declared_with() -> None:
+    tree = ast.parse(Path(near_miss_tools.__file__).read_text(encoding="utf-8"))
+    declared = [
+        decorator.args[1]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.args[0], ast.Constant)
+        and decorator.args[0].value == "near_misses_resolve"
+    ]
+    run = [
+        node.args[2]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "run_body_gate"
+        and len(node.args) == 3  # environment, tool name, gate
+    ]
+
+    assert [ast.dump(node) for node in run] == [ast.dump(node) for node in declared]
+    assert len(run) == 1
+
+
 def test_merge_decision_denial_writes_one_access_gate_row_named_near_misses_resolve(
     env: _Env, audit_store: InMemoryAuditStore
 ) -> None:
@@ -95,9 +126,7 @@ def test_merge_decision_without_a_real_session_writes_no_access_gate_row(
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     result = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve", {"review_id": _REVIEW, "decision": "merge"}
-        )
+        _server().call_tool("near_misses_resolve", {"review_id": _REVIEW, "decision": "merge"})
     )
     assert isinstance(result, CallToolResult)
     block = result.content[0]

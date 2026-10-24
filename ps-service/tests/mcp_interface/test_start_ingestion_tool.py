@@ -35,6 +35,9 @@ from mcp_interface._ingestion_run_harness import (
     use_gated_real_pipeline,
     wait_for_run,
 )
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_ingest_regulation_tool import (
     _CELEX,  # pyright: ignore[reportPrivateUsage]  -- reuse the curated-catalog fixture verbatim, mirrors `test_ingest_regulation_authz_gate.py`
     _RID,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -51,7 +54,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.ingestion_runs import dispatch
 from ps_service.logging import configure, resolve_default_log_path
-from ps_service.mcp_interface import ingestion_tools, tool_core
+from ps_service.mcp_interface import ingestion_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
@@ -623,7 +626,7 @@ def _grant_compliance_officer(monkeypatch: pytest.MonkeyPatch) -> None:
     def _factory(_config: object, **_kwargs: object) -> FakeAccessRoleStore:
         return access
 
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
+    _override(monkeypatch, role_store_factory=_factory)
 
 
 def test_start_ingestion_audits_the_verified_actor_with_trigger_async_ingest(

@@ -2,10 +2,10 @@
 
 Registers `find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`,
 `merge-obligations`, `merge-roles`, `release-capability-governance`, `unmerge` and
-`check-cleanup-approval` on the shared `server` from `tool_core`. Each tool delegates to
-`ps_service.graph_cleanup.service`, which owns the behaviour. This module imports only `tool_core`
-(never another tool group); the patch seam names are looked up there at call time as
-`tool_core.<Name>`.
+`check-cleanup-approval`; `register_graph_cleanup_tools` registers them on a server built by
+`mcp_server.build_server`. Each tool delegates to `ps_service.graph_cleanup.service`, which owns the
+behaviour, and builds its graph opener and stores through the `GateEnvironment` it is bound to. This
+module imports only `tool_core` and `tool_gates` (never another tool group).
 
 Business Rules:
     - Every cleanup tool needs an explicit `ComplianceOfficer` grant on a real authenticated
@@ -16,14 +16,13 @@ Business Rules:
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from mcp.server.mcpserver import Context
 from pydantic import Field
 
 from ps_service.audit.errors import AuditPersistenceError, AuditPostgresUnavailableError
 from ps_service.config import load_config
-from ps_service.graph_cleanup.dependencies import build_default_graph_cleanup_dependencies
 from ps_service.graph_cleanup.discovery import resolve_min_similarity
 from ps_service.graph_cleanup.errors import (
     GraphCleanupAcknowledgmentRequiredError,
@@ -40,7 +39,6 @@ from ps_service.graph_cleanup.service import (
     find_capability_merge_candidates,
     find_duplicate_obligations,
 )
-from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import (
     CLEANUP_APPROVAL_UNSETTLED_MESSAGE as _CLEANUP_APPROVAL_UNSETTLED_MESSAGE,
@@ -49,18 +47,26 @@ from ps_service.mcp_interface.tool_core import CLEANUP_GATE as _CLEANUP_GATE
 from ps_service.mcp_interface.tool_core import (
     GRAPH_UNAVAILABLE_MESSAGE as _GRAPH_UNAVAILABLE_MESSAGE,
 )
+from ps_service.mcp_interface.tool_core import cleanup_dependencies as _cleanup_dependencies
+from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import gated_actor as _gated_actor
-from ps_service.mcp_interface.tool_core import gated_server_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import resolve_base_url as _resolve_base_url
 from ps_service.mcp_interface.tool_core import run_mcp_action as _run_mcp_action
 from ps_service.mcp_interface.tool_core import (
     sanitize_cleanup_graph_open as _sanitize_cleanup_graph_open,
 )
 from ps_service.mcp_interface.tool_core import sanitize_graph_open as _sanitize_graph_open
+from ps_service.mcp_interface.tool_gates import GateEnvironment, register_declared_tools
+
+if TYPE_CHECKING:
+    from mcp.server import MCPServer
+
+    from ps_service.mcp_interface.tool_gates import ToolGate
 
 
 @_gated_tool("find-capability-merge-candidates", _CLEANUP_GATE)
-def find_capability_merge_candidates_tool(
+def find_capability_merge_candidates_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     min_similarity: Annotated[float | None, Field(gt=0.5, le=1.0)] = None,
 ) -> dict[str, object] | str:
     """List groups of active Capabilities that look like duplicates.
@@ -105,7 +111,7 @@ def find_capability_merge_candidates_tool(
     config = load_config()
 
     def _body() -> dict[str, object] | str:
-        dependencies = build_default_graph_cleanup_dependencies()
+        dependencies = _cleanup_dependencies(environment)
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
             result = find_capability_merge_candidates(
@@ -124,7 +130,9 @@ def find_capability_merge_candidates_tool(
 
 
 @_gated_tool("find-duplicate-obligations", _CLEANUP_GATE)
-def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, object] | str:
+def find_duplicate_obligations_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment, role_id: str | None = None
+) -> dict[str, object] | str:
     """List groups of duplicate Obligations under one Role, as a read-only graph cleanup aid.
 
     Nothing is changed and no approval is created. Requires an explicit `ComplianceOfficer` grant on
@@ -159,7 +167,7 @@ def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, obj
     config = load_config()
 
     def _body() -> dict[str, object] | str:
-        dependencies = build_default_graph_cleanup_dependencies()
+        dependencies = _cleanup_dependencies(environment)
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
             result = find_duplicate_obligations(graph, role_id=role_id)
@@ -173,7 +181,8 @@ def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, obj
 
 
 @_gated_tool("merge-capabilities", _CLEANUP_GATE)
-def merge_capabilities_tool(
+def merge_capabilities_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     survivor_id: Annotated[str, Field(min_length=1)],
     absorbed_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
@@ -251,7 +260,7 @@ def merge_capabilities_tool(
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
-        dependencies = build_default_graph_cleanup_dependencies()
+        dependencies = _cleanup_dependencies(environment)
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
             approval = create_capability_merge_approval(
@@ -261,7 +270,7 @@ def merge_capabilities_tool(
                 acknowledge_governance_change=acknowledge_governance_change,
                 actor=actor,
                 base_url=_resolve_base_url(ctx),
-                store=tool_core.PsycopgPendingApprovalStore(config),
+                store=environment.pending_approval_store_factory(config),
             )
         except GraphCleanupAcknowledgmentRequiredError as exc:
             return {
@@ -284,7 +293,8 @@ def merge_capabilities_tool(
 
 
 @_gated_tool("merge-obligations", _CLEANUP_GATE)
-def merge_obligations_tool(
+def merge_obligations_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     survivor_id: Annotated[str, Field(min_length=1)],
     absorbed_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
@@ -340,7 +350,7 @@ def merge_obligations_tool(
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
-        dependencies = build_default_graph_cleanup_dependencies()
+        dependencies = _cleanup_dependencies(environment)
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
             approval = create_obligation_merge_approval(
@@ -349,7 +359,7 @@ def merge_obligations_tool(
                 absorbed_id=absorbed_id,
                 actor=actor,
                 base_url=_resolve_base_url(ctx),
-                store=tool_core.PsycopgPendingApprovalStore(config),
+                store=environment.pending_approval_store_factory(config),
             )
         except GraphCleanupValidationError as exc:
             return f"error: {exc}"
@@ -366,7 +376,8 @@ def merge_obligations_tool(
 
 
 @_gated_tool("merge-roles", _CLEANUP_GATE)
-def merge_roles_tool(
+def merge_roles_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     survivor_id: Annotated[str, Field(min_length=1)],
     absorbed_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
@@ -424,7 +435,7 @@ def merge_roles_tool(
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
-        dependencies = build_default_graph_cleanup_dependencies()
+        dependencies = _cleanup_dependencies(environment)
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
             approval = create_role_merge_approval(
@@ -433,7 +444,7 @@ def merge_roles_tool(
                 absorbed_id=absorbed_id,
                 actor=actor,
                 base_url=_resolve_base_url(ctx),
-                store=tool_core.PsycopgPendingApprovalStore(config),
+                store=environment.pending_approval_store_factory(config),
                 review_id=review_id,
             )
         except GraphCleanupValidationError as exc:
@@ -451,7 +462,8 @@ def merge_roles_tool(
 
 
 @_gated_tool("release-capability-governance", _CLEANUP_GATE)
-def release_capability_governance_tool(
+def release_capability_governance_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     capability_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
 ) -> dict[str, object] | str:
@@ -508,7 +520,7 @@ def release_capability_governance_tool(
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
-        dependencies = build_default_graph_cleanup_dependencies()
+        dependencies = _cleanup_dependencies(environment)
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
             approval = create_release_governance_approval(
@@ -516,7 +528,7 @@ def release_capability_governance_tool(
                 capability_id=capability_id,
                 actor=actor,
                 base_url=_resolve_base_url(ctx),
-                store=tool_core.PsycopgPendingApprovalStore(config),
+                store=environment.pending_approval_store_factory(config),
             )
         except GraphCleanupValidationError as exc:
             return f"error: {exc}"
@@ -536,7 +548,8 @@ _AUDIT_UNREADABLE_MESSAGE = "error: the audit trail could not be read right now;
 
 
 @_gated_tool("unmerge", _CLEANUP_GATE)
-def unmerge_tool(
+def unmerge_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     merged_id: Annotated[str, Field(min_length=1)],
     ctx: Context,
 ) -> dict[str, object] | str:
@@ -626,7 +639,7 @@ def unmerge_tool(
 
     def _body() -> dict[str, object] | str:
         actor = _gated_actor(config)
-        dependencies = build_default_graph_cleanup_dependencies()
+        dependencies = _cleanup_dependencies(environment)
         try:
             graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
             approval = create_unmerge_approval(
@@ -635,7 +648,7 @@ def unmerge_tool(
                 merged_id=merged_id,
                 actor=actor,
                 base_url=_resolve_base_url(ctx),
-                store=tool_core.PsycopgPendingApprovalStore(config),
+                store=environment.pending_approval_store_factory(config),
             )
         except GraphCleanupValidationError as exc:
             return f"error: {exc}"
@@ -654,7 +667,8 @@ def unmerge_tool(
 
 
 @_gated_tool("check-cleanup-approval", _CLEANUP_GATE)
-def check_cleanup_approval_tool(
+def check_cleanup_approval_tool(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     pending_approval_id: Annotated[str, Field(min_length=1)],
 ) -> dict[str, object] | str:
     """Report the status and outcome of a graph-cleanup passkey approval.
@@ -710,11 +724,9 @@ def check_cleanup_approval_tool(
             status = check_cleanup_approval(
                 pending_approval_id=pending_approval_id,
                 actor=actor,
-                store=tool_core.PsycopgPendingApprovalStore(config),
+                store=environment.pending_approval_store_factory(config),
                 config=config,
-                dependencies=_sanitize_cleanup_graph_open(
-                    build_default_graph_cleanup_dependencies()
-                ),
+                dependencies=_sanitize_cleanup_graph_open(_cleanup_dependencies(environment)),
             )
         except (
             McpGraphUnavailableError,
@@ -733,3 +745,33 @@ def check_cleanup_approval_tool(
         }
 
     return _run_mcp_action("check_cleanup_approval", _body)
+
+
+def register_graph_cleanup_tools(
+    server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
+) -> None:
+    """Register the graph-cleanup tools.
+
+    Args:
+        server: The server the tools are registered on.
+        environment: The server-side collaborators the tools use.
+        gates: The registry that records this server's gate declarations.
+
+    Raises:
+        ValueError: A tool name is already declared in `gates`.
+    """
+    register_declared_tools(
+        server,
+        environment,
+        gates,
+        (
+            find_capability_merge_candidates_tool,
+            find_duplicate_obligations_tool,
+            merge_capabilities_tool,
+            merge_obligations_tool,
+            merge_roles_tool,
+            release_capability_governance_tool,
+            unmerge_tool,
+            check_cleanup_approval_tool,
+        ),
+    )

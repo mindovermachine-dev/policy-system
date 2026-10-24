@@ -25,9 +25,13 @@ from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 from policy_lifecycle._gateway_fakes import PolicyGraphSeeder, PolicyReadGraph, SeedStandard
 
+from mcp_interface._environment import graph_factory_from_connect
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -105,9 +109,9 @@ def _setup(
     def _access_role_store(_config: object, **_kwargs: object) -> FakeAccessRoleStore:
         return FakeAccessRoleStore()
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _audit_store)
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _access_role_store)
+    _override(monkeypatch, graph_factory=graph_factory_from_connect(_connect))
+    _override(monkeypatch, audit_store_factory=_audit_store)
+    _override(monkeypatch, role_store_factory=_access_role_store)
     return rig, graph, audit
 
 
@@ -115,7 +119,7 @@ def _call(fields: dict[str, object] | None, *, policy_id: str = _POLICY) -> Call
     arguments: dict[str, object] = {"policy_id": policy_id}
     if fields is not None:
         arguments["fields"] = fields
-    result = asyncio.run(mcp_server.server.call_tool("update-policy-draft", arguments))
+    result = asyncio.run(_server().call_tool("update-policy-draft", arguments))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -157,7 +161,7 @@ def test_the_cleared_property_is_absent_afterwards_and_the_edit_is_visible_to_a_
 
     with _verified_actor(sub=_ACTOR):
         update = _call({"description": "revised text", "scope_out": None})
-        read = asyncio.run(mcp_server.server.call_tool("get-policy", {"policy_id": _POLICY}))
+        read = asyncio.run(_server().call_tool("get-policy", {"policy_id": _POLICY}))
 
     node = graph.nodes[("Policy", _POLICY)]
     assert update.is_error is False

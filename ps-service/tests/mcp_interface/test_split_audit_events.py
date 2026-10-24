@@ -44,6 +44,12 @@ from mcp_interface.test_access_role_tools import (
     _fake_store_factory as _access_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from mcp_interface.test_access_role_tools import (
+    _override as _access_override,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
+from mcp_interface.test_access_role_tools import (
+    _server as _access_server,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
+from mcp_interface.test_access_role_tools import (
     _verified_actor as _access_actor,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from mcp_interface.test_create_policy_draft_gateway import (
@@ -59,6 +65,8 @@ from mcp_interface.test_cypher_tool import (
     _FakeGraphHandle,  # pyright: ignore[reportPrivateUsage]  -- reuse the cypher tool test's graph fake
     _FakeQueryResult,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _install_graph,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _override,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _server,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from mcp_interface.test_graph_cleanup_release_governance_tool import (
     _Env as _CleanupEnv,  # pyright: ignore[reportPrivateUsage]  -- reuse the release-governance tool test's environment
@@ -76,7 +84,7 @@ from mcp_interface.test_near_miss_tools import (
 )
 from ps_service.invitations.client import create_invitation
 from ps_service.logging import configure
-from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
+from ps_service.mcp_interface import catalog_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -91,7 +99,7 @@ def audit_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
         installed_process_gateway().rig.store.audit_rows.add(event_id)
 
     store = InMemoryAuditStore(event_id_sink=_register)
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _access_override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
@@ -107,6 +115,7 @@ def test_ingestion_group_ingest_regulation_audits_submit_then_complete(
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _use_real_pipeline_stages(monkeypatch)
+    _access_override(monkeypatch, audit_store_factory=audit_store_factory(audit_store))
 
     result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
 
@@ -145,9 +154,7 @@ def test_catalog_group_invite_user_audits_user_invite(
         functools.partial(create_invitation, transport=transport),
     )
 
-    result = asyncio.run(
-        mcp_server.server.call_tool("invite-user", {"email": "target@example.com"})
-    )
+    result = asyncio.run(_access_server().call_tool("invite-user", {"email": "target@example.com"}))
 
     assert isinstance(result, CallToolResult)
     assert result.is_error is False
@@ -162,8 +169,9 @@ def test_cypher_group_cypher_audits_query_cypher(
         result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]),
     )
     _install_graph(monkeypatch, handle)
+    _override(monkeypatch, audit_store_factory=audit_store_factory(audit_store))
 
-    result = asyncio.run(mcp_server.server.call_tool("cypher", {"query": "MATCH (n) RETURN n.id"}))
+    result = asyncio.run(_server().call_tool("cypher", {"query": "MATCH (n) RETURN n.id"}))
 
     assert isinstance(result, CallToolResult)
     assert json.loads(_text(result))["row_count"] == 1
@@ -177,8 +185,11 @@ def test_access_group_grant_succeeds_and_a_denied_audit_read_audits_access_gate(
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
     roles = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     trail = FakeAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _access_store_factory(roles))
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _access_store_factory(trail))
+    _access_override(
+        monkeypatch,
+        role_store_factory=_access_store_factory(roles),
+        audit_store_factory=_access_store_factory(trail),
+    )
 
     with _access_actor(sub=_FIRST_CALLER_SUBJECT):
         _call_list_access_roles()

@@ -81,6 +81,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from starlette.applications import Starlette
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.restore_orchestration import CatalogRestoreInfra
 from ps_service.audit import AuditPostgresUnavailableError
@@ -97,7 +101,6 @@ from ps_service.export.models import SerializedGraph, SerializedNode
 from ps_service.export.serialize import checksum_bytes, to_json_bytes
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -686,7 +689,7 @@ def _text(result: CallToolResult) -> str:
 
 def _call_restore_instrument(instrument_id: str = _INSTRUMENT_ID) -> CallToolResult:
     result = asyncio.run(
-        mcp_server.server.call_tool("restore_instrument", {"instrument_id": instrument_id})
+        _server().call_tool("restore_instrument", {"instrument_id": instrument_id})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -702,7 +705,7 @@ def _set_merge_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Every restore writes `instrument.restore` rows: keep them off Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
@@ -1021,7 +1024,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     """
     verifier = PsTokenVerifier(auth_context)
     mcp_asgi_app = build_streamable_http_app(
-        host=host, verifier=verifier, auth_context=auth_context
+        server=_server(), host=host, verifier=verifier, auth_context=auth_context
     )
 
     @contextlib.asynccontextmanager
@@ -1110,7 +1113,7 @@ def _grant_compliance_officer(
     monkeypatch: pytest.MonkeyPatch, *, subject: str, issuer: str
 ) -> None:
     """Seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
-    monkeypatched onto `mcp_server.PsycopgAccessRoleStore`.
+    installed as the test server's `role_store_factory`.
 
     The real-verified-token test below proves principal/actor threading, not
     authorization -- without this, the authz gate denies it, since the token's own
@@ -1127,7 +1130,7 @@ def _grant_compliance_officer(
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
+    _override(monkeypatch, role_store_factory=_factory)
 
 
 def test_real_verified_token_call_logs_no_principal_and_the_delegate_gets_the_mcp_caller_label(

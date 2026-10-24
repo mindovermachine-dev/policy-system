@@ -21,6 +21,10 @@ from invitations.test_client import (
 )
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _ACCESS_DENIED_MESSAGE,  # pyright: ignore[reportPrivateUsage]  -- reuse the gate tests' fixtures verbatim rather than re-declaring them
     _CALLER_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -36,7 +40,7 @@ from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.invitations.client import AuthentikTransport, create_invitation
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
+from ps_service.mcp_interface import catalog_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,12 +56,12 @@ _GENERIC_ERROR = "error: an unexpected error occurred"
 def _audit_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse
     """Gate and invite audit rows go to an in-memory store, never a real Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
 def _call_invite_user() -> str:
-    result = asyncio.run(mcp_server.server.call_tool("invite-user", {"email": _EMAIL}))
+    result = asyncio.run(_server().call_tool("invite-user", {"email": _EMAIL}))
     assert isinstance(result, CallToolResult)
     block = result.content[0]
     assert isinstance(block, TextContent)
@@ -81,7 +85,7 @@ def _as_system_admin(monkeypatch: pytest.MonkeyPatch) -> None:
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
 
 
 def _invite_user_lines(read_lines: ReadLines) -> tuple[str, list[dict[str, object]]]:
@@ -100,7 +104,7 @@ def test_tool_call_refused_by_its_role_gate_logs_no_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     emitter = configure()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         text = _call_invite_user()

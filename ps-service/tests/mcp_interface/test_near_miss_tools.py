@@ -97,10 +97,13 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.passkey_signing.models import PendingApprovalRow
 
 if TYPE_CHECKING:
@@ -143,12 +146,11 @@ def _verified_actor(*, sub: str = _ACTOR_SUBJECT, iss: str = _ACTOR_ISSUER) -> G
 def _fake_store_factory(store: object) -> Callable[[object], object]:
     """A `PsycopgPendingApprovalStore`-shaped factory returning the same fake store every call.
 
-    Monkeypatched onto `mcp_server.PsycopgPendingApprovalStore` -- the tool
-    bodies call it as `PsycopgPendingApprovalStore(config)`, so this must
-    accept (and ignore) one positional argument. Typed loosely (`object`,
-    not `PendingApprovalStore`) so it also accepts this file's own
-    deliberately-narrower-than-the-Protocol `_RaisingStore` fake below,
-    which only needs `create_pending_approval` to raise.
+    Installed as the environment's `pending_approval_store_factory` -- the tool bodies call it
+    as `factory(config)`, so this must accept (and ignore) one positional argument. Typed
+    loosely (`object`, not `PendingApprovalStore`) so it also accepts this file's own
+    deliberately-narrower-than-the-Protocol `_RaisingStore` fake below, which only needs
+    `create_pending_approval` to raise.
     """
     return lambda _config: store
 
@@ -306,22 +308,12 @@ def _row_for(record: PendingReviewRecord) -> list[object]:
 def _use_fake_graph_opener_only(
     monkeypatch: pytest.MonkeyPatch, opener: Callable[[ServiceConfig], object]
 ) -> None:
-    """Patch only the narrowed FalkorDB boundary; the real factory wires real
-    `list_pending_reviews`/`resolve_review`.
+    """Hand the tools `opener` as their graph factory; the review functions stay real.
 
-    Targets `ps_service.api.near_miss_review_orchestration.
-    build_default_near_miss_review_graph_opener` -- the approved-boundary
-    entry in
-    `docs/coding-standards/approved-mock-boundaries.yaml` -- so
-    `build_default_near_miss_review_dependencies()`'s own, unpatched call
-    (every tool body in `mcp_server.py` makes it with zero arguments) still
-    wires the real business-logic functions; only the graph this opener
-    hands them is substituted.
+    The tools wire the real `list_pending_reviews`/`resolve_review` over the environment's graph
+    factory, so only the graph this opener hands them is substituted.
     """
-    monkeypatch.setattr(
-        "ps_service.api.near_miss_review_orchestration.build_default_near_miss_review_graph_opener",
-        lambda: opener,
-    )
+    _override(monkeypatch, graph_factory=opener)
 
 
 def _use_scripted_graph(monkeypatch: pytest.MonkeyPatch, graph: _ScriptedGraphHandle) -> None:
@@ -336,7 +328,7 @@ def _raising_open(config: object) -> object:
 
 
 def _call_near_misses_list() -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("near_misses_list", {}))
+    result = asyncio.run(_server().call_tool("near_misses_list", {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -405,15 +397,13 @@ def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
         installed_process_gateway().rig.store.audit_rows.add(event_id)
 
     store = InMemoryAuditStore(event_id_sink=_register)
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
 def _call_near_misses_resolve(review_id: str, decision: str) -> CallToolResult:
     result = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve", {"review_id": review_id, "decision": decision}
-        )
+        _server().call_tool("near_misses_resolve", {"review_id": review_id, "decision": decision})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -510,13 +500,14 @@ def test_check_approval_unknown_id_gets_generic_not_found(
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    monkeypatch.setattr(
-        tool_core, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
+    _override(
+        monkeypatch,
+        pending_approval_store_factory=_fake_store_factory(_FakePendingApprovalStore()),
     )
 
     with _verified_actor():
         result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "near_misses_check_approval", {"pending_approval_id": "does-not-exist"}
             )
         )
@@ -553,10 +544,10 @@ def test_check_approval_unauthenticated_caller_gets_generic_not_found(
         actor_issuer=_ACTOR_ISSUER,
         display_summary={},
     )
-    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+    _override(monkeypatch, pending_approval_store_factory=_fake_store_factory(store))
 
     result = asyncio.run(
-        mcp_server.server.call_tool("near_misses_check_approval", {"pending_approval_id": row.id})
+        _server().call_tool("near_misses_check_approval", {"pending_approval_id": row.id})
     )
 
     assert isinstance(result, CallToolResult)
@@ -589,13 +580,11 @@ def test_check_approval_wrong_actor_gets_generic_not_found(
         actor_issuer=_ACTOR_ISSUER,
         display_summary={},
     )
-    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+    _override(monkeypatch, pending_approval_store_factory=_fake_store_factory(store))
 
     with _verified_actor(sub="someone-else", iss=_ACTOR_ISSUER):
         result = asyncio.run(
-            mcp_server.server.call_tool(
-                "near_misses_check_approval", {"pending_approval_id": row.id}
-            )
+            _server().call_tool("near_misses_check_approval", {"pending_approval_id": row.id})
         )
 
     assert isinstance(result, CallToolResult)

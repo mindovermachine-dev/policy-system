@@ -4,11 +4,10 @@
 helper -- binds a real `AccessToken`
 onto the MCP SDK's own auth contextvar that `get_access_token()`
 (`_resolve_policy_lifecycle_actor`) reads.
-`_install_graph` mirrors `test_cypher_tool.py`'s own
-`connect_from_config`-monkeypatch pattern for installing a fake FalkorDB
-graph handle; `_install_audit_store` mirrors `test_access_role_tools.py`'s
-own `_fake_store_factory` pattern, monkeypatched onto
-`mcp_server.PsycopgAuditStore` instead of `PsycopgAccessRoleStore`. This
+`_install_graph` installs a fake FalkorDB graph handle as the environment's
+`graph_factory`; `_install_audit_store` mirrors `test_access_role_tools.py`'s
+own `_fake_store_factory` pattern, installed as the environment's
+`audit_store_factory` instead of its `role_store_factory`. This
 tool is the first policy-lifecycle one to need both a fake graph handle and
 a fake `AuditStore` in the same call.
 
@@ -45,17 +44,22 @@ from policy_lifecycle._gateway_fakes import (
     SeedStandard,
 )
 
+from mcp_interface._environment import graph_factory_for
 from mcp_interface._input_schema import (
     parameter_array_item_schema,
     parameter_object_schema,
     tool_input_schema,
+)
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
 )
 from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfig
 from ps_service.domain_schema import patchable_fields
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server, policy_lifecycle_tools, tool_core
+from ps_service.mcp_interface import policy_lifecycle_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Mapping
@@ -153,10 +157,7 @@ class _FakeFalkorDB:
 
 
 def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _GraphHandleDouble) -> None:
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        return _FakeFalkorDB(handle)
-
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
+    _override(monkeypatch, graph_factory=graph_factory_for(_FakeFalkorDB(handle)))
 
 
 @dataclass
@@ -234,7 +235,7 @@ def _install_audit_store(monkeypatch: pytest.MonkeyPatch, store: _FakeAuditStore
     def _factory(_config: object) -> _FakeAuditStore:
         return store
 
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory)
+    _override(monkeypatch, audit_store_factory=_factory)
 
 
 def _configure_graph_name(monkeypatch: pytest.MonkeyPatch, graph_name: str) -> None:
@@ -255,7 +256,7 @@ def _call_create_policy_draft(
     arguments: dict[str, object] = {"title": title}
     if capability_ids is not None:
         arguments["capability_ids"] = capability_ids
-    result = asyncio.run(mcp_server.server.call_tool("create-policy-draft", arguments))
+    result = asyncio.run(_server().call_tool("create-policy-draft", arguments))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -522,7 +523,7 @@ def test_create_policy_draft_without_standards_argument_still_works_unchanged(
     _install_audit_store(monkeypatch, _FakeAuditStore())
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
-        result = asyncio.run(mcp_server.server.call_tool("create-policy-draft", {"title": _TITLE}))
+        result = asyncio.run(_server().call_tool("create-policy-draft", {"title": _TITLE}))
     assert isinstance(result, CallToolResult)
 
     assert result.is_error is False
@@ -608,9 +609,7 @@ def test_create_policy_draft_rejects_malformed_standards_before_the_body_runs(
         pytest.raises(ToolError),
     ):
         asyncio.run(
-            mcp_server.server.call_tool(
-                "create-policy-draft", {"title": _TITLE, "standards": standards}
-            )
+            _server().call_tool("create-policy-draft", {"title": _TITLE, "standards": standards})
         )
 
     assert rig.store.groups == []
@@ -627,7 +626,7 @@ def test_create_policy_draft_with_null_or_empty_standards_makes_a_title_only_dra
     with _verified_actor(sub=_ACTOR_SUBJECT):
         results = [
             asyncio.run(
-                mcp_server.server.call_tool(
+                _server().call_tool(
                     "create-policy-draft", {"title": f"{_TITLE} {index}", "standards": standards}
                 )
             )
@@ -651,7 +650,7 @@ def test_create_policy_draft_standard_without_controls_gets_no_controls(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": _TITLE, "standards": [{"title": "Encryption Standard"}]},
             )
@@ -688,7 +687,7 @@ def test_create_policy_draft_with_standards_creates_full_tree_all_draft(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         create_result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {
                     "title": _TITLE,
@@ -749,7 +748,7 @@ def test_create_policy_draft_with_standards_then_propose_policy_succeeds(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         create_result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": _TITLE, "standards": [{"title": "Encryption Standard"}]},
             )
@@ -789,7 +788,7 @@ def test_create_policy_draft_with_supersedes_policy_id_success_shape(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         prior_result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": _TITLE, "standards": [{"title": "Encryption Standard"}]},
             )
@@ -807,7 +806,7 @@ def test_create_policy_draft_with_supersedes_policy_id_success_shape(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         fork_result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": "Data Protection Policy v2", "supersedes_policy_id": prior_id},
             )
@@ -840,7 +839,7 @@ def test_create_policy_draft_supersedes_missing_prior_returns_named_error(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": _TITLE, "supersedes_policy_id": "pol_missing"},
             )
@@ -862,7 +861,7 @@ def test_create_policy_draft_supersedes_non_approved_prior_returns_named_error(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": _TITLE, "supersedes_policy_id": _EXISTING_POLICY_ID},
             )
@@ -900,7 +899,7 @@ def test_create_policy_draft_supersede_log_triad_carries_entity_id(
     with _verified_actor(sub=_ACTOR_SUBJECT):
         _install_rig_graph(monkeypatch, approved_prior)
         success_result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {
                     "title": "Data Protection Policy v2",
@@ -911,7 +910,7 @@ def test_create_policy_draft_supersede_log_triad_carries_entity_id(
 
         _install_rig_graph(monkeypatch, _draft_fixture())
         failure_result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": _TITLE, "supersedes_policy_id": _EXISTING_POLICY_ID},
             )
@@ -1041,11 +1040,11 @@ def _install_access_role_store(monkeypatch: pytest.MonkeyPatch, store: object) -
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
+    _override(monkeypatch, role_store_factory=_factory)
 
 
 def _call_get_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("get-policy", {"policy_id": policy_id}))
+    result = asyncio.run(_server().call_tool("get-policy", {"policy_id": policy_id}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -1253,7 +1252,7 @@ def _call_update_policy_draft(
     args: dict[str, object] = {"policy_id": policy_id}
     if fields is not None:
         args["fields"] = fields
-    result = asyncio.run(mcp_server.server.call_tool("update-policy-draft", args))
+    result = asyncio.run(_server().call_tool("update-policy-draft", args))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -1525,7 +1524,7 @@ def _call_add_standard_to_draft(
     args: dict[str, object] = {"policy_id": policy_id, "title": title}
     if fields is not None:
         args["fields"] = fields
-    result = asyncio.run(mcp_server.server.call_tool("add-standard-to-draft", args))
+    result = asyncio.run(_server().call_tool("add-standard-to-draft", args))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -1809,7 +1808,7 @@ def _call_update_standard_draft(
     args: dict[str, object] = {"standard_id": standard_id}
     if fields is not None:
         args["fields"] = fields
-    result = asyncio.run(mcp_server.server.call_tool("update-standard-draft", args))
+    result = asyncio.run(_server().call_tool("update-standard-draft", args))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -2026,7 +2025,7 @@ def _call_add_control_to_draft(
         args["control_type"] = control_type
     if fields is not None:
         args["fields"] = fields
-    result = asyncio.run(mcp_server.server.call_tool("add-control-to-draft", args))
+    result = asyncio.run(_server().call_tool("add-control-to-draft", args))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -2262,7 +2261,7 @@ def _call_update_control_draft(
     args: dict[str, object] = {"control_id": control_id}
     if fields is not None:
         args["fields"] = fields
-    result = asyncio.run(mcp_server.server.call_tool("update-control-draft", args))
+    result = asyncio.run(_server().call_tool("update-control-draft", args))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -2745,7 +2744,7 @@ def _install_fixture_rig(
 
 
 def _call_propose_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("propose-policy", {"policy_id": policy_id}))
+    result = asyncio.run(_server().call_tool("propose-policy", {"policy_id": policy_id}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -2901,7 +2900,7 @@ def _approvable_fixture(
 
 
 def _call_approve_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("approve-policy", {"policy_id": policy_id}))
+    result = asyncio.run(_server().call_tool("approve-policy", {"policy_id": policy_id}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -3124,7 +3123,7 @@ def test_approve_policy_without_a_real_authenticated_caller_and_no_bypass_is_ref
 
 
 def _call_reject_policy(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("reject-policy", {"policy_id": policy_id}))
+    result = asyncio.run(_server().call_tool("reject-policy", {"policy_id": policy_id}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -3289,9 +3288,7 @@ def _revertable_fixture(
 
 
 def _call_revert_policy_to_draft(policy_id: str = _EXISTING_POLICY_ID) -> CallToolResult:
-    result = asyncio.run(
-        mcp_server.server.call_tool("revert-policy-to-draft", {"policy_id": policy_id})
-    )
+    result = asyncio.run(_server().call_tool("revert-policy-to-draft", {"policy_id": policy_id}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -3670,7 +3667,7 @@ def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         prior_result = asyncio.run(
-            mcp_server.server.call_tool(
+            _server().call_tool(
                 "create-policy-draft",
                 {"title": _TITLE, "standards": [{"title": "Encryption Standard"}]},
             )
@@ -3689,7 +3686,7 @@ def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
 
     fork_result = asyncio.run(
-        mcp_server.server.call_tool(
+        _server().call_tool(
             "create-policy-draft",
             {"title": "Data Protection Policy v2", "supersedes_policy_id": prior_id},
         )

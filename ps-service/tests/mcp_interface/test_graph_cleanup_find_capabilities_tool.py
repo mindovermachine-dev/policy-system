@@ -18,9 +18,12 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -64,19 +67,12 @@ def _store_factory(store: object) -> Callable[..., object]:
     return _factory
 
 
-def _opener_factory(opener: Callable[[object], object]) -> Callable[[], Callable[[object], object]]:
-    def _factory() -> Callable[[object], object]:
-        return opener
-
-    return _factory
-
-
 def _open_graph(_config: object) -> object:
     return _Graph()
 
 
 def _call(name: str, args: dict[str, object] | None = None) -> str:
-    result = asyncio.run(mcp_server.server.call_tool(name, args or {}))
+    result = asyncio.run(_server().call_tool(name, args or {}))
     assert isinstance(result, CallToolResult)
     block = result.content[0]
     assert isinstance(block, TextContent)
@@ -99,11 +95,8 @@ def test_compliance_officer_gets_the_full_ac_bi_003_wire_shape(
 ) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _opener_factory(_open_graph),
-    )
+    _override(monkeypatch, role_store_factory=_store_factory(store))
+    _override(monkeypatch, graph_factory=_open_graph)
 
     with _actor(_OFFICER):
         body = json.loads(_call("find-capability-merge-candidates"))
@@ -140,16 +133,13 @@ def test_compliance_officer_gets_the_full_ac_bi_003_wire_shape(
 def test_unreachable_graph_returns_the_sanitised_error(monkeypatch: pytest.MonkeyPatch) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
+    _override(monkeypatch, role_store_factory=_store_factory(store))
 
     def _boom(_config: object) -> object:
         message = "connection refused to 10.0.0.1:6379"
         raise ConnectionError(message)
 
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _opener_factory(_boom),
-    )
+    _override(monkeypatch, graph_factory=_boom)
 
     with _actor(_OFFICER):
         text = _call("find-capability-merge-candidates")
@@ -163,11 +153,11 @@ def test_min_similarity_outside_the_bounds_is_rejected_at_the_schema(
 ) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
+    _override(monkeypatch, role_store_factory=_store_factory(store))
 
     with _actor(_OFFICER), pytest.raises(ToolError):
         asyncio.run(
-            mcp_server.server.call_tool("find-capability-merge-candidates", {"min_similarity": bad})
+            _server().call_tool("find-capability-merge-candidates", {"min_similarity": bad})
         )
 
 
@@ -176,7 +166,7 @@ def test_min_similarity_is_passed_through_and_embedding_groups_are_reported(
 ) -> None:
     configure()
     store = _officer_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
+    _override(monkeypatch, role_store_factory=_store_factory(store))
 
     class _EmbeddingGraph:
         def query(self, q: str, params: dict[str, object] | None = None) -> _Result:
@@ -188,10 +178,10 @@ def test_min_similarity_is_passed_through_and_embedding_groups_are_reported(
                 ]
             )
 
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _opener_factory(lambda _config: _EmbeddingGraph()),
-    )
+    def _open_embedding_graph(_config: object) -> _EmbeddingGraph:
+        return _EmbeddingGraph()
+
+    _override(monkeypatch, graph_factory=_open_embedding_graph)
 
     with _actor(_OFFICER):
         strict = json.loads(_call("find-capability-merge-candidates", {"min_similarity": 0.95}))

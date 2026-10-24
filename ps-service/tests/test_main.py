@@ -63,7 +63,7 @@ from ps_service.logging.facade import (
     resolve_default_log_path,
 )
 from ps_service.main import create_app
-from ps_service.mcp_interface import cypher_tools, tool_core
+from ps_service.mcp_interface import cypher_tools
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
@@ -73,6 +73,7 @@ from ps_service.persistence import (
     check_connectivity_from_config as check_state_postgres_connectivity,
 )
 from ps_service.persistence import connect_from_config as connect_state_postgres_from_config
+from ps_service.query_engine import falkordb_client
 from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
 
 if TYPE_CHECKING:
@@ -81,6 +82,7 @@ if TYPE_CHECKING:
     import httpx
     from fastapi.responses import JSONResponse
     from fastapi.routing import APIRoute
+    from mcp.server import MCPServer
     from starlette.applications import Starlette
 
     from ps_service.auth.models import AuthContext
@@ -1136,10 +1138,14 @@ def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_a
     real_build_streamable_http_app = main_module.build_streamable_http_app
 
     def wrapped_build_streamable_http_app(
-        *, host: str, verifier: PsTokenVerifier | None, auth_context: AuthContext | None
+        *,
+        server: MCPServer,
+        host: str,
+        verifier: PsTokenVerifier | None,
+        auth_context: AuthContext | None,
     ) -> Starlette:
         mcp_asgi_app = real_build_streamable_http_app(
-            host=host, verifier=verifier, auth_context=auth_context
+            server=server, host=host, verifier=verifier, auth_context=auth_context
         )
 
         @asynccontextmanager
@@ -2474,10 +2480,10 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     """
     fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
 
-    def _stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
+    def _stub_connect(host: str, port: int) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _stub_mcp_connect_from_config)
+    monkeypatch.setattr(falkordb_client, "connect", _stub_connect)
 
     md_file = tmp_path / "ps-domain-concepts.md"
     md_file.write_text("# PS domain concepts\n\nRegulation -> Obligation\n", encoding="utf-8")
@@ -2541,10 +2547,10 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_logs_no_princ
 
     fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
 
-    def _stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
+    def _stub_connect(host: str, port: int) -> _FakeFalkorDB:
         return _FakeFalkorDB(fake_graph)
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _stub_mcp_connect_from_config)
+    monkeypatch.setattr(falkordb_client, "connect", _stub_connect)
 
     config = _complete_config(is_local_test_bypass_active=True, logging_dir=tmp_path)
     app = create_app(config)

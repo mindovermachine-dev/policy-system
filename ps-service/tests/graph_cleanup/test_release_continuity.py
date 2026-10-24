@@ -16,6 +16,9 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from passkey_signing._harness import ACTOR_ISSUER, ACTOR_SUBJECT
 
 # Imported so pytest finds the flow's own `world` fixture (the sweep does the same).
@@ -24,7 +27,6 @@ from passkey_signing.test_graph_cleanup_release_signing import world
 from graph_cleanup._fakes import SURVIVOR
 from graph_cleanup._mcp_calls import call_tool, factory
 from ps_service.audit.models import AuditEventRow
-from ps_service.mcp_interface import tool_core
 
 if TYPE_CHECKING:
     import pytest
@@ -40,9 +42,13 @@ _OWNER = ("owner", "https://issuer.example.com/")
 def test_preview_sign_execute_one_group_and_the_audit_row_it_is_linked_to(
     monkeypatch: pytest.MonkeyPatch, world: _World
 ) -> None:
-    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", factory(world.pending))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", factory(world.roles))
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", factory(world.audit))
+    _override(
+        monkeypatch,
+        pending_approval_store_factory=factory(world.pending),
+        role_store_factory=factory(world.roles),
+        audit_store_factory=factory(world.audit),
+        graph_factory=factory(world.graph),
+    )
     officer = (ACTOR_SUBJECT, ACTOR_ISSUER)
 
     # 1. The MCP tool previews and creates the approval; nothing is written yet.

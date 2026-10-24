@@ -1,24 +1,15 @@
-"""Shared plumbing of the PS MCP tools: the one `MCPServer`, the gates and the patch seam.
+"""Shared plumbing of the PS MCP tools: the server factory, the gate declarations and the helpers.
 
-Defines `server`, the single `MCPServer` instance on which every PS tool and the
-`psdomain://concepts` resource are registered, and the helpers all tool groups share:
+Defines `create_server`, `BuiltServer` and `declared_tool`, and the helpers all tool groups share:
 caller-identity resolution from the verified bearer token, role gating, graph-opener sanitising
 and the started/succeeded/failed log triad wrapped around every tool body. Each tool group
-lives in its own `*_tools` module and registers on `server`; the front door lists them all in
-`mcp_server.TOOL_GROUP_MODULES`.
-
-Patch seam:
-    The store classes `PsycopgAccessRoleStore`, `PsycopgAuditStore` and
-    `PsycopgPendingApprovalStore` and the loader `connect_from_config` are bound in this module
-    and nowhere else in the package. Every consumer, in this module and in every tool-group module,
-    looks them up here when it calls them (`tool_core.PsycopgAuditStore(config)`), never through an
-    import of its own. They are the single seam tests and deployments patch: one
-    `monkeypatch.setattr(tool_core, "<Name>", ...)` reaches every tool of every group.
+lives in its own `*_tools` module and registers on a server built by `mcp_server.build_server`,
+which lists them all in `mcp_server.TOOL_GROUP_MODULES`.
 
 Business Rules:
     - This module binds no transport and no authentication. The Streamable HTTP transport in the
-      sibling `http_transport` module is the only transport and arms authentication on `server` from
-      outside this file, so importing this module performs no I/O and no fail-closed check.
+      sibling `http_transport` module is the only transport and arms authentication on the server
+      from outside this file, so importing this module performs no I/O and no fail-closed check.
     - A tool failure crosses the MCP boundary as an `error: <message>` string. Infrastructure
       failures use fixed, detail-free wording: no host, port, driver or credential text.
 """
@@ -26,7 +17,7 @@ Business Rules:
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -43,13 +34,9 @@ from ps_service.audit.emit import AuditContext
 from ps_service.audit.errors import (
     AuditActorUnresolvedError,
 )
-from ps_service.audit.store import PsycopgAuditStore
 from ps_service.authz.models import AccessRole
-from ps_service.authz.store import PsycopgAccessRoleStore
-from ps_service.config import (
-    LOCAL_TEST_PRINCIPAL_ID,
-    load_config,
-)
+from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
+from ps_service.graph_cleanup.dependencies import build_default_graph_cleanup_dependencies
 from ps_service.logging import (
     bind_run_context,
     emit_log_entry,
@@ -61,24 +48,18 @@ from ps_service.mcp_interface.tool_gates import (
     BypassPolicy,
     GateEnvironment,
     GateKind,
+    ToolDeclaration,
     ToolGate,
-    gated_tool,
+    attach_declaration,
 )
-from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
 from ps_service.passkey_signing.webauthn_rp import signable_link_host
-from ps_service.query_engine.falkordb_client import (
-    GraphHandle,
-    connect_from_config,
-    select_graph,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ps_service.config import ServiceConfig
-    from ps_service.graph_cleanup.dependencies import (
-        GraphCleanupDependencies,
-    )
+    from ps_service.graph_cleanup.dependencies import GraphCleanupDependencies
+    from ps_service.query_engine.falkordb_client import GraphHandle
 
 __all__ = [
     "ACCESS_ROLE_CHANGE_GATE",
@@ -98,14 +79,12 @@ __all__ = [
     "POLICY_DRAFT_ACCESS_GATE",
     "SYSTEM_ADMIN_GATE",
     "UNEXPECTED_ERROR_MESSAGE",
-    "PsycopgAccessRoleStore",
-    "PsycopgAuditStore",
-    "PsycopgPendingApprovalStore",
+    "BuiltServer",
     "audit_context",
-    "connect_from_config",
-    "gate_environment",
+    "cleanup_dependencies",
+    "create_server",
+    "declared_tool",
     "gated_actor",
-    "gated_server_tool",
     "resolve_authz_actor",
     "resolve_base_url",
     "resolve_graph",
@@ -113,7 +92,6 @@ __all__ = [
     "run_mcp_action",
     "sanitize_cleanup_graph_open",
     "sanitize_graph_open",
-    "server",
 ]
 
 COMPONENT = "mcp_interface"
@@ -126,37 +104,60 @@ UNEXPECTED_ERROR_MESSAGE = "error: an unexpected error occurred"
 CELEX_PATTERN = r"^3\d{4}[A-Z]\d{4}$"
 
 
-server = MCPServer(
-    name="ps-mcp",
-    instructions=(
-        "Read-only Cypher access to the policy_system compliance graph. "
-        "Call the domain_concepts tool first and ground every query in its actual node "
-        "labels, properties, and edge directions -- never invent one. "
-        "Write clauses are rejected before execution and returned as an 'error:' line."
-    ),
-)
+def create_server() -> MCPServer:
+    """Return a new `MCPServer` configured for the PS tools."""
+    return MCPServer(
+        name="ps-mcp",
+        instructions=(
+            "Read-only Cypher access to the policy_system compliance graph. "
+            "Call the domain_concepts tool first and ground every query in its actual node "
+            "labels, properties, and edge directions -- never invent one. "
+            "Write clauses are rejected before execution and returned as an 'error:' line."
+        ),
+    )
 
 
-gate_environment = GateEnvironment(
-    load_config=lambda: load_config(),  # noqa: PLW0108
-    resolve_actor=lambda config: resolve_authz_actor(config),  # noqa: PLW0108
-    role_store_factory=lambda config: PsycopgAccessRoleStore(
-        config, audit_store=PsycopgAuditStore(config)
-    ),
-    audit_store_factory=lambda config: PsycopgAuditStore(config),  # noqa: PLW0108
-    run_action=lambda action, body: run_mcp_action(action, body),  # noqa: PLW0108
-)
+@dataclasses.dataclass(frozen=True, slots=True)
+class BuiltServer:
+    """An `MCPServer` together with the gate declarations registered on it.
+
+    Attributes:
+        server: The server with its tools and resources registered.
+        gates: Every registered tool's declaration, keyed by registered tool name.
+    """
+
+    server: MCPServer
+    gates: dict[str, ToolGate]
 
 
-gated_server_tool = gated_tool(server, gate_environment)
+def declared_tool[F: Callable[..., Any]](name: str, gate: ToolGate) -> Callable[[F], F]:
+    """Declare the tool name and gate of a module-level tool function.
+
+    The function is returned unchanged, so it stays directly callable and keeps its docstring. A
+    group's registration function hands it to `register_declared_tools`, which registers it on a
+    server under the declared name and gate.
+
+    Args:
+        name: The registered tool name.
+        gate: The tool's access declaration.
+
+    Returns:
+        A decorator that records the declaration on the function.
+    """
+
+    def _declare(tool: F) -> F:
+        return attach_declaration(tool, ToolDeclaration(name=name, gate=gate))
+
+    return _declare
 
 
-def resolve_graph(config: ServiceConfig) -> GraphHandle:
+def resolve_graph(config: ServiceConfig, *, environment: GateEnvironment) -> GraphHandle:
     """Open the company graph for one tool call, hiding connection detail from the client.
 
     Args:
         config: Already-resolved service configuration. The caller resolves it, so a
             `ServiceConfigurationError` raised while loading it is sanitised by the caller.
+        environment: Supplies the graph factory.
 
     Returns:
         A `GraphHandle` for the graph named by `config.falkordb_graph`.
@@ -171,7 +172,7 @@ def resolve_graph(config: ServiceConfig) -> GraphHandle:
         Opens a connection to FalkorDB.
     """
     try:
-        return select_graph(connect_from_config(config), config.falkordb_graph)
+        return environment.graph_factory(config)
     # broad by design: every failure here is sanitised to a fixed message
     # and chained, never re-raised raw
     except Exception as exc:
@@ -266,17 +267,23 @@ def resolve_policy_lifecycle_actor(config: ServiceConfig) -> tuple[str, str] | N
     return None
 
 
-def audit_context(config: ServiceConfig, actor: tuple[str, str] | None) -> AuditContext | str:
+def audit_context(
+    config: ServiceConfig,
+    actor: tuple[str, str] | None,
+    *,
+    environment: GateEnvironment,
+) -> AuditContext | str:
     """Build the audit context (actor plus audit store) for one audited tool call.
 
     The single MCP definition of the actor policy, the counterpart of REST's
     `provide_audit_context`. The actor is the verified `(sub, iss)`, or the local-test-bypass
-    sentinel when there is none and the bypass is active. `PsycopgAuditStore` opens no connection
-    until a row is written, so a tool that needs only `.actor` pays nothing for the store.
+    sentinel when there is none and the bypass is active. The production audit store opens no
+    connection until a row is written, so a tool that needs only `.actor` pays nothing for it.
 
     Args:
         config: Service configuration; selects the audit database and the bypass state.
         actor: Verified `(sub, iss)` from one of the resolvers, or `None` when none was bound.
+        environment: Supplies the audit-store factory.
 
     Returns:
         An `AuditContext`, or `_CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE` (fail-closed,
@@ -287,7 +294,7 @@ def audit_context(config: ServiceConfig, actor: tuple[str, str] | None) -> Audit
             actor=resolve_audit_actor(
                 actor, is_local_test_bypass_active=config.is_local_test_bypass_active
             ),
-            store=PsycopgAuditStore(config),
+            store=environment.audit_store_factory(config),
         )
     except AuditActorUnresolvedError:
         return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
@@ -509,6 +516,25 @@ def sanitize_graph_open[**P, R](opener: Callable[P, R]) -> Callable[P, R]:
             raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL) from exc
 
     return _wrapped
+
+
+def cleanup_dependencies(environment: GateEnvironment) -> GraphCleanupDependencies:
+    """Return the graph-cleanup dependencies built from the environment's factories.
+
+    The graph opener, audit store and access-role store come from `environment`; the graph write
+    gateway keeps its default, which resolves the process's installed gateway when a write runs.
+
+    Args:
+        environment: The collaborators the tool is bound to.
+
+    Returns:
+        The wired `GraphCleanupDependencies`.
+    """
+    return build_default_graph_cleanup_dependencies(
+        open_single_tenant_graph=environment.graph_factory,
+        audit_store=environment.audit_store_factory,
+        access_role_store=environment.access_role_store,
+    )
 
 
 def sanitize_cleanup_graph_open(

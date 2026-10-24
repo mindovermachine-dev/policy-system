@@ -75,8 +75,12 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface._environment import graph_factory_from_connect
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  -- pins the exact seed-check query text, mirrors test_cypher_tool.py
 )
@@ -254,7 +258,7 @@ def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _HybridGraph) -> Non
     def _connect_from_config(_config: object) -> _FakeFalkorDB:
         return _FakeFalkorDB(handle)
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
+    _override(monkeypatch, graph_factory=graph_factory_from_connect(_connect_from_config))
 
 
 class _FakeAuditStore:
@@ -290,14 +294,14 @@ def _install_audit_store(monkeypatch: pytest.MonkeyPatch, store: _FakeAuditStore
     def _factory(_config: object) -> _FakeAuditStore:
         return store
 
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory)
+    _override(monkeypatch, audit_store_factory=_factory)
 
 
 def _install_access_role_store(monkeypatch: pytest.MonkeyPatch, store: object) -> None:
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
+    _override(monkeypatch, role_store_factory=_factory)
 
 
 # --- tool-call helpers -------------------------------------------------
@@ -310,7 +314,7 @@ def _text(result: CallToolResult) -> str:
 
 
 def _call_create_policy_draft(*, title: str) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("create-policy-draft", {"title": title}))
+    result = asyncio.run(_server().call_tool("create-policy-draft", {"title": title}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -323,9 +327,7 @@ def _call_update_policy_draft(policy_id: str, fields: dict[str, object]) -> Call
         f"D-3 immutability guard violated: {sorted(_DISALLOWED_FIELD_KEYS & fields.keys())}"
     )
     result = asyncio.run(
-        mcp_server.server.call_tool(
-            "update-policy-draft", {"policy_id": policy_id, "fields": fields}
-        )
+        _server().call_tool("update-policy-draft", {"policy_id": policy_id, "fields": fields})
     )
     assert isinstance(result, CallToolResult)
     return result

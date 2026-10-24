@@ -25,6 +25,10 @@ from api._fakes import (
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from fastapi.testclient import TestClient
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _NON_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- reuse this file family's fixtures verbatim
     _fake_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -55,7 +59,7 @@ from ps_service.config import ServiceConfig
 from ps_service.invitations.service import invite_user_audited
 from ps_service.logging import configure
 from ps_service.main import create_app
-from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
+from ps_service.mcp_interface import ingestion_tools
 from ps_service.passkey_signing.router import post_enroll_verify
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
@@ -104,14 +108,14 @@ def test_mcp_and_rest_sweeps_record_the_same_rows(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     mcp_store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(mcp_store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(mcp_store))
     fake_mcp = _amended_fake()
     monkeypatch.setattr(
         ingestion_tools,
         "build_default_change_check_dependencies",
         lambda: fake_mcp.dependencies,
     )
-    asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
+    asyncio.run(_server().call_tool("check_regulations", {}))
 
     install_compliance_officer_grant(monkeypatch, granted=True)
     rest_store = RestAuditStore()
@@ -206,11 +210,11 @@ def test_mcp_and_rest_denials_record_the_same_row_shape(monkeypatch: pytest.Monk
 
     mcp_store = InMemoryAuditStore()
     monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(mcp_store))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(mcp_store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
     configure()
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
-        asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
+        asyncio.run(_server().call_tool("check_regulations", {}))
 
     (rest_row,) = rest_store.rows
     (mcp_row,) = mcp_store.rows

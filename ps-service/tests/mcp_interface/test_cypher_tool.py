@@ -22,9 +22,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from mcp.types import CallToolResult, TextContent
 
-from ps_service.config import ServiceConfig
+from mcp_interface._environment import (
+    build_test_server,
+    fail_closed_environment,
+    graph_factory_for,
+)
+from ps_service.config import ServiceConfig, load_config
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import cypher_tools
@@ -38,6 +44,10 @@ from ps_service.query_engine.cypher_query import (
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
+
+    from mcp.server import MCPServer
+
+    from ps_service.mcp_interface.tool_gates import GateEnvironment
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -97,18 +107,31 @@ class _FakeFalkorDB:
         return self._handle
 
 
+_OVERRIDES: dict[str, object] = {}
+
+
+def _override(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> None:
+    """Set environment overrides for the servers `_server` builds, until the test ends."""
+    for name, value in overrides.items():
+        monkeypatch.setitem(_OVERRIDES, name, value)
+
+
+def _environment() -> GateEnvironment:
+    return fail_closed_environment(**_OVERRIDES)
+
+
+def _server() -> MCPServer:
+    return build_test_server(**_OVERRIDES)
+
+
 def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _FakeGraphHandle) -> _FakeFalkorDB:
     fake_db = _FakeFalkorDB(handle)
-
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        return fake_db
-
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
+    _override(monkeypatch, graph_factory=graph_factory_for(fake_db))
     return fake_db
 
 
 def _call_cypher(query: str) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("cypher", {"query": query}))
+    result = asyncio.run(_server().call_tool("cypher", {"query": query}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -142,7 +165,7 @@ def test_cypher_tool_passes_config_query_timeout_ms_and_row_cap_to_execute_cyphe
         )
     )
     _install_graph(monkeypatch, handle)
-    config = mcp_server.load_config()
+    config = load_config()
 
     result = _call_cypher("MATCH (n) RETURN n.id")
 
@@ -265,7 +288,7 @@ def test_connection_failure_returns_sanitised_error(monkeypatch: pytest.MonkeyPa
             "Error 61 connecting to db-host:6379. Connection refused."
         )
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", boom)
+    _override(monkeypatch, graph_factory=boom)
 
     result = _call_cypher("MATCH (n) RETURN n")
 
@@ -304,7 +327,7 @@ def test_connection_failure_emits_unavailable_log_entry(
             "Error 61 connecting to db-host:6379. Connection refused."
         )
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", boom)
+    _override(monkeypatch, graph_factory=boom)
 
     _call_cypher("MATCH (secret {ssn: '123-45-6789'}) RETURN secret")
     emitter.flush()
@@ -334,7 +357,7 @@ def test_resolve_graph_opens_the_graph_named_by_the_configuration(
     fake_db = _install_graph(monkeypatch, _FakeGraphHandle())
     config = dataclasses.replace(_base_config(), falkordb_graph="custom_graph")
 
-    mcp_server.resolve_graph(config)
+    mcp_server.resolve_graph(config, environment=_environment())
 
     assert fake_db.selected == ["custom_graph"]
 
@@ -365,11 +388,11 @@ def test_resolve_graph_wraps_any_failure_as_graph_unavailable(
     def boom(_config: object) -> object:
         raise RuntimeError("boom 10.0.0.5:6379")
 
-    monkeypatch.setattr(mcp_server, "connect_from_config", boom)
+    _override(monkeypatch, graph_factory=boom)
 
     with pytest.raises(McpGraphUnavailableError) as excinfo:
         mcp_server.resolve_graph(  # pyright: ignore[reportPrivateUsage]  # test drives the module-internal graph resolver directly
-            mcp_server.load_config()
+            load_config(), environment=_environment()
         )
 
     message = str(excinfo.value)
@@ -389,6 +412,7 @@ def test_cypher_tool_under_the_local_test_bypass_logs_no_principal(
     emitter = configure()
     handle = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
     _install_graph(monkeypatch, handle)
+    _override(monkeypatch, audit_store_factory=audit_store_factory(InMemoryAuditStore()))
 
     result = _call_cypher("MATCH (n) RETURN n.id")
 

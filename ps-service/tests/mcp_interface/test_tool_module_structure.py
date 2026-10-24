@@ -26,6 +26,7 @@ import types
 from pathlib import Path
 
 import pytest
+from mcp.server import MCPServer
 
 import ps_service.mcp_interface as mcp_package
 
@@ -243,8 +244,8 @@ def test_the_forbidden_name_check_covers_every_tool_surface_module_on_disk() -> 
     assert set(_tool_surface_module_names()) == on_disk
 
 
-# The patch seam: tests and deployments patch these four names on `tool_core`; every consumer
-# resolves them there at call time, so one patch statement reaches every tool of every group.
+# Store classes and the graph loader are bound by `production_environment` alone; a tool-group
+# module (or any other module of the package) receives them through the environment instead.
 _SEAM_CLASSES = frozenset(
     {"PsycopgAccessRoleStore", "PsycopgAuditStore", "PsycopgPendingApprovalStore"}
 )
@@ -252,35 +253,39 @@ _SEAM_NAMES = _SEAM_CLASSES | {"connect_from_config"}
 
 
 def _seam_violations(tree: ast.AST) -> list[str]:
-    """How a module outside `tool_core` uses a seam name (only `tool_core.<Name>` is allowed)."""
+    """Every import or use of a store class or `connect_from_config`, however it is spelled."""
     problems: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             problems.extend(
                 f"imports {alias.name}" for alias in node.names if alias.name in _SEAM_NAMES
             )
-        elif isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id in _SEAM_NAMES:
-                problems.append(f"calls bare {func.id}")
-            elif isinstance(func, ast.Attribute) and func.attr in _SEAM_NAMES:
-                owner = func.value.id if isinstance(func.value, ast.Name) else ""
-                if owner != "tool_core":
-                    problems.append(f"calls {owner or '?'}.{func.attr}")
+        elif isinstance(node, ast.Name) and node.id in _SEAM_NAMES:
+            problems.append(f"uses {node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in _SEAM_NAMES:
+            owner = node.value.id if isinstance(node.value, ast.Name) else "?"
+            problems.append(f"uses {owner}.{node.attr}")
     return problems
 
 
-_NON_CORE_MODULES = sorted(path for path in _MI.glob("*.py") if path.name != "tool_core.py")
+_NON_CORE_MODULES = sorted(
+    path
+    for path in _MI.glob("*.py")
+    if path.name not in {"tool_core.py", "production_environment.py"}
+)
 
 
 @pytest.mark.parametrize("path", _NON_CORE_MODULES, ids=[p.name for p in _NON_CORE_MODULES])
-def test_only_tool_core_binds_the_patch_seam_names(path: Path) -> None:
+def test_no_module_but_the_production_environment_names_a_store_class_or_the_loader(
+    path: Path,
+) -> None:
     assert _seam_violations(ast.parse(path.read_text(encoding="utf-8"))) == []
 
 
 def test_the_seam_ids_cover_every_module_but_tool_core() -> None:
     assert {p.name for p in _NON_CORE_MODULES} == {p.name for p in _MI.glob("*.py")} - {
-        "tool_core.py"
+        "tool_core.py",
+        "production_environment.py",
     }
 
 
@@ -288,24 +293,49 @@ def test_the_seam_ids_cover_every_module_but_tool_core() -> None:
     ("source", "expected"),
     [
         ("from ps_service.audit.store import PsycopgAuditStore\n", ["imports PsycopgAuditStore"]),
-        ("def f(c):\n    return PsycopgAuditStore(c)\n", ["calls bare PsycopgAuditStore"]),
-        ("def f(c):\n    return connect_from_config(c)\n", ["calls bare connect_from_config"]),
+        (
+            "from ps_service.audit.store import PsycopgAuditStore as Store\n",
+            ["imports PsycopgAuditStore"],
+        ),
+        (
+            "from q.client import (GraphHandle,\n    connect_from_config)\n",
+            ["imports connect_from_config"],
+        ),
+        ("def f(c):\n    return PsycopgAuditStore(c)\n", ["uses PsycopgAuditStore"]),
+        ("def f(c):\n    return connect_from_config(c)\n", ["uses connect_from_config"]),
         (
             "def f(c):\n    return other.PsycopgAccessRoleStore(c)\n",
-            ["calls other.PsycopgAccessRoleStore"],
+            ["uses other.PsycopgAccessRoleStore"],
         ),
-        ("def f(c):\n    return tool_core.PsycopgAuditStore(c)\n", []),
-        ("def f(c):\n    return tool_core.connect_from_config(c)\n", []),
+        (
+            "def f(c):\n    return tool_core.PsycopgAuditStore(c)\n",
+            ["uses tool_core.PsycopgAuditStore"],
+        ),
+        (
+            "def f(c):\n    return tool_core.connect_from_config(c)\n",
+            ["uses tool_core.connect_from_config"],
+        ),
+        (
+            "def f(c):\n    return tool_core.PsycopgPendingApprovalStore(\n        c,\n    )\n",
+            ["uses tool_core.PsycopgPendingApprovalStore"],
+        ),
+        ("FACTORY = ps.audit.store.PsycopgAuditStore\n", ["uses ?.PsycopgAuditStore"]),
         ("from ps_service.mcp_interface import tool_core\n", []),
+        ("def f(environment):\n    return environment.audit_store_factory(1)\n", []),
     ],
     ids=[
         "import",
+        "aliased_import",
+        "multi_line_import",
         "bare_class",
         "bare_connect",
         "foreign_owner",
-        "seam_ok",
-        "connect_ok",
+        "tool_core_owner_class",
+        "tool_core_owner_connect",
+        "multi_line_call",
+        "dotted_reference",
         "module_ok",
+        "environment_ok",
     ],
 )
 def test_the_seam_checker_flags_planted_violations_and_only_those(
@@ -322,9 +352,9 @@ def test_ruff_runtime_evaluated_decorator_names_the_real_tool_registration_decor
         "runtime-evaluated-decorators"
     ]
 
-    assert decorators == [f"{_PACKAGE}.tool_core.gated_server_tool"]
+    assert decorators == [f"{_PACKAGE}.tool_core.declared_tool"]
     core = importlib.import_module(f"{_PACKAGE}.tool_core")
-    assert callable(core.gated_server_tool)
+    assert callable(core.declared_tool)
 
 
 _CLEANUP_TOOL_NAMES = frozenset(
@@ -415,6 +445,8 @@ _EXPECTED_TOOL_ORDER = [
 ]
 
 _TOOL_REGISTRATION_ATTRIBUTES = frozenset({"tool", "resource"})
+# The one function the front door defines: it builds a server from an environment.
+_FRONT_DOOR_FACTORY = "build_server"
 
 
 def _front_door_violations(tree: ast.AST) -> list[str]:
@@ -422,8 +454,9 @@ def _front_door_violations(tree: ast.AST) -> list[str]:
     found: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            found.append(f"definition {node.name}")
-        elif isinstance(node, ast.Name) and node.id in {"_gated_tool", "gated_server_tool"}:
+            if node.name != _FRONT_DOOR_FACTORY:
+                found.append(f"definition {node.name}")
+        elif isinstance(node, ast.Name) and node.id in {"_gated_tool", "declared_tool"}:
             found.append(f"registration {node.id}")
         elif (
             isinstance(node, ast.Attribute)
@@ -440,7 +473,7 @@ def test_the_front_door_defines_no_tool_and_exports_server_and_handle_mcp_tool_c
 
     assert _front_door_violations(ast.parse(_FRONT_DOOR.read_text(encoding="utf-8"))) == []
     assert {"server", "handle_mcp_tool_call"} <= set(front_door.__all__)
-    assert front_door.server is importlib.import_module(f"{_PACKAGE}.tool_core").server
+    assert isinstance(front_door.server, MCPServer)
     assert callable(front_door.handle_mcp_tool_call)
 
 
@@ -468,7 +501,7 @@ def test_no_mcp_interface_module_exceeds_the_line_limit(path: Path) -> None:
 def test_tool_group_modules_are_exactly_the_tools_modules_on_disk() -> None:
     front_door = importlib.import_module(f"{_PACKAGE}.mcp_server")
 
-    registered = {module.__name__.rsplit(".", 1)[-1] for module in front_door.TOOL_GROUP_MODULES}
+    registered = {module.__name__.rsplit(".", 1)[-1] for module, _ in front_door.TOOL_GROUP_MODULES}
 
     assert registered == {path.stem for path in _MI.glob("*_tools.py")}
     assert len(front_door.TOOL_GROUP_MODULES) == len(registered)

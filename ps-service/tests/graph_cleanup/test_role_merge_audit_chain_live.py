@@ -23,6 +23,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
+from mcp_interface._environment import build_test_server
 
 from graph_cleanup._fakes import ROLE_ABSORBED, ROLE_SURVIVOR
 from graph_cleanup._merge_runs import role_row, roles, run_role_merge
@@ -31,7 +32,6 @@ from ps_service.audit import PsycopgAuditStore
 from ps_service.audit.models import AuditChainVerification
 from ps_service.graph_cleanup.audit_actions import RoleMergeDetails, RoleUnmergeDetails
 from ps_service.logging import configure, reset_for_tests
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -71,13 +71,16 @@ class _LinkedAuditStore:
         return event_id
 
 
+_OVERRIDES: dict[str, object] = {"audit_store_factory": PsycopgAuditStore}
+
+
 def _verify_audit_log_tool() -> dict[str, object]:
     token = AccessToken(
         token="t", client_id="c", scopes=[], subject=_OWNER[0], claims={"iss": _ISSUER}
     )
     reset = auth_context_var.set(AuthenticatedUser(token))
     try:
-        result = asyncio.run(mcp_server.server.call_tool("verify-audit-log", {}))
+        result = asyncio.run(build_test_server(**_OVERRIDES).call_tool("verify-audit-log", {}))
     finally:
         auth_context_var.reset(reset)
     assert isinstance(result, CallToolResult)
@@ -122,7 +125,7 @@ def test_verify_audit_log_passes_after_a_real_role_merge(
     assert details.before is not None
     assert details.after is not None
 
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_owner_only()))
+    monkeypatch.setitem(_OVERRIDES, "role_store_factory", _factory(_owner_only()))
     reported = _verify_audit_log_tool()
     reset_for_tests()
 
@@ -169,7 +172,7 @@ def test_verify_audit_log_passes_after_a_real_role_merge_and_unmerge(
     assert details.before is not None
     assert details.after is not None
 
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_owner_only()))
+    monkeypatch.setitem(_OVERRIDES, "role_store_factory", _factory(_owner_only()))
     reported = _verify_audit_log_tool()
     reset_for_tests()
 

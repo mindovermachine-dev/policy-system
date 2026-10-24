@@ -16,6 +16,10 @@ from api._fakes import build_fake_change_check_dependencies
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_check_regulations_authz_gate import (
     _CALLER_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- reuse the gate file's verified-caller fixtures verbatim
     _COMPLIANCE_OFFICER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -34,7 +38,7 @@ from ps_service.change_monitor.models import (
     TrackedInstrumentNode,
 )
 from ps_service.logging import configure
-from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
+from ps_service.mcp_interface import ingestion_tools
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 
@@ -43,7 +47,7 @@ _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Keep the audit rows off Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
@@ -87,7 +91,7 @@ def _amended_instrument(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ig
 
 
 def _call() -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
+    result = asyncio.run(_server().call_tool("check_regulations", {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -109,7 +113,7 @@ def test_check_regulations_audits_the_caller_as_actor(
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(access))
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
         result = _call()

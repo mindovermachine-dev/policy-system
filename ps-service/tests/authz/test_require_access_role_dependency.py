@@ -8,7 +8,7 @@ Starlette `Request` built from a minimal ASGI scope, never a `TestClient`
 HTTP round trip (there is no route to hit).
 
 `ps_service.api.dependencies.PsycopgAccessRoleStore` is monkeypatched exactly
-the way `mcp_interface.mcp_server.PsycopgAccessRoleStore` already is in
+the way the MCP tools' `role_store_factory` already is overridden in
 `tests/mcp_interface/test_access_role_tools.py`/`test_catalog_source_authz_gate.py`
 -- the same fakes (`tests/authz/_fakes.py`), proving `require_access_role`
 drives the identical shared `ps_service.authz.request_gate.enforce_role_gate` function

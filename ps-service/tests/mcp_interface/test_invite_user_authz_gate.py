@@ -23,6 +23,10 @@ from authz._fakes import (
 )
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _ACCESS_DENIED_MESSAGE,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own gate-test fixtures verbatim rather than re-declaring them
     _NON_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -32,7 +36,7 @@ from mcp_interface.test_catalog_source_authz_gate import (
 )
 from ps_service.invitations.client import InvitationResult
 from ps_service.logging import configure
-from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
+from ps_service.mcp_interface import catalog_tools
 
 if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
@@ -44,11 +48,11 @@ _EMAIL = "target@example.com"
 def _in_memory_audit_store(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]  # autouse
     """Invites write `user.invite` rows: keep them off a real Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
 
 
 def _call(args: dict[str, object] | None = None) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("invite-user", args or {"email": _EMAIL}))
+    result = asyncio.run(_server().call_tool("invite-user", args or {"email": _EMAIL}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -84,7 +88,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     monkeypatch.setattr(catalog_tools, "create_invitation", _never_called_create_invitation)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -117,9 +121,7 @@ def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
     and Authentik is never contacted.
     """
     configure()
-    monkeypatch.setattr(
-        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
-    )
+    _override(monkeypatch, role_store_factory=_fake_store_factory(RaisingAccessRoleStore()))
     monkeypatch.setattr(catalog_tools, "create_invitation", _never_called_create_invitation)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):

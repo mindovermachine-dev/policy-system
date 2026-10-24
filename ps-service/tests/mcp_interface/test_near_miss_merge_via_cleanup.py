@@ -23,11 +23,14 @@ from graph_cleanup._mcp_calls import call_tool, factory
 from graph_cleanup._merge_runs import CONFIG, OFFICER, OWNER, roles
 from graph_gateway._fakes import close_all_rigs
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.authz.models import AccessRole
 from ps_service.graph_cleanup.executors import execute_capability_merge
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.passkey_signing.errors import PendingApprovalPersistenceError
 
 if TYPE_CHECKING:
@@ -68,20 +71,15 @@ class _Env:
             incoming_created_at=_NEW,
             existing_created_at=_OLD,
         )
-        monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", factory(access_roles or roles()))
-        monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", factory(self.store))
 
         def _open(_config: object) -> CleanupReadGraph:
             return rig.read
 
-        monkeypatch.setattr(
-            "ps_service.api.near_miss_review_orchestration."
-            "build_default_near_miss_review_graph_opener",
-            lambda: _open,
-        )
-        monkeypatch.setattr(
-            "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-            lambda: _open,
+        _override(
+            monkeypatch,
+            role_store_factory=factory(access_roles or roles()),
+            pending_approval_store_factory=factory(self.store),
+            graph_factory=_open,
         )
 
     def snapshot(self) -> object:
@@ -173,9 +171,7 @@ def test_no_real_session_gets_an_error_and_no_approval_even_under_the_local_test
     before = environment.snapshot()
 
     text = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve", {"review_id": _REVIEW, "decision": "merge"}
-        )
+        _server().call_tool("near_misses_resolve", {"review_id": _REVIEW, "decision": "merge"})
     )
 
     assert _UNAUTHENTICATED in str(text)
@@ -445,10 +441,7 @@ def test_an_unreachable_graph_gives_the_fixed_message_and_no_approval(
         message = "connection refused to 10.0.0.1:6379"
         raise ConnectionError(message)
 
-    monkeypatch.setattr(
-        "ps_service.api.near_miss_review_orchestration.build_default_near_miss_review_graph_opener",
-        lambda: _unreachable,
-    )
+    _override(monkeypatch, graph_factory=_unreachable)
 
     before = env.snapshot()
 
@@ -478,7 +471,7 @@ def test_an_unexpected_or_store_failure_gives_the_fixed_message_and_no_approval(
             _ = kwargs
             raise failure
 
-    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", factory(_RaisingStore()))
+    _override(monkeypatch, pending_approval_store_factory=factory(_RaisingStore()))
     before = env.snapshot()
 
     text = env.resolve_merge()
@@ -494,7 +487,7 @@ def test_an_unexpected_or_store_failure_gives_the_fixed_message_and_no_approval(
 
 
 def _tool(name: str) -> Tool:
-    tools = asyncio.run(mcp_server.server.list_tools())
+    tools = asyncio.run(_server().list_tools())
     [tool] = [t for t in tools if t.name == name]
     return tool
 

@@ -70,6 +70,7 @@ from ps_service.llm_interface import (
 )
 from ps_service.logging.facade import configure, emit_log_entry
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH, build_streamable_http_app
+from ps_service.mcp_interface.mcp_server import server
 from ps_service.metrics import build_metrics, build_metrics_router
 from ps_service.metrics.catalog import REQUEST_DURATION
 from ps_service.metrics.http_middleware import MetricsMiddleware
@@ -1201,7 +1202,7 @@ def create_app(
     _wire_http_surface(app)
 
     mcp_asgi_app = build_streamable_http_app(
-        host=config.host, verifier=verifier, auth_context=auth_context
+        server=server, host=config.host, verifier=verifier, auth_context=auth_context
     )
     app.mount(MCP_HTTP_MOUNT_PATH, mcp_asgi_app)
 

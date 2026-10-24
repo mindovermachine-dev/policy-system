@@ -31,6 +31,9 @@ from mcp_interface._ingestion_run_harness import (
     install_ingestion_run_store,
     isolate_ingestion_runs,
 )
+from mcp_interface.test_access_role_tools import (
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_ingest_regulation_tool import (
     _CELEX,  # pyright: ignore[reportPrivateUsage]  -- reuse the curated-catalog fixture verbatim rather than re-declaring it, mirrors `test_ingest_regulation_authz_gate.py`'s own cross-module private-import convention
     _NONCURATED_CELEX,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -71,9 +74,7 @@ _GRAPH_UNREACHABLE_MESSAGE = "error: the policy graph database is not reachable"
 
 def _call(tool: str, celex: str, short_name: str) -> str:
     """Call `tool` in-process and return its single text block (never an MCP error)."""
-    result = asyncio.run(
-        mcp_server.server.call_tool(tool, {"celex": celex, "short_name": short_name})
-    )
+    result = asyncio.run(_server().call_tool(tool, {"celex": celex, "short_name": short_name}))
     assert isinstance(result, CallToolResult)
     assert result.is_error is False
     block = result.content[0]

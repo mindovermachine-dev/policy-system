@@ -21,6 +21,10 @@ from curated_source._fakes import InMemoryRuntimeConfigStore
 from fastapi.testclient import TestClient
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.api.dependencies import provide_curated_catalog_dependencies
 from ps_service.config import ServiceConfig
 from ps_service.curated_source.config_key import CATALOG_SOURCE_KEY
@@ -29,7 +33,6 @@ from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_ef
 from ps_service.curated_source.source_url import validate_source_url
 from ps_service.logging import configure
 from ps_service.main import create_app
-from ps_service.mcp_interface import catalog_tools, mcp_server
 from ps_service.runtime_config import RuntimeConfigUnavailableError
 
 _DEFAULT_URL = (
@@ -66,7 +69,7 @@ def _install_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryRuntimeConfigStor
         store.config = config
         return store
 
-    monkeypatch.setattr(catalog_tools, "PsycopgRuntimeConfigStore", _factory)
+    _override(monkeypatch, runtime_config_store_factory=_factory)
     return store
 
 
@@ -77,7 +80,7 @@ def _text(result: CallToolResult) -> str:
 
 
 def _call(tool: str, args: dict[str, object] | None = None) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool(tool, args or {}))
+    result = asyncio.run(_server().call_tool(tool, args or {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -196,7 +199,7 @@ def test_set_and_reset_return_the_store_unavailable_error_string(
             "The runtime configuration store is temporarily unavailable."
         )
 
-    monkeypatch.setattr(catalog_tools, "PsycopgRuntimeConfigStore", _unreachable)
+    _override(monkeypatch, runtime_config_store_factory=_unreachable)
 
     assert _text(_call("set-catalog-source", {"url": _OVERRIDE_URL})) == _STORE_UNAVAILABLE_ERROR
     assert _text(_call("reset-catalog-source")) == _STORE_UNAVAILABLE_ERROR
@@ -281,7 +284,7 @@ def test_get_catalog_source_returns_error_string_when_stored_value_no_longer_val
 
 def test_catalog_source_tools_are_exactly_three_and_names_unchanged() -> None:
     """The catalog-source tools are exactly three, and there is no generic `set-config` tool."""
-    tools = asyncio.run(mcp_server.server.list_tools())
+    tools = asyncio.run(_server().list_tools())
     names = {tool.name for tool in tools}
 
     assert {name for name in names if "catalog-source" in name} == {

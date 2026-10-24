@@ -32,7 +32,8 @@ from mcp_interface.test_policy_lifecycle_tools import (
 from ps_service.audit.actor import LOCAL_TEST_BYPASS_AUDIT_ACTOR
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind
+from ps_service.mcp_interface.mcp_server import TOOL_GATES
+from ps_service.mcp_interface.tool_gates import BypassPolicy, GateKind
 
 if TYPE_CHECKING:
     from collections.abc import Callable

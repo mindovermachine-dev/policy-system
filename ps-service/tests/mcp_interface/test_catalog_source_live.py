@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import pytest
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface._environment import build_test_server
 from mcp_interface.test_catalog_source_authz_gate import (
     _verified_actor,  # pyright: ignore[reportPrivateUsage]  -- reuse the gate tests' verified-caller helper rather than a third copy
 )
@@ -31,7 +32,6 @@ from ps_service.config import ServiceConfig, load_config
 from ps_service.curated_source.config_key import CATALOG_SOURCE_KEY
 from ps_service.curated_source.store import reset_override
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server
 from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
 from ps_service.runtime_config import PsycopgRuntimeConfigStore
@@ -70,8 +70,15 @@ def config(state_postgres_env: Provisioned) -> Iterator[ServiceConfig]:
     )
 
 
+_LIVE_STORES: dict[str, object] = {
+    "audit_store_factory": PsycopgAuditStore,
+    "role_store_factory": PsycopgAccessRoleStore,
+    "runtime_config_store_factory": PsycopgRuntimeConfigStore,
+}
+
+
 def _call(tool: str, args: dict[str, object] | None = None) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool(tool, args or {}))
+    result = asyncio.run(build_test_server(**_LIVE_STORES).call_tool(tool, args or {}))
     assert isinstance(result, CallToolResult)
     return result
 

@@ -25,6 +25,10 @@ from invitations.test_client import (
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _CALLER_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own gate-test fixtures verbatim rather than re-declaring them
     _NEW_SYSTEM_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -39,7 +43,7 @@ from ps_service.authz.service import list_audit_events
 from ps_service.invitations.client import AuthentikTransport, create_invitation
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import catalog_tools, mcp_server, tool_core
+from ps_service.mcp_interface import catalog_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,12 +60,12 @@ _BASE_URL = "https://authentik.example.com"
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Every invite writes `user.invite` rows: keep them off a real Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
 def _call(args: dict[str, object]) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("invite-user", args))
+    result = asyncio.run(_server().call_tool("invite-user", args))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -92,7 +96,7 @@ def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
 
     transport = _RecordingTransport(json.dumps({"pk": "tok-abc"}).encode())
     monkeypatch.setattr(
@@ -210,7 +214,7 @@ def _as_admin(monkeypatch: pytest.MonkeyPatch) -> None:
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
 
 
 def _use_transport(monkeypatch: pytest.MonkeyPatch, transport: AuthentikTransport) -> None:

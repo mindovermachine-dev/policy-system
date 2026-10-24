@@ -44,10 +44,12 @@ def ingest_audit_store(monkeypatch: pytest.MonkeyPatch) -> object:
     The import is lazy for the same importlib cross-package reason as `_default_cellar_stub`.
     """
     fakes = importlib.import_module("audit._fakes")
-    from ps_service.mcp_interface import tool_core
+    access_tools = importlib.import_module("mcp_interface.test_access_role_tools")
 
     store = fakes.InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", fakes.audit_store_factory(store))
+    access_tools._override(  # pyright: ignore[reportPrivateUsage]  # the shared environment overrides of the tool tests
+        monkeypatch, audit_store_factory=fakes.audit_store_factory(store)
+    )
     return store
 
 

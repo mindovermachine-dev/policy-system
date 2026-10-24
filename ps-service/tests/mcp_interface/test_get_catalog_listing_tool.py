@@ -42,6 +42,9 @@ from fastapi.testclient import TestClient
 from mcp.types import CallToolResult, TextContent
 from starlette.applications import Starlette
 
+from mcp_interface.test_access_role_tools import (
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
@@ -103,7 +106,7 @@ def _text(result: CallToolResult) -> str:
 
 
 def _call_get_catalog_listing() -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("get-catalog-listing", {}))
+    result = asyncio.run(_server().call_tool("get-catalog-listing", {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -292,7 +295,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     """
     verifier = PsTokenVerifier(auth_context)
     mcp_asgi_app = build_streamable_http_app(
-        host=host, verifier=verifier, auth_context=auth_context
+        server=mcp_server.server, host=host, verifier=verifier, auth_context=auth_context
     )
 
     @contextlib.asynccontextmanager

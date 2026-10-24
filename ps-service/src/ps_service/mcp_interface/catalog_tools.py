@@ -1,10 +1,11 @@
 """Catalog, restore and invite tools of the PS MCP server.
 
-Registers `set-catalog-source`, `reset-catalog-source`, `get-catalog-source`, `invite-user`,
-`get-catalog-listing` and `restore_instrument` on the shared `server` from `tool_core`. This module
-imports only `tool_core` (never another tool group); the patch seam names are looked up there at
-call time as `tool_core.<Name>`. `create_invitation`, `PsycopgRuntimeConfigStore` and
-`build_default_curated_catalog_dependencies` are bound here and patched here by tests.
+Declares `set-catalog-source`, `reset-catalog-source`, `get-catalog-source`, `invite-user`,
+`get-catalog-listing` and `restore_instrument`; `register_catalog_tools` registers them on a server
+built by `mcp_server.build_server`. The tools build their runtime-config and audit stores through
+the `GateEnvironment` they are bound to. This module imports only `tool_core` and `tool_gates`
+(never another tool group); `create_invitation` and `build_default_curated_catalog_dependencies`
+are bound here and patched here by tests.
 
 Business Rules:
     - Catalog-source administration and `invite-user` need `SystemAdmin` or above; the catalog
@@ -47,7 +48,6 @@ from ps_service.curated_source.resolve import resolve_effective_source
 from ps_service.invitations.client import create_invitation
 from ps_service.invitations.errors import AuthentikInvitationError
 from ps_service.invitations.service import invite_user_audited
-from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import COMPLIANCE_OFFICER_GATE as _COMPLIANCE_OFFICER_GATE
 from ps_service.mcp_interface.tool_core import (
@@ -57,15 +57,15 @@ from ps_service.mcp_interface.tool_core import MCP_CALLER_LABEL as _MCP_CALLER_L
 from ps_service.mcp_interface.tool_core import PLAIN_READ_GATE as _PLAIN_READ_GATE
 from ps_service.mcp_interface.tool_core import SYSTEM_ADMIN_GATE as _SYSTEM_ADMIN_GATE
 from ps_service.mcp_interface.tool_core import audit_context as _audit_context
-from ps_service.mcp_interface.tool_core import gated_server_tool as _gated_tool
+from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import resolve_authz_actor as _resolve_authz_actor
 from ps_service.mcp_interface.tool_core import (
     resolve_policy_lifecycle_actor as _resolve_policy_lifecycle_actor,
 )
 from ps_service.mcp_interface.tool_core import run_mcp_action as _run_mcp_action
 from ps_service.mcp_interface.tool_core import sanitize_graph_open as _sanitize_graph_open
+from ps_service.mcp_interface.tool_gates import GateEnvironment, register_declared_tools
 from ps_service.runtime_config import (
-    PsycopgRuntimeConfigStore,
     RuntimeConfigError,
     RuntimeConfigInvalidValueError,
     RuntimeConfigPersistenceError,
@@ -73,8 +73,11 @@ from ps_service.runtime_config import (
 )
 
 if TYPE_CHECKING:
+    from mcp.server import MCPServer
+
     from ps_service.api.restore_orchestration import CatalogRestoreDependencies
     from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
+    from ps_service.mcp_interface.tool_gates import ToolGate
 
 
 # Charset and length bound for a curated instrument id, the same as ps-cli's own instrument-id
@@ -133,7 +136,9 @@ _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE = (
 
 
 @_gated_tool("set-catalog-source", _SYSTEM_ADMIN_GATE)
-def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+def set_catalog_source(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment, url: Annotated[str, Field(min_length=1)]
+) -> dict[str, object] | str:
     """Override the curated-content source used for catalog listings and artifact fetches.
 
     Validates `url` with the same rules startup configuration applies: only `http(s)://` schemes are
@@ -167,12 +172,12 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        audit = _audit_context(config, actor)
+        audit = _audit_context(config, actor, environment=environment)
         if isinstance(audit, str):
             return audit
         try:
             catalog_source_store.set_override(
-                PsycopgRuntimeConfigStore(config, audit_store=audit.store),
+                environment.runtime_config_store(config),
                 url,
                 actor=audit.actor,
             )
@@ -189,7 +194,7 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
 
 
 @_gated_tool("reset-catalog-source", _SYSTEM_ADMIN_GATE)
-def reset_catalog_source() -> dict[str, object] | str:
+def reset_catalog_source(environment: GateEnvironment) -> dict[str, object] | str:
     """Clear the persisted curated-content source override.
 
     The effective source immediately reverts to `PS_CURATEDSOURCE_URL` or the public default for
@@ -217,12 +222,12 @@ def reset_catalog_source() -> dict[str, object] | str:
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        audit = _audit_context(config, actor)
+        audit = _audit_context(config, actor, environment=environment)
         if isinstance(audit, str):
             return audit
         try:
             catalog_source_store.reset_override(
-                PsycopgRuntimeConfigStore(config, audit_store=audit.store),
+                environment.runtime_config_store(config),
                 actor=audit.actor,
             )
         except (RuntimeConfigUnavailableError, RuntimeConfigPersistenceError) as exc:
@@ -233,7 +238,7 @@ def reset_catalog_source() -> dict[str, object] | str:
 
 
 @_gated_tool("get-catalog-source", _SYSTEM_ADMIN_GATE)
-def get_catalog_source() -> dict[str, object] | str:
+def get_catalog_source(environment: GateEnvironment) -> dict[str, object] | str:
     """Report the currently effective curated-content source.
 
     Looks for a persisted override in the PS state database first and falls back to
@@ -263,9 +268,7 @@ def get_catalog_source() -> dict[str, object] | str:
         try:
             effective = resolve_effective_source(
                 config,
-                store=PsycopgRuntimeConfigStore(
-                    config, audit_store=tool_core.PsycopgAuditStore(config)
-                ),
+                store=environment.runtime_config_store(config),
             )
         except RuntimeConfigError:
             return _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE
@@ -275,7 +278,8 @@ def get_catalog_source() -> dict[str, object] | str:
 
 
 @_gated_tool("invite-user", _SYSTEM_ADMIN_GATE)
-def invite_user(
+def invite_user(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     email: Annotated[str, Field(min_length=3, pattern=_INVITE_EMAIL_PATTERN)],
 ) -> dict[str, object] | str:
     """Create a single-use Authentik enrollment invite for an email address.
@@ -310,7 +314,7 @@ def invite_user(
     actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
-        audit = _audit_context(config, actor)
+        audit = _audit_context(config, actor, environment=environment)
         if isinstance(audit, str):
             return audit
         try:
@@ -375,7 +379,8 @@ def get_catalog_listing() -> dict[str, object] | str:
 
 
 @_gated_tool("restore_instrument", _COMPLIANCE_OFFICER_GATE)
-def restore_instrument(
+def restore_instrument(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     instrument_id: Annotated[
         str,
         Field(pattern=_RESTORE_INSTRUMENT_ID_PATTERN),
@@ -441,7 +446,7 @@ def restore_instrument(
         dependencies: CatalogRestoreDependencies = _sanitize_restore_graph_opens(
             build_default_restore_from_catalog_dependencies()
         )
-        audit = _audit_context(config, actor)
+        audit = _audit_context(config, actor, environment=environment)
         if isinstance(audit, str):
             return audit
         try:
@@ -469,3 +474,31 @@ def restore_instrument(
         return outcome.model_dump()
 
     return _run_mcp_action("restore_instrument", _body)
+
+
+def register_catalog_tools(
+    server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
+) -> None:
+    """Register the catalog, restore and invite tools.
+
+    Args:
+        server: The server the tools are registered on.
+        environment: The server-side collaborators the tools use.
+        gates: The registry that records this server's gate declarations.
+
+    Raises:
+        ValueError: A tool name is already declared in `gates`.
+    """
+    register_declared_tools(
+        server,
+        environment,
+        gates,
+        (
+            set_catalog_source,
+            reset_catalog_source,
+            get_catalog_source,
+            invite_user,
+            get_catalog_listing,
+            restore_instrument,
+        ),
+    )

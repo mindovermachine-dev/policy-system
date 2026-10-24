@@ -29,6 +29,7 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface._environment import build_test_server
 from ps_service.mcp_interface import cypher_tools as mcp_server
 from ps_service.mcp_interface.errors import McpResourceUnavailableError
 
@@ -137,7 +138,7 @@ def test_read_returns_clean_error_string_on_missing_file(
 
 
 def test_resource_listed_with_stable_uri_and_markdown_mime() -> None:
-    resources = asyncio.run(mcp_server.server.list_resources())
+    resources = asyncio.run(build_test_server().list_resources())
 
     matches = [r for r in resources if str(r.uri) == "psdomain://concepts"]
     assert len(matches) == 1
@@ -151,7 +152,7 @@ def test_read_resource_via_server_returns_verbatim(
     md_file.write_text(_KNOWN_MARKDOWN, encoding="utf-8")
     _point_helper_at(monkeypatch, md_file)
 
-    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    raw = asyncio.run(build_test_server().read_resource("psdomain://concepts"))
     contents = [c for c in raw if isinstance(c, ReadResourceContents)]
 
     assert len(contents) == 1
@@ -166,7 +167,7 @@ def test_read_resource_via_server_missing_file_error_is_clean(
     missing = tmp_path / "does-not-exist.md"
     _point_helper_at(monkeypatch, missing)
 
-    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    raw = asyncio.run(build_test_server().read_resource("psdomain://concepts"))
     [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
 
     body = content.content
@@ -179,7 +180,7 @@ def test_read_resource_via_server_missing_file_error_is_clean(
 
 def test_resource_returns_the_real_packaged_document_byte_for_byte() -> None:
     """No monkeypatching; the resource is the packaged file, equal to the docs copy."""
-    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    raw = asyncio.run(build_test_server().read_resource("psdomain://concepts"))
     [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
     packaged = (
         resources.files("ps_service.mcp_interface")
@@ -195,14 +196,14 @@ def test_resource_returns_the_real_packaged_document_byte_for_byte() -> None:
 
 
 def _tool_text() -> str:
-    outcome = asyncio.run(mcp_server.server.call_tool("domain_concepts", {}))
+    outcome = asyncio.run(build_test_server().call_tool("domain_concepts", {}))
     assert isinstance(outcome, CallToolResult)
     [text] = [c.text for c in outcome.content if isinstance(c, TextContent)]
     return text
 
 
 def test_tool_and_resource_differ_and_tool_is_shorter() -> None:
-    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    raw = asyncio.run(build_test_server().read_resource("psdomain://concepts"))
     [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
     resource_text = content.content
     assert isinstance(resource_text, str)
@@ -220,7 +221,7 @@ def test_tool_still_returns_schema_when_packaged_document_is_missing_and_resourc
     _point_helper_at(monkeypatch, missing)
 
     tool_text = _tool_text()
-    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    raw = asyncio.run(build_test_server().read_resource("psdomain://concepts"))
     [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
 
     assert not tool_text.startswith("error:")
@@ -232,4 +233,4 @@ def test_tool_still_returns_schema_when_packaged_document_is_missing_and_resourc
 
 def test_traversal_uri_is_unknown_resource() -> None:
     with pytest.raises(ResourceNotFoundError):
-        asyncio.run(mcp_server.server.read_resource("psdomain://../etc/passwd"))
+        asyncio.run(build_test_server().read_resource("psdomain://../etc/passwd"))

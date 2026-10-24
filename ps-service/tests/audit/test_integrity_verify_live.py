@@ -23,6 +23,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
+from mcp_interface._environment import build_test_server
 from persistence.provisioned_postgres import (
     Provisioned,
     migrate_state_database,
@@ -33,7 +34,6 @@ from audit._integrity_support import assert_chain_is_intact
 from ps_service.audit import PsycopgAuditStore
 from ps_service.audit.models import AuditChainBreak, AuditChainVerification
 from ps_service.logging import configure, reset_for_tests
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -134,10 +134,13 @@ def _verified_actor() -> AccessToken:
     )
 
 
+_OVERRIDES: dict[str, object] = {"audit_store_factory": PsycopgAuditStore}
+
+
 def _call_tool() -> CallToolResult:
     token = auth_context_var.set(AuthenticatedUser(_verified_actor()))
     try:
-        result = asyncio.run(mcp_server.server.call_tool("verify-audit-log", {}))
+        result = asyncio.run(build_test_server(**_OVERRIDES).call_tool("verify-audit-log", {}))
     finally:
         auth_context_var.reset(token)
     assert isinstance(result, CallToolResult)
@@ -158,7 +161,7 @@ def test_the_tool_reports_the_intact_chain_through_the_real_store_and_sql(
     prov = fresh_state_postgres_env
     _write_rows(prov, 4)
     roles = FakeAccessRoleStore(expected_owner=_OWNER)
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(roles))
+    monkeypatch.setitem(_OVERRIDES, "role_store_factory", _factory(roles))
 
     result = _call_tool()
 
@@ -438,7 +441,7 @@ def test_the_tool_reports_a_tampered_row_with_its_id_and_time(
         conn.execute("UPDATE audit_log.audit_events SET outcome = 'failed' WHERE chain_seq = 3")
     event_id, occurred_at = _row_identity(prov, 3)
     roles = FakeAccessRoleStore(expected_owner=_OWNER)
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(roles))
+    monkeypatch.setitem(_OVERRIDES, "role_store_factory", _factory(roles))
 
     result = _call_tool()
 

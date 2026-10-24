@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import pytest
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface._environment import build_test_server
 from ps_service.mcp_interface import cypher_tools as mcp_server
 
 if TYPE_CHECKING:
@@ -38,7 +39,7 @@ def _point_helper_at(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
 
 
 def _call_tool() -> CallToolResult:
-    outcome = asyncio.run(mcp_server.server.call_tool("domain_concepts", {}))
+    outcome = asyncio.run(build_test_server().call_tool("domain_concepts", {}))
     assert isinstance(outcome, CallToolResult)
     return outcome
 
@@ -54,7 +55,7 @@ def test_tool_takes_no_parameters() -> None:
 
 
 def test_tool_listed_alongside_cypher() -> None:
-    tools = asyncio.run(mcp_server.server.list_tools())
+    tools = asyncio.run(build_test_server().list_tools())
 
     names = {t.name for t in tools}
     assert {"cypher", "domain_concepts"} <= names

@@ -1,7 +1,8 @@
 """Tests for the `verify-audit-log` MCP tool (gate, bypass refusal, result shape).
 
-Hermetic: the access-role and audit stores are the fakes in `tests/authz/_fakes.py`, monkeypatched
-onto `mcp_server`, exactly like the `list-audit-events` tests in `test_access_role_tools.py`.
+Hermetic: the access-role and audit stores are the fakes in `tests/authz/_fakes.py`, installed as
+factories of the test server's environment, exactly like the `list-audit-events` tests in
+`test_access_role_tools.py`.
 The real chain recomputation is proven against a live Postgres in
 `tests/audit/test_integrity_verify_live.py`; this file proves who may trigger it and what the
 caller sees.
@@ -26,11 +27,14 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _server,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
 from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.audit.models import AuditChainBreak, AuditChainVerification
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure, reset_for_tests
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -63,7 +67,7 @@ def _factory(store: object) -> Callable[..., object]:
 
 
 def _call() -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("verify-audit-log", {}))
+    result = asyncio.run(_server().call_tool("verify-audit-log", {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -86,8 +90,8 @@ def _install(
     monkeypatch: pytest.MonkeyPatch, *, audit: FakeAuditStore, roles: object | None = None
 ) -> FakeAccessRoleStore:
     access = FakeAccessRoleStore(expected_owner=(_OWNER, _ISSUER))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(roles or access))
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _factory(audit))
+    _override(monkeypatch, role_store_factory=_factory(roles or access))
+    _override(monkeypatch, audit_store_factory=_factory(audit))
     return access
 
 
@@ -245,13 +249,13 @@ def test_an_unreachable_role_store_fails_closed_without_verifying(
 
 
 def test_the_tool_takes_no_arguments() -> None:
-    tools = {tool.name: tool for tool in asyncio.run(mcp_server.server.list_tools())}
+    tools = {tool.name: tool for tool in asyncio.run(_server().list_tools())}
 
     assert tools["verify-audit-log"].input_schema.get("properties") == {}
 
 
 def test_the_docstring_states_the_gate_the_bypass_refusal_and_the_return_shape() -> None:
-    tools = {tool.name: tool for tool in asyncio.run(mcp_server.server.list_tools())}
+    tools = {tool.name: tool for tool in asyncio.run(_server().list_tools())}
     description = " ".join((tools["verify-audit-log"].description or "").split())
 
     for needle in (

@@ -1,7 +1,7 @@
 """Tests for `ps_service.mcp_interface.http_transport`.
 
-Proves `build_streamable_http_app` wraps the *same* `mcp_server.server`
-instance `mcp_server.py` defines in a real Streamable HTTP ASGI app: the
+Proves `build_streamable_http_app` wraps the server it is given, built over the test
+environment, in a real Streamable HTTP ASGI app: the
 `cypher` tool and the `psdomain://concepts` resource are reachable over real
 JSON-RPC-over-HTTP, not a reimplementation. Driven end-to-end through
 `TestClient` -- a real ASGI request/response cycle, headers included -- with the mount's own
@@ -35,8 +35,13 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 
+from mcp_interface._environment import graph_factory_for
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.logging import configure
-from ps_service.mcp_interface import cypher_tools, tool_core
+from ps_service.mcp_interface import cypher_tools
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -96,10 +101,7 @@ class _FakeFalkorDB:
 def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _FakeGraphHandle) -> None:
     fake_db = _FakeFalkorDB(handle)
 
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        return fake_db
-
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
+    _override(monkeypatch, graph_factory=graph_factory_for(fake_db))
 
 
 def _wrapped_test_client(*, host: str = "127.0.0.1") -> TestClient:
@@ -109,7 +111,9 @@ def _wrapped_test_client(*, host: str = "127.0.0.1") -> TestClient:
     manager -- the outer wrapper's `lifespan` must enter
     `mcp_asgi_app.router.lifespan_context(mcp_asgi_app)` explicitly.
     """
-    mcp_asgi_app = build_streamable_http_app(host=host, verifier=None, auth_context=None)
+    mcp_asgi_app = build_streamable_http_app(
+        server=_server(), host=host, verifier=None, auth_context=None
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncGenerator[None]:
@@ -172,7 +176,9 @@ def _initialize_session(client: TestClient) -> str:
 
 
 def test_build_streamable_http_app_returns_a_starlette_app() -> None:
-    app = build_streamable_http_app(host="127.0.0.1", verifier=None, auth_context=None)
+    app = build_streamable_http_app(
+        server=_server(), host="127.0.0.1", verifier=None, auth_context=None
+    )
 
     assert isinstance(app, Starlette)
 

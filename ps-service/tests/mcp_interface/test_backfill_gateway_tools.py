@@ -29,9 +29,13 @@ from policy_lifecycle._gateway_fakes import (
     SeedStandard,
 )
 
+from mcp_interface._environment import graph_factory_from_connect
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -111,14 +115,14 @@ def _setup(monkeypatch: pytest.MonkeyPatch, *, legacy: bool) -> tuple[GatewayRig
     def _access_role_store(_config: object, **_kwargs: object) -> FakeAccessRoleStore:
         return FakeAccessRoleStore()
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _audit_store)
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _access_role_store)
+    _override(monkeypatch, graph_factory=graph_factory_from_connect(_connect))
+    _override(monkeypatch, audit_store_factory=_audit_store)
+    _override(monkeypatch, role_store_factory=_access_role_store)
     return rig, audit
 
 
 def _call(tool: str, arguments: dict[str, object]) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool(tool, arguments))
+    result = asyncio.run(_server().call_tool(tool, arguments))
     assert isinstance(result, CallToolResult)
     return result
 

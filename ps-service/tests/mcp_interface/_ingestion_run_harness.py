@@ -16,6 +16,10 @@ from typing import TYPE_CHECKING
 from ingestion_runs._fakes import InMemoryIngestionRunStore
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_ingest_regulation_tool import (
     _MiniGraph,  # pyright: ignore[reportPrivateUsage]  -- the stateful in-memory graph double, reused for the per-short_name graphs
     _use_real_pipeline_stages,  # pyright: ignore[reportPrivateUsage]  -- reuse the real-stage fixture verbatim, mirrors `test_ingest_regulation_authz_gate.py`
@@ -23,7 +27,7 @@ from mcp_interface.test_ingest_regulation_tool import (
 from ps_service.api import run_status
 from ps_service.api.ingestion_orchestration import GraphOpeners
 from ps_service.ingestion_runs import dispatch
-from ps_service.mcp_interface import ingestion_tools, mcp_server
+from ps_service.mcp_interface import ingestion_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -36,23 +40,23 @@ _GATE_WAIT_SECONDS = 10.0
 
 
 def install_ingestion_run_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryIngestionRunStore:
-    """Replace the tools' `PsycopgIngestionRunStore` with one shared in-memory store.
+    """Make the servers `call_tool` drives build one shared in-memory ingestion-run store.
 
-    The factory accepts (and ignores) `config` and any keyword, matching how the tool bodies
-    construct the real store (`test_ingest_regulation_authz_gate.py`'s `_fake_store_factory`).
+    The factory accepts (and ignores) `config` and any keyword, matching how the environment
+    composes the real store (`test_ingest_regulation_authz_gate.py`'s `_fake_store_factory`).
     """
     store = InMemoryIngestionRunStore()
 
     def _factory(_config: object, **_kwargs: object) -> InMemoryIngestionRunStore:
         return store
 
-    monkeypatch.setattr(ingestion_tools, "PsycopgIngestionRunStore", _factory)
+    _override(monkeypatch, ingestion_run_store_factory=_factory)
     return store
 
 
 def call_tool(tool: str, arguments: dict[str, str]) -> CallToolResult:
     """Call an MCP tool in-process; a schema rejection raises `ToolError`."""
-    result = asyncio.run(mcp_server.server.call_tool(tool, arguments))
+    result = asyncio.run(_server().call_tool(tool, arguments))
     assert isinstance(result, CallToolResult)
     return result
 

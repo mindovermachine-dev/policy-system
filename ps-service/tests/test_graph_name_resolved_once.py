@@ -23,6 +23,7 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
     FakeAccessRoleStore,
 )
 from graph_gateway._fakes import close_all_rigs
+from mcp_interface._environment import fail_closed_environment, graph_factory_for
 from policy_lifecycle._gateway_fakes import (
     LifecycleRig,
     PolicyGraphSeeder,
@@ -499,8 +500,8 @@ def test_the_mcp_graph_keeps_the_graph_name_resolved_at_load(
     config = load_config()
     monkeypatch.setenv(_VARIABLE, "second_name")
     database = _RecordingDatabase()
-    monkeypatch.setattr("ps_service.mcp_interface.tool_core.connect_from_config", database.connect)
+    environment = fail_closed_environment(graph_factory=graph_factory_for(database))
 
-    resolve_graph(config)
+    resolve_graph(config, environment=environment)
 
     assert database.selected == ["first_name"]

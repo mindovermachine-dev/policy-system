@@ -14,6 +14,10 @@ import pytest
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 from mcp.server import MCPServer
 
+from mcp_interface._environment import fail_closed_environment
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _ACCESS_DENIED_MESSAGE,  # pyright: ignore[reportPrivateUsage]  -- reuse this file family's fixtures verbatim
     _NON_ADMIN_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -32,9 +36,14 @@ from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import catalog_tools
-from ps_service.mcp_interface import tool_core as mcp_server
-from ps_service.mcp_interface.tool_gates import TOOL_GATES, BypassPolicy, GateKind, ToolGate
+from ps_service.mcp_interface import catalog_tools, mcp_server
+from ps_service.mcp_interface.mcp_server import TOOL_GATES
+from ps_service.mcp_interface.tool_gates import (
+    BypassPolicy,
+    GateKind,
+    ToolGate,
+    bind_environment,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,8 +61,8 @@ _UNAUTHENTICATED_MESSAGE = "error: this action requires a real authenticated cal
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # injected by name
     configure()
     store = InMemoryAuditStore()
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
     return store
 
 
@@ -118,8 +127,8 @@ def test_denial_survives_an_unwritable_audit_store(monkeypatch: pytest.MonkeyPat
     store = InMemoryAuditStore(
         fail_on_action={"access.gate": AuditPostgresUnavailableError("host=db.internal")}
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
     _install_store(monkeypatch)
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call(_TOOL, _ARGS)
@@ -146,7 +155,7 @@ def test_permitted_caller_writes_no_access_gate_row(
         target=("granted-admin", _ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(roles))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(roles))
     _install_store(monkeypatch)
     with _verified_actor(sub="granted-admin"):
         result = _call(_TOOL, _ARGS)
@@ -187,7 +196,7 @@ def _input_schema(server: MCPServer, name: str) -> dict[str, object]:
 
 
 def test_wrapped_tool_input_schema_is_identical_to_the_unwrapped_schema() -> None:
-    original = catalog_tools.set_catalog_source.__wrapped__  # pyright: ignore[reportFunctionMemberAccess]  # `functools.wraps` sets `__wrapped__` on the gated tool
+    original = bind_environment(catalog_tools.set_catalog_source, fail_closed_environment())
     reference = MCPServer(name="reference")
     reference.tool(name=_TOOL)(original)
     assert _input_schema(mcp_server.server, _TOOL) == _input_schema(reference, _TOOL)

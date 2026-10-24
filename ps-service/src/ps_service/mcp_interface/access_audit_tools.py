@@ -1,9 +1,10 @@
 """Access-role and audit tools of the PS MCP server: roster management and the audit trail.
 
-Registers `list-access-roles`, `grant-access-role`, `revoke-access-role`, `list-audit-events` and
-`verify-audit-log` on the shared `server` from `tool_core`. This module imports only `tool_core`
-(never another tool group); the patch seam names (`PsycopgAccessRoleStore`, `PsycopgAuditStore`)
-are looked up there at call time as `tool_core.<Name>`.
+Declares `list-access-roles`, `grant-access-role`, `revoke-access-role`, `list-audit-events` and
+`verify-audit-log`; `register_access_audit_tools` registers them on a server built by
+`mcp_server.build_server`. The tools build their access-role and audit stores through the
+`GateEnvironment` they are bound to. This module imports only `tool_core` and `tool_gates` (never
+another tool group).
 
 Business Rules:
     - Every tool here is gated by `ACCESS_ROLE_MANAGEMENT_GATE` or `ACCESS_ROLE_CHANGE_GATE`
@@ -37,14 +38,18 @@ from ps_service.mcp_interface.tool_core import ACCESS_ROLE_CHANGE_GATE as _ACCES
 from ps_service.mcp_interface.tool_core import (
     ACCESS_ROLE_MANAGEMENT_GATE as _ACCESS_ROLE_MANAGEMENT_GATE,
 )
+from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import gated_actor as _gated_actor
-from ps_service.mcp_interface.tool_core import gated_server_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import resolve_authz_actor as _resolve_authz_actor
 from ps_service.mcp_interface.tool_core import run_mcp_action as _run_mcp_action
+from ps_service.mcp_interface.tool_gates import GateEnvironment, register_declared_tools
 
 if TYPE_CHECKING:
+    from mcp.server import MCPServer
+
     from ps_service.audit.models import AuditChainVerification, AuditEventRow
     from ps_service.authz.models import AccessRoleAssignmentRow
+    from ps_service.mcp_interface.tool_gates import ToolGate
 
 
 # `from ... import X as _X` would need a 130-column line for this one name (E501), so it is bound
@@ -79,7 +84,7 @@ def _assignment_to_dict(row: AccessRoleAssignmentRow) -> dict[str, object]:
 
 
 @_gated_tool("list-access-roles", _ACCESS_ROLE_MANAGEMENT_GATE)
-def list_access_roles() -> dict[str, object] | str:
+def list_access_roles(environment: GateEnvironment) -> dict[str, object] | str:
     """List every principal's current access-role assignments.
 
     Takes no parameters. The very first caller ever, of any identity, is bootstrapped to
@@ -111,9 +116,7 @@ def list_access_roles() -> dict[str, object] | str:
     actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
-        store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        store = environment.access_role_store(config)
         try:
             result = list_assignments(actor, store=store)
         except AuthorizationStoreUnavailableError as exc:
@@ -136,7 +139,8 @@ _GRANT_REVOKE_ERRORS = (
 
 
 @_gated_tool("grant-access-role", _ACCESS_ROLE_CHANGE_GATE)
-def grant_access_role(
+def grant_access_role(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     principal_subject: Annotated[str, Field(min_length=1)],
     access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
 ) -> dict[str, object] | str:
@@ -177,9 +181,7 @@ def grant_access_role(
     def _body() -> dict[str, object] | str:
         if actor is None or issuer is None:
             return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-        store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        store = environment.access_role_store(config)
         try:
             result = grant_role(
                 actor=actor,
@@ -201,7 +203,8 @@ def grant_access_role(
 
 
 @_gated_tool("revoke-access-role", _ACCESS_ROLE_CHANGE_GATE)
-def revoke_access_role(
+def revoke_access_role(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     principal_subject: Annotated[str, Field(min_length=1)],
     access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
 ) -> dict[str, object] | str:
@@ -243,9 +246,7 @@ def revoke_access_role(
     def _body() -> dict[str, object] | str:
         if actor is None or issuer is None:
             return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-        store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
+        store = environment.access_role_store(config)
         try:
             result = revoke_role(
                 actor=actor,
@@ -299,7 +300,8 @@ _LIST_AUDIT_EVENTS_ERRORS = (
 
 
 @_gated_tool("list-audit-events", _ACCESS_ROLE_MANAGEMENT_GATE)
-def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an independent, optional query filter; collapsing them into one payload object would just move the same count behind a wrapper
+def list_audit_events(  # noqa: D417, PLR0913, PLR0917 -- every parameter is an independent, optional query filter; collapsing them into one payload object would just move the same count behind a wrapper; `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     actor_subject: Annotated[str, Field(min_length=1)] | None = None,
     actor_issuer: Annotated[str, Field(min_length=1)] | None = None,
     resource_type: Annotated[str, Field(min_length=1)] | None = None,
@@ -363,10 +365,8 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
     actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
-        access_role_store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
-        audit_store = tool_core.PsycopgAuditStore(config)
+        access_role_store = environment.access_role_store(config)
+        audit_store = environment.audit_store_factory(config)
         filters = AuditQueryFilters(
             actor_subject=actor_subject,
             actor_issuer=actor_issuer,
@@ -421,7 +421,7 @@ def _chain_break_to_dict(verification: AuditChainVerification) -> dict[str, obje
 
 
 @_gated_tool("verify-audit-log", _ACCESS_ROLE_MANAGEMENT_GATE)
-def verify_audit_log() -> dict[str, object] | str:
+def verify_audit_log(environment: GateEnvironment) -> dict[str, object] | str:
     """Check that the shared audit trail has not been altered, deleted from or truncated.
 
     Requires `SystemOwner` or `SystemAdmin` and a real authenticated session; the local-test
@@ -457,10 +457,8 @@ def verify_audit_log() -> dict[str, object] | str:
     actor = _gated_actor(config)
 
     def _body() -> dict[str, object] | str:
-        access_role_store = tool_core.PsycopgAccessRoleStore(
-            config, audit_store=tool_core.PsycopgAuditStore(config)
-        )
-        audit_store = tool_core.PsycopgAuditStore(config)
+        access_role_store = environment.access_role_store(config)
+        audit_store = environment.audit_store_factory(config)
         try:
             verification = run_verify_audit_log(
                 actor, access_role_store=access_role_store, audit_store=audit_store
@@ -475,3 +473,30 @@ def verify_audit_log() -> dict[str, object] | str:
         }
 
     return _run_mcp_action("verify_audit_log", _body)
+
+
+def register_access_audit_tools(
+    server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
+) -> None:
+    """Register the access-role and audit tools.
+
+    Args:
+        server: The server the tools are registered on.
+        environment: The server-side collaborators the tools use.
+        gates: The registry that records this server's gate declarations.
+
+    Raises:
+        ValueError: A tool name is already declared in `gates`.
+    """
+    register_declared_tools(
+        server,
+        environment,
+        gates,
+        (
+            list_access_roles,
+            grant_access_role,
+            revoke_access_role,
+            list_audit_events,
+            verify_audit_log,
+        ),
+    )

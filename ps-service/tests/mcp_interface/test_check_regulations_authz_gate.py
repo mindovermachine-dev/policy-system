@@ -40,9 +40,13 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
+from ps_service.mcp_interface import ingestion_tools
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -80,10 +84,9 @@ def _verified_actor(*, sub: str, iss: str = _CALLER_ISSUER) -> Generator[None]:
 def _fake_store_factory(store: object) -> object:
     """An `AccessRoleStore`-shaped factory returning the same fake store every call.
 
-    Monkeypatched onto `mcp_server.PsycopgAccessRoleStore` -- the gated tool
-    body calls it as `PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))`,
-    so this must accept (and ignore) both the positional `config` and the
-    `audit_store` keyword.
+    Installed as the environment's `role_store_factory` -- the gate calls it as
+    `factory(config, audit_store=<the audit store>)`, so this must accept (and ignore)
+    both the positional `config` and the `audit_store` keyword.
     """
 
     def _factory(_config: object, **_kwargs: object) -> object:
@@ -105,7 +108,7 @@ def _seeded_store() -> FakeAccessRoleStore:
 
 
 def _call_check_regulations() -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("check_regulations", {}))
+    result = asyncio.run(_server().call_tool("check_regulations", {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -131,7 +134,7 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -154,7 +157,7 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
         target=(_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_ADMIN_SUBJECT):
@@ -173,7 +176,7 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
@@ -195,7 +198,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
@@ -214,9 +217,7 @@ def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     and no sweep ever runs.
     """
     configure()
-    monkeypatch.setattr(
-        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
-    )
+    _override(monkeypatch, role_store_factory=_fake_store_factory(RaisingAccessRoleStore()))
     _install_fake_change_check_dependencies(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):

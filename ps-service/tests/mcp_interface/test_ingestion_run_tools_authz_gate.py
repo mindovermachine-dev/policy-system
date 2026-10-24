@@ -33,6 +33,10 @@ from mcp_interface._ingestion_run_harness import (
     isolate_ingestion_runs,
     wait_for_run,
 )
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_ingest_regulation_tool import (
     _CELEX,  # pyright: ignore[reportPrivateUsage]  -- same reuse as `test_ingest_regulation_authz_gate.py`
     _SHORT_NAME,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -42,7 +46,6 @@ from mcp_interface.test_ingest_regulation_tool import (
 from ps_service.authz.models import AccessRole
 from ps_service.ingestion_runs import dispatch
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
@@ -96,7 +99,7 @@ def _arguments(tool: str) -> dict[str, str]:
 
 
 def _call(tool: str) -> str:
-    result = asyncio.run(mcp_server.server.call_tool(tool, _arguments(tool)))
+    result = asyncio.run(_server().call_tool(tool, _arguments(tool)))
     assert isinstance(result, CallToolResult)
     assert result.is_error is False
     block = result.content[0]
@@ -147,7 +150,7 @@ def test_callers_below_compliance_officer_get_the_same_denial_as_ingest_regulati
             target=(subject, _CALLER_ISSUER),
             access_role=role,
         )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(access))
 
     with _verified_actor(sub=subject):
         assert _call(tool) == _ACCESS_DENIED_MESSAGE
@@ -160,9 +163,7 @@ def test_callers_below_compliance_officer_get_the_same_denial_as_ingest_regulati
 def test_an_access_store_outage_fails_closed_for_every_tool(
     tool: str, runs: InMemoryIngestionRunStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
-    )
+    _override(monkeypatch, role_store_factory=_fake_store_factory(RaisingAccessRoleStore()))
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         assert _call(tool) == "error: The authorization store is temporarily unavailable."
@@ -185,14 +186,12 @@ def test_status_denial_is_identical_for_an_unseen_and_an_existing_run_id(
     runs: InMemoryIngestionRunStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The denial never reveals whether a run id exists, and no read happens first."""
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
     unseen = str(uuid.uuid4())
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         existing_denial = _call("get_ingestion_status")
-        unseen_denial = asyncio.run(
-            mcp_server.server.call_tool("get_ingestion_status", {"run_id": unseen})
-        )
+        unseen_denial = asyncio.run(_server().call_tool("get_ingestion_status", {"run_id": unseen}))
 
     assert isinstance(unseen_denial, CallToolResult)
     block = unseen_denial.content[0]
@@ -211,11 +210,11 @@ def test_a_granted_compliance_officer_reaches_the_tool_body(
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(access))
     _use_real_pipeline_stages(monkeypatch)
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
-        result = asyncio.run(mcp_server.server.call_tool(tool, _arguments(tool)))
+        result = asyncio.run(_server().call_tool(tool, _arguments(tool)))
 
     assert isinstance(result, CallToolResult)
     payload = body(result)

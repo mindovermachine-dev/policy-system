@@ -24,9 +24,12 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -76,11 +79,7 @@ class _ForbiddenGraphOpener:
 
 def _install(monkeypatch: pytest.MonkeyPatch, store: object) -> _ForbiddenGraphOpener:
     opener = _ForbiddenGraphOpener()
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _opener_factory(opener),
-    )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _store_factory(store))
+    _override(monkeypatch, graph_factory=opener, role_store_factory=_store_factory(store))
     return opener
 
 
@@ -97,15 +96,8 @@ def _store_factory(store: object) -> Callable[..., object]:
     return _factory
 
 
-def _opener_factory(opener: Callable[[object], object]) -> Callable[[], Callable[[object], object]]:
-    def _factory() -> Callable[[object], object]:
-        return opener
-
-    return _factory
-
-
 def _call(name: str, args: dict[str, object]) -> str:
-    result = asyncio.run(mcp_server.server.call_tool(name, args))
+    result = asyncio.run(_server().call_tool(name, args))
     assert isinstance(result, CallToolResult)
     block = result.content[0]
     assert isinstance(block, TextContent)

@@ -29,9 +29,13 @@ from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 from policy_lifecycle._gateway_fakes import PolicyGraphSeeder, PolicyReadGraph, SeedStandard
 
+from mcp_interface._environment import graph_factory_from_connect
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  -- pins the exact seed-check query text, mirrors test_cypher_tool.py
 )
@@ -175,13 +179,13 @@ def _install(monkeypatch: pytest.MonkeyPatch, graph: _ChainGraph) -> None:
     def _role_store(_config: object, **_kwargs: object) -> object:
         return roles
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect)
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", _audit)
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _role_store)
+    _override(monkeypatch, graph_factory=graph_factory_from_connect(_connect))
+    _override(monkeypatch, audit_store_factory=_audit)
+    _override(monkeypatch, role_store_factory=_role_store)
 
 
 def _call(tool: str, args: dict[str, object]) -> dict[str, object]:
-    result = asyncio.run(mcp_server.server.call_tool(tool, args))
+    result = asyncio.run(_server().call_tool(tool, args))
     assert isinstance(result, CallToolResult)
     block = result.content[0]
     assert isinstance(block, TextContent)

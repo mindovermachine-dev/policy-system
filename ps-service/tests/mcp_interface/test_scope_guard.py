@@ -38,8 +38,7 @@ import ast
 from mcp_interface._source_modules import merged_tool_tree, tool_source_paths
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
-from ps_service.mcp_interface import http_transport
-from ps_service.mcp_interface import tool_core as mcp_server
+from ps_service.mcp_interface import http_transport, mcp_server
 
 
 def _module_ast() -> ast.Module:
@@ -137,7 +136,10 @@ def test_mcp_wires_token_verifier_after_construction_when_auth_configured() -> N
     verifier = PsTokenVerifier(_FAKE_AUTH_CONTEXT)
 
     http_transport.build_streamable_http_app(
-        host="127.0.0.1", verifier=verifier, auth_context=_FAKE_AUTH_CONTEXT
+        server=mcp_server.server,
+        host="127.0.0.1",
+        verifier=verifier,
+        auth_context=_FAKE_AUTH_CONTEXT,
     )
 
     assert mcp_server.server._token_verifier is verifier  # pyright: ignore[reportPrivateUsage]
@@ -161,11 +163,16 @@ def test_mcp_disarms_token_verifier_when_auth_not_configured() -> None:
     """
     verifier = PsTokenVerifier(_FAKE_AUTH_CONTEXT)
     http_transport.build_streamable_http_app(
-        host="127.0.0.1", verifier=verifier, auth_context=_FAKE_AUTH_CONTEXT
+        server=mcp_server.server,
+        host="127.0.0.1",
+        verifier=verifier,
+        auth_context=_FAKE_AUTH_CONTEXT,
     )
     assert mcp_server.server._token_verifier is verifier  # pyright: ignore[reportPrivateUsage]
 
-    http_transport.build_streamable_http_app(host="127.0.0.1", verifier=None, auth_context=None)
+    http_transport.build_streamable_http_app(
+        server=mcp_server.server, host="127.0.0.1", verifier=None, auth_context=None
+    )
 
     assert mcp_server.server._token_verifier is None  # pyright: ignore[reportPrivateUsage]
     assert mcp_server.server.settings.auth is None

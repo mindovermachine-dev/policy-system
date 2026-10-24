@@ -18,6 +18,10 @@ from mcp.types import CallToolResult, TextContent
 
 import ps_service.authz.audit_actions  # pyright: ignore[reportUnusedImport] -- side-effect import, registers `access.gate`
 import ps_service.passkey_signing.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers `passkey.enroll`
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_authz_gate import (
     _SYSTEM_OWNER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _fake_store_factory,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -26,7 +30,6 @@ from mcp_interface.test_catalog_source_authz_gate import (
 )
 from ps_service.audit.models import AuditEventRow, AuditQueryFilters, AuditQueryPage
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.mcp_interface.audit_actions import QUERY_CYPHER_ACTION
 
 if TYPE_CHECKING:
@@ -106,8 +109,8 @@ def _write(
 @pytest.fixture(name="audit_store", autouse=True)
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> _TimedAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     store = _TimedAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(_seeded_store()))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(_seeded_store()))
     _write(
         store,
         actor=_DENIED,
@@ -144,7 +147,7 @@ def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> _TimedAuditStore:  
 def _call(**kwargs: object) -> CallToolResult:
     configure()
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
-        result = asyncio.run(mcp_server.server.call_tool("list-audit-events", kwargs))
+        result = asyncio.run(_server().call_tool("list-audit-events", kwargs))
     assert isinstance(result, CallToolResult)
     return result
 

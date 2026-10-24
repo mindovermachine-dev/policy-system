@@ -1,8 +1,9 @@
 """Every `mcp_server` mention in `ps-service/src` names a symbol the front door still defines.
 
-`mcp_server.py` is a thin front door that defines only `server`, `handle_mcp_tool_call` and
-`TOOL_GROUP_MODULES`. After the split, a docstring, comment or import that says `mcp_server.<name>`
-for any other name points at code that moved to `tool_core` or a `*_tools` module.
+`mcp_server.py` is a thin front door that exposes only `server`, `handle_mcp_tool_call`,
+`build_server`, `BuiltServer`, `TOOL_GATES` and `TOOL_GROUP_MODULES`. After the split, a docstring,
+comment or import that says `mcp_server.<name>` for any other name points at code that moved to
+`tool_core` or a `*_tools` module.
 """
 
 from __future__ import annotations
@@ -17,7 +18,16 @@ from ps_service.mcp_interface import mcp_server
 
 _SRC = Path(ps_service.__file__).parent
 _FRONT_DOOR = Path(mcp_server.__file__)
-_DEFINED = frozenset({"server", "handle_mcp_tool_call", "TOOL_GROUP_MODULES"})
+_DEFINED = frozenset(
+    {
+        "server",
+        "handle_mcp_tool_call",
+        "TOOL_GROUP_MODULES",
+        "build_server",
+        "BuiltServer",
+        "TOOL_GATES",
+    }
+)
 _MENTION = re.compile(r"mcp_server(?=(?P<rest>[^\n]*))")
 _SYMBOL_AFTER = re.compile(r"^\.(?P<name>\w+)")
 _IMPORT_AFTER = re.compile(r"^ import (?P<names>[\w, ]+)")

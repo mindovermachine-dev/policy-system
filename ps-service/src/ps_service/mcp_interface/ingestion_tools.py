@@ -1,12 +1,13 @@
 """Ingestion and regulation-change tools of the PS MCP server.
 
-Registers `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `check_regulations` and
-`check_instrument_ingestion_status` on the shared `server` from `tool_core`, together with the
-background ingestion-run machinery behind `start_ingestion`. This module imports only `tool_core`
-(never another tool group); the patch seam names are looked up there at call time as
-`tool_core.<Name>`. `build_default_pipeline_dependencies`,
-`build_default_change_check_dependencies`, `PsycopgIngestionRunStore`, `start_background_run` and
-`run_mcp_action` are bound here and patched here by tests.
+Declares `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `check_regulations` and
+`check_instrument_ingestion_status`, together with the background ingestion-run machinery behind
+`start_ingestion`; `register_ingestion_tools` registers them on a server built by
+`mcp_server.build_server`. The tools build their ingestion-run, audit and graph collaborators
+through the `GateEnvironment` they are bound to. This module imports only `tool_core` and
+`tool_gates` (never another tool group); `build_default_pipeline_dependencies`,
+`build_default_change_check_dependencies`, `start_background_run` and `run_mcp_action` are bound
+here and patched here by tests.
 
 Business Rules:
     - Ingestion and change-check tools need `ComplianceOfficer`; ingestion status reads and the
@@ -60,7 +61,7 @@ from ps_service.api.run_status import get_stage
 from ps_service.api.stage_failure_log import stage_failure_detail
 from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.config import load_config
-from ps_service.ingestion_runs import IngestionRunStoreError, PsycopgIngestionRunStore
+from ps_service.ingestion_runs import IngestionRunStoreError
 from ps_service.ingestion_runs.audit_actions import INGESTION_RUN_RECONCILER_ACTOR
 from ps_service.ingestion_runs.dispatch import (
     is_run_in_flight,
@@ -73,7 +74,6 @@ from ps_service.ingestion_runs.errors import (
     IngestionRunCapacityExceededError,
 )
 from ps_service.logging import LoggingLifecycleError, current_run_id, emit_log_entry
-from ps_service.mcp_interface import tool_core
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
 from ps_service.mcp_interface.tool_core import CELEX_PATTERN as _CELEX_PATTERN
 from ps_service.mcp_interface.tool_core import COMPLIANCE_OFFICER_GATE as _COMPLIANCE_OFFICER_GATE
@@ -85,11 +85,12 @@ from ps_service.mcp_interface.tool_core import MCP_CALLER_LABEL as _MCP_CALLER_L
 from ps_service.mcp_interface.tool_core import PLAIN_READ_GATE as _PLAIN_READ_GATE
 from ps_service.mcp_interface.tool_core import UNEXPECTED_ERROR_MESSAGE as _UNEXPECTED_ERROR_MESSAGE
 from ps_service.mcp_interface.tool_core import audit_context as _audit_context
-from ps_service.mcp_interface.tool_core import gated_server_tool as _gated_tool
+from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import resolve_authz_actor as _resolve_authz_actor
 from ps_service.mcp_interface.tool_core import resolve_graph as _resolve_graph
 from ps_service.mcp_interface.tool_core import run_mcp_action as _run_mcp_action
 from ps_service.mcp_interface.tool_core import sanitize_graph_open as _sanitize_graph_open
+from ps_service.mcp_interface.tool_gates import GateEnvironment, register_declared_tools
 from ps_service.metrics import record_ingestion_run
 from ps_service.query_engine import (
     GraphUnseededError,
@@ -99,6 +100,8 @@ from ps_service.query_engine import (
 )
 
 if TYPE_CHECKING:
+    from mcp.server import MCPServer
+
     from ps_service.api.catalog_entry import CatalogEntry
     from ps_service.api.change_check_orchestration import ChangeCheckDependencies
     from ps_service.api.ingestion_orchestration import PipelineDependencies
@@ -107,6 +110,7 @@ if TYPE_CHECKING:
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.ingestion_runs import IngestionRunRow, IngestionRunStore
     from ps_service.ingestion_runs.audit_actions import IngestionReasonCode, IngestionTrigger
+    from ps_service.mcp_interface.tool_gates import ToolGate
 
 
 # `_SHORT_NAME_PATTERN` is `SHORT_NAME_PATTERN` from `ps_service.api.ingestion_orchestration`:
@@ -353,7 +357,8 @@ def _resolve_and_ingest(
 
 
 @_gated_tool("ingest_regulation", _COMPLIANCE_OFFICER_GATE)
-def ingest_regulation(
+def ingest_regulation(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
     short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
 ) -> dict[str, object] | str:
@@ -411,7 +416,7 @@ def ingest_regulation(
         # calling this closure, so `current_run_id()` is never actually `None`
         # here -- the `""` fallback only satisfies the type checker's narrowing.
         run_id = current_run_id() or ""
-        audit = _audit_context(config, actor)
+        audit = _audit_context(config, actor, environment=environment)
         if isinstance(audit, str):
             return audit
         return _resolve_and_ingest(celex, short_name, config=config, run_id=run_id, audit=audit)
@@ -584,6 +589,7 @@ def _submit_ingestion_run(
     config: ServiceConfig,
     actor: tuple[str, str] | None,
     store: IngestionRunStore,
+    environment: GateEnvironment,
 ) -> dict[str, object] | str:
     """Record the run, start its worker thread and return at once.
 
@@ -591,7 +597,7 @@ def _submit_ingestion_run(
     before anything is written) and released on any failure before the worker starts, so no
     exception can leak a slot.
     """
-    audit = _audit_context(config, actor)
+    audit = _audit_context(config, actor, environment=environment)
     if isinstance(audit, str):
         return audit
     try:
@@ -644,7 +650,8 @@ def _ingestion_run_status_response(run_id: str, row: IngestionRunRow | None) -> 
 
 
 @_gated_tool("start_ingestion", _COMPLIANCE_OFFICER_GATE)
-def start_ingestion(
+def start_ingestion(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
     short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
 ) -> dict[str, object] | str:
@@ -706,14 +713,16 @@ def start_ingestion(
             run_id=run_id,
             config=config,
             actor=actor,
-            store=PsycopgIngestionRunStore(config, audit_store=tool_core.PsycopgAuditStore(config)),
+            store=environment.ingestion_run_store(config),
+            environment=environment,
         )
 
     return _run_mcp_action("start_ingestion", _body)
 
 
 @_gated_tool("get_ingestion_status", _COMPLIANCE_OFFICER_GATE)
-def get_ingestion_status(
+def get_ingestion_status(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     run_id: Annotated[str, Field(min_length=1, max_length=64)],
 ) -> dict[str, object] | str:
     """Report the progress and final result of a `start_ingestion` run.
@@ -747,7 +756,7 @@ def get_ingestion_status(
     config = load_config()
 
     def _body() -> dict[str, object] | str:
-        store = PsycopgIngestionRunStore(config, audit_store=tool_core.PsycopgAuditStore(config))
+        store = environment.ingestion_run_store(config)
         try:
             row = store.get_run(run_id)
         except IngestionRunStoreError as exc:
@@ -760,7 +769,11 @@ def get_ingestion_status(
 
 
 def _run_audited_change_check(
-    config: ServiceConfig, actor: tuple[str, str] | None, run_id: str
+    config: ServiceConfig,
+    actor: tuple[str, str] | None,
+    run_id: str,
+    *,
+    environment: GateEnvironment,
 ) -> dict[str, object] | str:
     """Run the `check_regulations` sweep with the caller as audit actor.
 
@@ -768,6 +781,7 @@ def _run_audited_change_check(
         config: Resolved service configuration.
         actor: Verified `(sub, iss)` of the caller, or `None` when none was bound.
         run_id: Run id of the sweep.
+        environment: Supplies the audit store the sweep's audit context carries.
 
     Returns:
         The change-check response dict, or an `error: ` string: the fixed authentication text when
@@ -782,7 +796,7 @@ def _run_audited_change_check(
         the graph and, per re-ingest, `ingestion_run.submit` and `ingestion_run.complete` audit
         rows.
     """
-    audit = _audit_context(config, actor)
+    audit = _audit_context(config, actor, environment=environment)
     if isinstance(audit, str):
         return audit
     try:
@@ -802,7 +816,7 @@ def _run_audited_change_check(
 
 
 @_gated_tool("check_regulations", _COMPLIANCE_OFFICER_GATE)
-def check_regulations() -> dict[str, object] | str:
+def check_regulations(environment: GateEnvironment) -> dict[str, object] | str:
     """Sweep every tracked regulation for detected amendments and re-ingest any found.
 
     Opens the merged compliance graph, reads every actively tracked external `regulation` or
@@ -845,7 +859,9 @@ def check_regulations() -> dict[str, object] | str:
         # calling this closure, so `current_run_id()` is never actually `None`
         # here -- the `""` fallback only satisfies the type checker's narrowing,
         # mirroring `ingest_regulation`'s own identical idiom.
-        return _run_audited_change_check(config, actor, current_run_id() or "")
+        return _run_audited_change_check(
+            config, actor, current_run_id() or "", environment=environment
+        )
 
     return _run_mcp_action("check_regulations", _body)
 
@@ -862,7 +878,8 @@ _INGESTION_STATUS_QUERY = (
 
 
 @_gated_tool("check_instrument_ingestion_status", _PLAIN_READ_GATE)
-def check_instrument_ingestion_status(
+def check_instrument_ingestion_status(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment,
     celex_ids: Annotated[
         list[Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)]],
         Field(min_length=1, max_length=25),
@@ -901,7 +918,7 @@ def check_instrument_ingestion_status(
 
     def _body() -> dict[str, object]:
         try:
-            graph = _resolve_graph(config)
+            graph = _resolve_graph(config, environment=environment)
             result = execute_cypher_query(
                 _INGESTION_STATUS_QUERY,
                 graph=graph,
@@ -925,3 +942,30 @@ def check_instrument_ingestion_status(
         }
 
     return _run_mcp_action("check_instrument_ingestion_status", _body)
+
+
+def register_ingestion_tools(
+    server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
+) -> None:
+    """Register the ingestion and regulation-change tools.
+
+    Args:
+        server: The server the tools are registered on.
+        environment: The server-side collaborators the tools use.
+        gates: The registry that records this server's gate declarations.
+
+    Raises:
+        ValueError: A tool name is already declared in `gates`.
+    """
+    register_declared_tools(
+        server,
+        environment,
+        gates,
+        (
+            ingest_regulation,
+            start_ingestion,
+            get_ingestion_status,
+            check_regulations,
+            check_instrument_ingestion_status,
+        ),
+    )

@@ -60,7 +60,7 @@ worse than the same success in **B** with a legitimate token).
 ### 2. Authorization / authz integrity  *(Scenario B, P3)*
 - **Code anchors:** `ps_service/authz/` (roles, RBAC), `ps_service/policy_lifecycle/rules`,
   `ps_service/graph_cleanup`, `ps_service/passkey_signing/` (signed approvals),
-  `ps_service/invitations/`, `ps_service/mcp_interface/` (`tool_core.py` gate declarations, one `*_tools.py` per tool group).
+  `ps_service/invitations/`, `ps_service/mcp_interface/` (`tool_core.py` gate constants, `tool_gates.py` gate registration, one `*_tools.py` per tool group).
 - **Threat:** a legitimate low-priv token reaches admin/data-store/deploy surfaces; privilege
   escalation by role confusion.
 - **Probe:** with a low-priv token, attempt admin, graph write/delete, and deploy-relevant surfaces.

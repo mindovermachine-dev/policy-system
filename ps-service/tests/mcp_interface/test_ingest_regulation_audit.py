@@ -15,6 +15,9 @@ from typing import cast
 import pytest
 from audit._fakes import InMemoryAuditStore, audit_store_factory
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_ingest_regulation_authz_gate import (
     _CALLER_ISSUER,  # pyright: ignore[reportPrivateUsage]  -- reuse the gate file's verified-caller fixtures verbatim
     _COMPLIANCE_OFFICER_SUBJECT,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -34,7 +37,6 @@ from mcp_interface.test_ingest_regulation_tool import (
 from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import tool_core
 
 _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 
@@ -43,7 +45,7 @@ _BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
 def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
     """Every sync ingest writes `ingestion_run.*` rows: keep them off Postgres."""
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
@@ -54,7 +56,7 @@ def _grant_compliance_officer(monkeypatch: pytest.MonkeyPatch) -> None:
         target=(_COMPLIANCE_OFFICER_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(access))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(access))
 
 
 def test_ingest_regulation_audits_verified_actor_and_bound_run_id(

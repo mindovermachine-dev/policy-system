@@ -1,4 +1,4 @@
-"""Call the registered MCP tools of the real server as a given caller (continuity tests).
+"""Call the registered MCP tools of a built server as a given caller (continuity tests).
 
 The continuity tests drive each cleanup flow through the MCP tool that previews it, the signing
 router, the executor and the tools that report on it. This is the small shared piece of that:
@@ -15,8 +15,9 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
-
-from ps_service.mcp_interface import mcp_server
+from mcp_interface.test_access_role_tools import (
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -36,9 +37,9 @@ def caller(subject: str, issuer: str) -> Generator[None]:
 
 
 def call_tool(name: str, args: dict[str, object], who: tuple[str, str]) -> str:
-    """Call the MCP tool `name` as `who`; return the text of its single result block."""
+    """Call the MCP tool `name` as `who` on a server built over the test environment overrides."""
     with caller(*who):
-        result = asyncio.run(mcp_server.server.call_tool(name, args))
+        result = asyncio.run(_server().call_tool(name, args))
     assert isinstance(result, CallToolResult)
     block = result.content[0]
     assert isinstance(block, TextContent)

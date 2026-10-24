@@ -36,12 +36,15 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.audit.errors import AuditPersistenceError, AuditPostgresUnavailableError
 from ps_service.audit.models import AuditEventRow
 from ps_service.authz.models import AccessRole
 from ps_service.graph_cleanup.audit_actions import ObligationMergeDetails
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 from ps_service.passkey_signing.errors import PendingApprovalPersistenceError
 
 if TYPE_CHECKING:
@@ -91,15 +94,10 @@ class _Env:
         self.rig = CleanupRig()
         role_unmerge_world(self.rig)
         self.pending = FakeApprovalStore()
-        monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory(_officers()))
-        monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(self.pending))
-        monkeypatch.setattr(
-            "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-            _factory(self._open_graph),
-        )
-        monkeypatch.setattr(
-            "ps_service.graph_cleanup.dependencies.PsycopgAuditStore", _factory(self.rig.audit)
-        )
+        _override(monkeypatch, role_store_factory=_factory(_officers()))
+        _override(monkeypatch, pending_approval_store_factory=_factory(self.pending))
+        _override(monkeypatch, graph_factory=self._open_graph)
+        _override(monkeypatch, audit_store_factory=_factory(self.rig.audit))
 
     def _open_graph(self, _config: object) -> CleanupReadGraph:
         return self.rig.read
@@ -111,7 +109,7 @@ class _Env:
 
     def call(self, name: str, args: dict[str, object], *, sub: str = _OFFICER) -> str:
         with _actor(sub):
-            result = asyncio.run(mcp_server.server.call_tool(name, args))
+            result = asyncio.run(_server().call_tool(name, args))
         assert isinstance(result, CallToolResult)
         block = result.content[0]
         assert isinstance(block, TextContent)
@@ -238,7 +236,7 @@ def test_no_real_session_is_refused_even_under_the_local_test_bypass(
         monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     before = env.graph_state()
 
-    result = asyncio.run(mcp_server.server.call_tool("unmerge", _ARGS))
+    result = asyncio.run(_server().call_tool("unmerge", _ARGS))
 
     assert isinstance(result, CallToolResult)
     block = result.content[0]
@@ -349,10 +347,7 @@ def _open_garbage(_config: object) -> object:
 def test_a_graph_or_unexpected_failure_returns_a_fixed_message_and_creates_no_approval(
     env: _Env, monkeypatch: pytest.MonkeyPatch, opener: Callable[..., object], expected: str
 ) -> None:
-    monkeypatch.setattr(
-        "ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener",
-        _factory(opener),
-    )
+    _override(monkeypatch, graph_factory=opener)
     before = env.graph_state()
 
     text = env.call("unmerge", _ARGS)
@@ -389,7 +384,7 @@ def test_an_unreachable_approval_store_returns_a_fixed_message_and_leaves_no_tra
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     down = _DownApprovalStore()
-    monkeypatch.setattr(tool_core, "PsycopgPendingApprovalStore", _factory(down))
+    _override(monkeypatch, pending_approval_store_factory=_factory(down))
     before = env.graph_state()
 
     text = env.call("unmerge", _ARGS)

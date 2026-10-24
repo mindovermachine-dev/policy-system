@@ -36,6 +36,10 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from mcp_interface.test_catalog_source_skills import (
     _DEFAULT_URL,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own "zero changes to that file" fixtures verbatim rather than re-declaring them, mirrors `test_near_miss_tools.py`'s own cross-module private-import convention
     _OVERRIDE_URL,  # pyright: ignore[reportPrivateUsage]  -- same reuse
@@ -43,7 +47,6 @@ from mcp_interface.test_catalog_source_skills import (
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
-from ps_service.mcp_interface import mcp_server, tool_core
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -80,10 +83,9 @@ def _verified_actor(*, sub: str, iss: str = _CALLER_ISSUER) -> Generator[None]:
 def _fake_store_factory(store: object) -> Callable[..., object]:
     """An `AccessRoleStore`-shaped factory returning the same fake store every call.
 
-    Monkeypatched onto `mcp_server.PsycopgAccessRoleStore` -- each gated
-    tool body calls it as `PsycopgAccessRoleStore(config,
-    audit_store=PsycopgAuditStore(config))`, so this must accept (and
-    ignore) both the positional `config` and the `audit_store` keyword.
+    Installed as the environment's `role_store_factory` -- each gated tool body calls it as
+    `factory(config, audit_store=<the audit store>)`, so this must accept (and ignore) both the
+    positional `config` and the `audit_store` keyword.
     """
 
     def _factory(_config: object, **_kwargs: object) -> object:
@@ -105,7 +107,7 @@ def _seeded_store() -> FakeAccessRoleStore:
 
 
 def _call(tool: str, args: dict[str, object] | None = None) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool(tool, args or {}))
+    result = asyncio.run(_server().call_tool(tool, args or {}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -133,7 +135,7 @@ def test_authenticated_user_only_caller_is_denied(
     """
     configure()
     store = _seeded_store()
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     store_of_overrides = _install_store(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -172,7 +174,7 @@ def test_system_admin_caller_succeeds_exactly_as_documented(
         target=(_NEW_SYSTEM_ADMIN_SUBJECT, _CALLER_ISSUER),
         access_role=AccessRole.SYSTEM_ADMIN,
     )
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     _install_store(monkeypatch)
 
     with _verified_actor(sub=_NEW_SYSTEM_ADMIN_SUBJECT):
@@ -193,9 +195,7 @@ def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
     by an MCP round trip against a raising store.
     """
     configure()
-    monkeypatch.setattr(
-        tool_core, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
-    )
+    _override(monkeypatch, role_store_factory=_fake_store_factory(RaisingAccessRoleStore()))
     store_of_overrides = _install_store(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
@@ -217,7 +217,7 @@ def test_sole_bootstrapped_system_owner_also_satisfies_the_system_admin_gate(
     """
     configure()
     store = FakeAccessRoleStore(expected_owner=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _fake_store_factory(store))
+    _override(monkeypatch, role_store_factory=_fake_store_factory(store))
     _install_store(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):

@@ -77,6 +77,10 @@ from litellm.types.utils import Choices, Embedding, EmbeddingResponse, Message, 
 from mcp.types import CallToolResult, TextContent
 from starlette.applications import Starlette
 
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service import dependency_health
 from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.api.dependencies import provide_audit_store, provide_pipeline_dependencies
@@ -117,7 +121,7 @@ from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.main import create_app
-from ps_service.mcp_interface import ingestion_tools, mcp_server, tool_core
+from ps_service.mcp_interface import ingestion_tools
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
@@ -211,7 +215,7 @@ def _configure_complete_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _call_ingest_regulation(celex: str, short_name: str) -> CallToolResult:
     result = asyncio.run(
-        mcp_server.server.call_tool("ingest_regulation", {"celex": celex, "short_name": short_name})
+        _server().call_tool("ingest_regulation", {"celex": celex, "short_name": short_name})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -1041,7 +1045,7 @@ def _authenticated_test_client(*, auth_context: AuthContext, host: str = "127.0.
     """
     verifier = PsTokenVerifier(auth_context)
     mcp_asgi_app = build_streamable_http_app(
-        host=host, verifier=verifier, auth_context=auth_context
+        server=_server(), host=host, verifier=verifier, auth_context=auth_context
     )
 
     @contextlib.asynccontextmanager
@@ -1903,7 +1907,7 @@ def _grant_compliance_officer(
     monkeypatch: pytest.MonkeyPatch, *, subject: str, issuer: str
 ) -> None:
     """Seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
-    monkeypatched onto `mcp_server.PsycopgAccessRoleStore`.
+    installed as the environment's `role_store_factory`.
 
     The two real-verified-token tests below prove principal/caller threading, not
     authorization -- without this, the authz gate denies them
@@ -1921,7 +1925,7 @@ def _grant_compliance_officer(
     def _factory(_config: object, **_kwargs: object) -> object:
         return store
 
-    monkeypatch.setattr(tool_core, "PsycopgAccessRoleStore", _factory)
+    _override(monkeypatch, role_store_factory=_factory)
 
 
 def test_real_verified_token_call_logs_no_principal_and_the_pipeline_gets_the_mcp_caller_label(

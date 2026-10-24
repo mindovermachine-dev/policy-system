@@ -12,8 +12,9 @@ import asyncio
 
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface._environment import build_test_server
 from ps_service.domain_schema import DOMAIN_SCHEMA, EnumType
-from ps_service.mcp_interface import cypher_tools, mcp_server
+from ps_service.mcp_interface import cypher_tools
 
 
 def _domain_text() -> str:
@@ -22,7 +23,7 @@ def _domain_text() -> str:
 
 
 def _tool_text() -> str:
-    outcome = asyncio.run(mcp_server.server.call_tool("domain_concepts", {}))
+    outcome = asyncio.run(build_test_server().call_tool("domain_concepts", {}))
     assert isinstance(outcome, CallToolResult)
     return "".join(c.text for c in outcome.content if isinstance(c, TextContent))
 

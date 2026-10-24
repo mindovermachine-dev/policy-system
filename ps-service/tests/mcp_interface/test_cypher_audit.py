@@ -22,6 +22,7 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
 from mcp_interface import test_check_instrument_ingestion_status_tool as ingestion_status_support
+from mcp_interface._environment import graph_factory_for
 from mcp_interface.test_access_role_tools import (
     _verified_actor,  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
 )
@@ -29,6 +30,8 @@ from mcp_interface.test_cypher_tool import (
     _FakeGraphHandle,  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
     _FakeQueryResult,  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
     _install_graph,  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
 )
 from ps_service.audit.actor import LOCAL_TEST_BYPASS_AUDIT_ACTOR
 from ps_service.audit.errors import AuditPostgresUnavailableError
@@ -36,7 +39,7 @@ from ps_service.audit.models import AuditQueryFilters, is_known_resource_type, r
 from ps_service.authz.service import list_audit_events
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
-from ps_service.mcp_interface import mcp_server, tool_core
+from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.audit_actions import QueryCypherDetails
 from ps_service.query_engine import cypher_query
 
@@ -59,16 +62,16 @@ def audit(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:
     """Route the tool's audit rows to memory."""
     configure()
     store = InMemoryAuditStore()
-    monkeypatch.setattr(tool_core, "PsycopgAuditStore", audit_store_factory(store))
+    _override(monkeypatch, audit_store_factory=audit_store_factory(store))
     return store
 
 
 def _cypher(query: str, *, sub: str | None = _CALLER) -> CallToolResult:
     if sub is None:
-        result = asyncio.run(mcp_server.server.call_tool("cypher", {"query": query}))
+        result = asyncio.run(_server().call_tool("cypher", {"query": query}))
     else:
         with _verified_actor(sub=sub):
-            result = asyncio.run(mcp_server.server.call_tool("cypher", {"query": query}))
+            result = asyncio.run(_server().call_tool("cypher", {"query": query}))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -134,7 +137,10 @@ def test_unseeded_graph_writes_one_failed_row_with_graph_unseeded_reason(
     unseeded = ingestion_status_support._FakeGraphHandle(  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
         ingested_celex=(), unseeded=True
     )
-    ingestion_status_support._install_graph(monkeypatch, unseeded)  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
+    _override(
+        monkeypatch,
+        graph_factory=graph_factory_for(ingestion_status_support._FakeFalkorDB(unseeded)),  # pyright: ignore[reportPrivateUsage]  # reuse the sibling test module's fixtures verbatim
+    )
     result = _cypher(_MATCH)
     assert _text(result).startswith("error: ")
     row = _only_row(audit)
@@ -148,7 +154,7 @@ def test_unreachable_graph_writes_one_failed_row_with_graph_unavailable_reason(
     def _boom(_config: object) -> object:
         raise ConnectionError("refused")
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _boom)
+    _override(monkeypatch, graph_factory=_boom)
     result = _cypher(_MATCH)
     assert _text(result) == "error: the policy graph database is not reachable"
     row = _only_row(audit)

@@ -33,7 +33,8 @@ from ps_service.api.dependencies import (
 )
 from ps_service.api.routes import build_api_router
 from ps_service.mcp_interface import mcp_server
-from ps_service.mcp_interface.tool_gates import TOOL_GATES, GateKind
+from ps_service.mcp_interface.mcp_server import TOOL_GATES
+from ps_service.mcp_interface.tool_gates import GateKind
 from ps_service.passkey_signing.router import build_passkey_signing_router
 
 if TYPE_CHECKING:

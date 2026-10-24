@@ -1,12 +1,12 @@
 """Cypher and domain-concepts tools of the PS MCP server, and the injectable cypher entry point.
 
-Registers the read-only `cypher` and `domain_concepts` tools and the `psdomain://concepts` resource
-on the shared `server` from `tool_core`. Read-only graph queries run in-process through
-`ps_service.query_engine.execute_cypher_query`; the write-clause guard and query execution live in
-Query Engine and are never duplicated here. `handle_mcp_tool_call` is the transport-free,
-dependency-injectable entry point the `cypher` tool and the tests share;
-`mcp_server.handle_mcp_tool_call` re-exports it. This module imports only `tool_core` (never
-another tool group).
+Declares the read-only `cypher` and `domain_concepts` tools and the `psdomain://concepts` resource;
+`register_cypher_tools` registers them on a server built by `mcp_server.build_server`. Read-only
+graph queries run in-process through `ps_service.query_engine.execute_cypher_query`; the
+write-clause guard and query execution live in Query Engine and are never duplicated here.
+`handle_mcp_tool_call` is the transport-free, dependency-injectable entry point the `cypher` tool
+and the tests share; `mcp_server.handle_mcp_tool_call` re-exports it. This module imports only
+`tool_core` and `tool_gates` (never another tool group).
 
 Business Rules:
     - Every `cypher` call writes one `query.cypher` audit row and nothing to the graph.
@@ -39,10 +39,10 @@ from ps_service.mcp_interface.tool_core import (
 )
 from ps_service.mcp_interface.tool_core import PLAIN_READ_GATE as _PLAIN_READ_GATE
 from ps_service.mcp_interface.tool_core import audit_context as _audit_context
-from ps_service.mcp_interface.tool_core import gated_server_tool as _gated_tool
+from ps_service.mcp_interface.tool_core import declared_tool as _gated_tool
 from ps_service.mcp_interface.tool_core import resolve_authz_actor as _resolve_authz_actor
 from ps_service.mcp_interface.tool_core import resolve_graph as _resolve_graph
-from ps_service.mcp_interface.tool_core import server
+from ps_service.mcp_interface.tool_gates import GateEnvironment, register_declared_tools
 from ps_service.query_engine import (
     GraphUnseededError,
     QueryEngineExecutionError,
@@ -54,8 +54,11 @@ from ps_service.query_engine import (
 if TYPE_CHECKING:
     from importlib.resources.abc import Traversable
 
+    from mcp.server import MCPServer
+
     from ps_service.config import ServiceConfig
     from ps_service.logging.emitter import LogEmitter
+    from ps_service.mcp_interface.tool_gates import ToolGate
     from ps_service.query_engine.falkordb_client import GraphHandle
 
 
@@ -197,7 +200,10 @@ def handle_mcp_tool_call(
 
 
 def _record_cypher_call(
-    config: ServiceConfig, actor: tuple[str, str] | None, outcome: CypherCallOutcome
+    environment: GateEnvironment,
+    config: ServiceConfig,
+    actor: tuple[str, str] | None,
+    outcome: CypherCallOutcome,
 ) -> None:
     """Write the one `query.cypher` audit row of a `cypher` tool call; BEST-EFFORT.
 
@@ -208,6 +214,7 @@ def _record_cypher_call(
     changes the tool's result.
 
     Args:
+        environment: Supplies the audit-store factory.
         config: Service configuration; selects the audit database and the bypass state.
         actor: Verified `(sub, iss)` of the caller, or `None` when none is bound.
         outcome: How the call ended.
@@ -216,7 +223,7 @@ def _record_cypher_call(
         Inserts one `audit_events` row (`applied` when `reason_code` is `None`, `rejected` for a
         write clause, `failed` otherwise).
     """
-    audit = _audit_context(config, actor)
+    audit = _audit_context(config, actor, environment=environment)
     if isinstance(audit, str):
         emit_log_entry(
             component=_COMPONENT,
@@ -246,7 +253,9 @@ def _record_cypher_call(
 
 
 @_gated_tool("cypher", _PLAIN_READ_GATE)
-def cypher(query: str) -> dict[str, object] | str:
+def cypher(  # noqa: D417  # `environment` is injected by the server and hidden from clients
+    environment: GateEnvironment, query: str
+) -> dict[str, object] | str:
     """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.
 
     Call `domain_concepts` first and ground every query in the labels, properties and edges it
@@ -285,10 +294,11 @@ def cypher(query: str) -> dict[str, object] | str:
         return _GRAPH_UNAVAILABLE_MESSAGE
     actor = _resolve_authz_actor(config)
     try:
-        graph = _resolve_graph(config)
+        graph = _resolve_graph(config, environment=environment)
     except McpGraphUnavailableError:
         emit_log_entry(component=_COMPONENT, action=_ACTION, outcome="unavailable")
         _record_cypher_call(
+            environment,
             config,
             actor,
             CypherCallOutcome(_GRAPH_UNAVAILABLE_MESSAGE, None, None, "graph_unavailable"),
@@ -300,7 +310,7 @@ def cypher(query: str) -> dict[str, object] | str:
         timeout_ms=config.query_timeout_ms,
         row_cap=config.query_row_cap,
     )
-    _record_cypher_call(config, actor, outcome)
+    _record_cypher_call(environment, config, actor, outcome)
     return outcome.response
 
 
@@ -346,13 +356,6 @@ def _load_domain_concepts() -> str:
         raise McpResourceUnavailableError(_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL) from exc
 
 
-@server.resource(
-    _DOMAIN_CONCEPTS_URI,
-    name="ps-domain-concepts",
-    title="PS domain concepts",
-    description="The canonical PS compliance-graph vocabulary and schema, served verbatim.",
-    mime_type="text/markdown",
-)
 def read_domain_concepts() -> str:
     """Return the full ps-domain-concepts.md text.
 
@@ -375,3 +378,26 @@ def read_domain_concepts() -> str:
         return _load_domain_concepts()
     except McpResourceUnavailableError:
         return f"error: {_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL}"
+
+
+def register_cypher_tools(
+    server: MCPServer, environment: GateEnvironment, gates: dict[str, ToolGate]
+) -> None:
+    """Register the `cypher` and `domain_concepts` tools and the domain-concepts resource.
+
+    Args:
+        server: The server the tools and the resource are registered on.
+        environment: The server-side collaborators the tools use.
+        gates: The registry that records this server's gate declarations.
+
+    Raises:
+        ValueError: A tool name is already declared in `gates`.
+    """
+    register_declared_tools(server, environment, gates, (cypher, domain_concepts))
+    server.resource(
+        _DOMAIN_CONCEPTS_URI,
+        name="ps-domain-concepts",
+        title="PS domain concepts",
+        description="The canonical PS compliance-graph vocabulary and schema, served verbatim.",
+        mime_type="text/markdown",
+    )(read_domain_concepts)

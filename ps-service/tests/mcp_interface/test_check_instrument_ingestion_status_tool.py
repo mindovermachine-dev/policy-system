@@ -48,11 +48,16 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
+from mcp_interface._environment import graph_factory_for
+from mcp_interface.test_access_role_tools import (
+    _override,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+    _server,  # pyright: ignore[reportPrivateUsage]  # reuse the access-role tool tests' override helpers
+)
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import ingestion_tools as mcp_server
-from ps_service.mcp_interface import tool_core
-from ps_service.mcp_interface.tool_gates import TOOL_GATES, GateKind
+from ps_service.mcp_interface.mcp_server import TOOL_GATES
+from ps_service.mcp_interface.tool_gates import GateKind
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test must answer the pre-flight seed-check query too, mirrors test_cypher_tool.py's own convention
 )
@@ -117,11 +122,7 @@ class _FakeFalkorDB:
 
 def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _FakeGraphHandle) -> _FakeFalkorDB:
     fake_db = _FakeFalkorDB(handle)
-
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        return fake_db
-
-    monkeypatch.setattr(tool_core, "connect_from_config", _connect_from_config)
+    _override(monkeypatch, graph_factory=graph_factory_for(fake_db))
     return fake_db
 
 
@@ -138,12 +139,12 @@ def _install_unreachable_graph(monkeypatch: pytest.MonkeyPatch) -> None:
         message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
         raise ConnectionError(message)
 
-    monkeypatch.setattr(tool_core, "connect_from_config", _raising_connect_from_config)
+    _override(monkeypatch, graph_factory=_raising_connect_from_config)
 
 
 def _call_check_instrument_ingestion_status(celex_ids: list[str]) -> CallToolResult:
     result = asyncio.run(
-        tool_core.server.call_tool("check_instrument_ingestion_status", {"celex_ids": celex_ids})
+        _server().call_tool("check_instrument_ingestion_status", {"celex_ids": celex_ids})
     )
     assert isinstance(result, CallToolResult)
     return result
@@ -391,6 +392,6 @@ def test_tool_registered_on_server_the_same_ungated_way_as_check_regulations() -
     """
     assert callable(mcp_server.check_instrument_ingestion_status)
     assert callable(mcp_server.check_regulations)
-    tool_names = {t.name for t in asyncio.run(tool_core.server.list_tools())}
+    tool_names = {t.name for t in asyncio.run(_server().list_tools())}
     assert "check_instrument_ingestion_status" in tool_names
     assert "check_regulations" in tool_names
