@@ -13,7 +13,7 @@
   - [Recording verification evidence](#recording-verification-evidence)
   - [Evaluator verification history](#evaluator-verification-history)
   - [Reaching the Authentik admin UI (evaluator)](#reaching-the-authentik-admin-ui-evaluator)
-  - [Measuring the proxy footprint (evaluator)](#measuring-the-proxy-footprint-evaluator)
+  - [Measuring the ingress controller footprint (evaluator)](#measuring-the-ingress-controller-footprint-evaluator)
   - [Allowed approval origins](#allowed-approval-origins)
   - [Recreating the kind cluster](#recreating-the-kind-cluster)
   - [Cleanup / teardown](#cleanup--teardown)
@@ -178,11 +178,11 @@ email as before:
 Re-run `scripts/deploy-ps-eval.sh` with the new bundle. The upgrade changes what a cluster
 created earlier exposes:
 
-- Authentik and PS Service are `ClusterIP` Services and the proxy holds port `30443`. Re-running
+- Authentik and PS Service are `ClusterIP` Services and the ingress controller holds port `30443`. Re-running
   is the recovery if Helm reports the port as allocated while the Services switch over.
 - The script creates a second Secret, `policy-system-local-ca`, that holds only the CA
-  certificate. `policy-system-local-tls` holds the certificate and key, and only the proxy
-  mounts it.
+  certificate. `policy-system-local-tls` holds the certificate and key, and only the Ingress
+  uses it.
 - Authentik no longer serves the local certificate. If its keypair `ps-local-tls` is still
   registered, the script prints how to remove it from the admin UI (System > Brands, then
   System > Certificates).
@@ -403,7 +403,7 @@ table is the current status.
     issued the owner link cannot issue it on a re-run, because the script then reports the owner as
     already enrolled.
 - **A second machine on the LAN: simulated, not tried on physical hardware.**
-  - A separate container with the CA in its trust store reached the proxy over HTTPS through
+  - A separate container with the CA in its trust store reached the ingress controller over HTTPS through
     the `0.0.0.0:30443` mapping of the host.
   - A second browser profile completed a passkey device login. The hostname was mapped to the
     LAN address.
@@ -424,7 +424,7 @@ table is the current status.
 
 ### Reaching the Authentik admin UI (evaluator)
 
-The proxy does not serve the admin UI. You reach it with a port-forward that runs on the
+The Ingress does not route the admin UI. You reach it with a port-forward that runs on the
 **Server**, the machine with the kind cluster (the backend machine of the [Evaluator Installation
 Guide](./evaluator-installation-guide.md#supported-scenarios)). A **Client** is any other machine
 you use as the owner. In the single-laptop scenarios (1 and 2) the Server and the Client are the
@@ -467,32 +467,36 @@ same machine.
 When you are done, stop both terminals with Ctrl+C. See [Evaluator Installation Guide: What is
 exposed](./evaluator-installation-guide.md#what-is-exposed).
 
-### Measuring the proxy footprint (evaluator)
+### Measuring the ingress controller footprint (evaluator)
 
-The evaluator proxy's measured memory and CPU use, and the minimum host size, are in
+The ingress controller's measured memory and CPU use, and the minimum host size, are in
 [Evaluator Installation Guide](./evaluator-installation-guide.md#step-1-install-the-tools-and-download-the-bundle).
-The `proxy.resources` values are declared requests and limits, not measurements. Run this
-procedure on a running evaluator to reproduce or update the measurement. It only reads the
-cluster.
+The controller in `deploy/kind/ingress-nginx.yaml` declares a request of 100m CPU and 90Mi
+memory and no limits; those are declared values, not measurements. Run this procedure on a
+running evaluator to reproduce or update the measurement. It only reads the cluster.
 
 1. Install the Kubernetes metrics API if `kubectl top pod` fails with "Metrics API not
    available". kind does not ship metrics-server; it needs the `--kubelet-insecure-tls` argument
-   on kind. Without it the script falls back to the proxy pod's cgroup files, which give memory
-   and mean CPU but no node row.
-2. Let the evaluator settle, then run the script from a clone of the repository (the deploy
-   bundle does not include it), with the evaluator URL and the CA file the deploy script wrote:
+   on kind. Without it, use the cgroup files in step 3.
+2. Let the evaluator settle for 120 seconds, then read the controller pod:
 
    ```bash
-   scripts/measure-proxy-footprint.sh --url https://<hostname>:30443 \
-     --cacert <ca.pem> --idle-seconds 120 --load-seconds 60 --concurrency 8 \
-     --output proxy-footprint.md
+   kubectl -n ingress-nginx top pod --selector=app.kubernetes.io/component=controller
    ```
 
-3. The script takes one sample after the idle window, then one while `--concurrency` workers
-   request `/health` through the proxy for `--load-seconds`, and prints a Markdown table of idle
-   and load rows, plus a whole-node row when metrics-server answers.
-4. Keep the table with the date, the host size and the proxy image tag. Record a new
-   measurement in the installation guide's sizing note when the proxy image or its load changes.
+3. Without metrics-server, read the controller's cgroup instead. Memory is `memory.current`.
+   CPU is the difference of `usage_usec` between two reads, divided by the seconds between them:
+
+   ```bash
+   pod=$(kubectl -n ingress-nginx get pod --selector=app.kubernetes.io/component=controller -o name)
+   kubectl -n ingress-nginx exec "$pod" -- sh -c 'cat /sys/fs/cgroup/memory.current; grep usage_usec /sys/fs/cgroup/cpu.stat'
+   ```
+
+4. Repeat the read while 8 clients request `https://<hostname>:30443/health` in a loop (use
+   `curl --cacert <ca.pem>`) for 60 seconds.
+5. Keep the figures with the date, the host size and the controller image tag. Record a new
+   measurement in the installation guide's sizing note when the controller image or its load
+   changes.
 
 ### Allowed approval origins
 
@@ -503,7 +507,7 @@ is what the browser must present. A POST to an approval route (`/approvals/<id>/
 `enroll/options`, `enroll/verify`, `sign/options`, `sign/verify`) whose `Host` matches no entry
 is answered `421`, before the approval is read and without issuing a challenge. `Host` and the
 entries are compared case-insensitively, a missing port counts as the scheme's default, and
-`X-Forwarded-Host` is ignored. The evaluator script sets it to `https://<hostname>:30443`, the proxy address of the configured name.
+`X-Forwarded-Host` is ignored. The evaluator script sets it to `https://<hostname>:30443`, the ingress address of the configured name.
 
 - With no entry set, the relying party is derived from each request's own `Host`, and a startup
   warning is logged unless the local-test bypass is active. Set it on every deployment that is
@@ -879,9 +883,9 @@ degraded dependency or a stuck ingestion needs no log scraping.
 
 - `/metrics` is anonymous: it is exempt from authentication and from the startup replay gate,
   like `/health` and `/ready`, so it answers `200` while a graph replay runs.
-- It is in-cluster only. Any pod that can reach the service port can read it. The chart proxy
-  returns 403 for `/metrics` and everything under it, and the chart-owned PS Service Ingress
-  renders only an allowlist of paths without `/metrics`, so neither public entry point serves it.
+- It is in-cluster only. Any pod that can reach the service port can read it. The chart-owned PS Service
+  Ingress renders only an allowlist of paths without `/metrics`, so the chart ingress has no route
+  for it and the controller answers `404`.
 - Keep it that way: deny `/metrics` on any Ingress you write yourself in front of PS Service, and
   do not expose the service with NodePort or LoadBalancer, because either one publishes an
   anonymous endpoint. The chart's default service type is `ClusterIP`, and `ingress.enabled=true`
@@ -988,8 +992,7 @@ Service accepts. A request whose `Content-Length` is larger is answered `413` be
 read. The PS Service Ingress limit (`nginx.ingress.kubernetes.io/proxy-body-size`) is derived
 from it as 1.5 times the value, so the application limit is the one a client meets first and an
 oversized upload gets PS Service's own `413`. To raise the limit, change this one value; setting
-the annotation through `ingress.annotations` fails the render. The evaluator proxy has its own,
-independent limit (`proxy.tunables.clientMaxBodySize`).
+the annotation through `ingress.annotations` fails the render. The evaluator uses the same Ingress, so the same limit applies.
 
 At startup PS Service fetches the OIDC discovery document from the issuer. On a first install the
 issuer's certificate can still be pending, so a failed fetch is retried for

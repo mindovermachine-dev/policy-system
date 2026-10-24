@@ -3,7 +3,7 @@
 Real-cryptography checks (CA/leaf extensions, strict TLS handshake, idempotence, permissions)
 run real `openssl` and a local TLS server, so they live in `test_local_tls_integration.py`
 under the `integration` marker (L2 Testing Patterns). Here: tool preflight, the
-two-Secret apply idiom (certificate and key for the proxy, CA certificate for PS Service) and
+two-Secret apply idiom (certificate and key for the ingress, CA certificate for PS Service) and
 hostname validation.
 """
 

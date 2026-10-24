@@ -310,18 +310,16 @@ authority to the public host. The user-facing `/auth/if/user/` page is deliberat
 allowlisted (an enrolment ends on `/auth/`, which PS Service answers). Verified on ingress-nginx
 under `kind`, **not** on AKS's managed NGINX add-on (see [Open Risks](#open-risks--follow-ups)).
 
-**The evaluator counterpart.** `deploy-ps-eval.sh` serves PS Service and Authentik through one
-nginx proxy on `0.0.0.0:30443` over HTTPS, with a certificate from a name-constrained local CA the
+**The evaluator counterpart.** `deploy-ps-eval.sh` serves PS Service and Authentik through the
+same chart Ingresses, behind an ingress-nginx controller published on `0.0.0.0:30443` over HTTPS, with a certificate from a name-constrained local CA the
 script creates (a critical name constraint for the one evaluator hostname, at most 730 days of
 validity, limited to TLS server authentication), because browsers only offer passkeys in a secure
-context and `ps-cli` refuses credentials over a non-`https`, non-loopback issuer. The proxy
+context and `ps-cli` refuses credentials over a non-`https`, non-loopback issuer. The Ingress
 routes `/auth/` to Authentik only for the paths in the same chart file the production Ingress
-renders from. The path list is defined once; the two consumers differ in what happens to every other
-`/auth/` path. The production Authentik Ingress keeps Kubernetes `Prefix` matching, and PS Service's own
-Ingress lists only its public paths (`charts/policy-system/files/ps-service-public-paths.txt`) with
-no catch-all, so a request outside both lists matches no rule at the Ingress controller. The evaluator proxy is deny-by-default
-and matches whole path elements: any other `/auth/` request gets 403 and never reaches
-Authentik. PS Service's pod trusts the local CA through `SSL_CERT_FILE`; `ps-cli` instead
+renders from. The path list is defined once and both profiles render the same Ingresses from it. The Authentik
+Ingress keeps Kubernetes `Prefix` matching, and PS Service's own Ingress lists only its public paths
+(`charts/policy-system/files/ps-service-public-paths.txt`) with no catch-all, so a request outside
+both lists matches no rule at the Ingress controller and gets 404, never reaching Authentik. PS Service's pod trusts the local CA through `SSL_CERT_FILE`; `ps-cli` instead
 verifies against the operating-system trust store (via `truststore`), which the host setup adds
 the CA to. The exposure of each profile is stated in the installation guide's "What is exposed"
 sections.

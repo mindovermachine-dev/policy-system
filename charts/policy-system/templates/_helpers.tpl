@@ -209,64 +209,6 @@ Params:
 {{- end -}}
 
 {{/*
-Proxy workload and route-table pieces.
-*/}}
-{{/*
-Rejects raw request paths (the request URI up to the query string, see the ps_raw_path map) that carry percent-encoded dots, slashes or percent signs, semicolons or
-backslashes. Placed first in every /auth/ scope so those forms never reach Authentik.
-*/}}
-{{- define "policy-system.proxyAuthGuard" -}}
-if ($ps_raw_path ~* "(%25|%2e|%2f|%5c|;|\\\\)") { return 403; }
-{{- end }}
-
-{{/*
-Request headers every proxied location sets. nginx drops all inherited proxy_set_header
-directives in a location that sets any of its own, so these are rendered into each location
-rather than once at server level. Each is assigned from one source, overwriting client input.
-*/}}
-{{- define "policy-system.proxyForwardedHeaders" -}}
-proxy_set_header Host              $http_host;
-proxy_set_header X-Forwarded-Host  $http_host;
-proxy_set_header X-Forwarded-Port  {{ .Values.proxy.service.nodePort }};
-proxy_set_header X-Forwarded-Proto $scheme;
-proxy_set_header X-Forwarded-For   $remote_addr;
-{{- end }}
-
-{{- define "policy-system.proxyAuthentikLocation" -}}
-{{ include "policy-system.proxyAuthGuard" . }}
-proxy_pass http://authentik;
-proxy_cookie_flags authentik_csrf Secure SameSite=Lax;
-proxy_cookie_flags ~ Secure HttpOnly SameSite=Lax;
-{{ include "policy-system.proxyForwardedHeaders" . }}
-proxy_set_header Connection "";
-{{- end }}
-
-{{/*
-One location block per line of files/authentik-public-paths.txt, with path-element
-semantics: a line ending in "/" is a prefix location; any other line is that exact path
-plus everything below it.
-*/}}
-{{- define "policy-system.proxyAuthentikLocations" -}}
-{{- range (.Files.Lines "files/authentik-public-paths.txt") }}
-{{- $path := trim . }}
-{{- if and $path (not (hasPrefix "#" $path)) }}
-{{- if hasSuffix "/" $path }}
-location ^~ {{ $path }} {
-  {{- include "policy-system.proxyAuthentikLocation" $ | nindent 2 }}
-}
-{{- else }}
-location = {{ $path }} {
-  {{- include "policy-system.proxyAuthentikLocation" $ | nindent 2 }}
-}
-location ^~ {{ $path }}/ {
-  {{- include "policy-system.proxyAuthentikLocation" $ | nindent 2 }}
-}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
-
-{{/*
 Host name of the public origin: psService.publicUrl without scheme, port or path.
 */}}
 {{- define "policy-system.ingressHost" -}}

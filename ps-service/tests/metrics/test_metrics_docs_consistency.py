@@ -113,7 +113,7 @@ def test_the_solution_architecture_lists_the_metrics_component_with_the_same_dom
     assert "ps.service.metrics" in solution
     assert "ps.service.metrics" in container
     assert "operational metrics" in solution
-    assert "never through the chart proxy" in solution
+    assert "never through the chart ingress" in solution
 
 
 def test_the_operations_guide_links_ready_and_metrics() -> None:

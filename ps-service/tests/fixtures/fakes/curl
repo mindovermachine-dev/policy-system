@@ -19,9 +19,15 @@ State keys (all optional, tests seed them):
   next_pk           counter for new users
   blueprints        list of blueprint instances (default: the bundled and local-TLS ones)
   blueprint_list_empty_calls  the first N blueprint lists return no instance (fresh install)
-  proxy_health_status  HTTP status of /health through the proxy on port 30443 (default 200)
-  proxy_issuer      the issuer the proxied discovery document reports (default: the requested one)
-  proxy_mcp_status  HTTP status of /mcp/ without a bearer token through the proxy (default 401)
+  ingress_health_status  HTTP status of /health through the ingress on port 30443 (default 200)
+  ingress_issuer    the issuer the discovery document reports through the ingress (default: the
+                    requested one)
+  ingress_mcp_status  HTTP status of /mcp/ without a bearer token through the ingress (default 401)
+  ingress_open_paths  request paths the ingress wrongly answers 200 (default none); every other
+                    path outside the allowlist answers `ingress_denied_status` (default 404)
+  ingress_denied_status  HTTP status of a path outside the allowlist (default 404)
+  ingress_redirect_location  the Location of the allowlisted redirecting flow path (default: the
+                    requested authority under /auth/)
 
 Response shapes are RECORDED from a real Authentik 2026.8.3 (LC1b tracer, issue #165) and live
 in `authentik/*.json` next to this file (secrets and per-run values sanitised). The fake loads
@@ -49,8 +55,9 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 EXIT_UNREACHABLE = 7
-PROXY_PORT = 30443
+INGRESS_PORT = 30443
 HTTP_OK = 200
+HTTP_FOUND = 302
 HTTP_CREATED = 201
 HTTP_NO_CONTENT = 204
 HTTP_BAD_REQUEST = 400
@@ -310,17 +317,27 @@ def _route(state: dict[str, Any], method: str, url: str, body: dict[str, Any]) -
     return HTTP_NOT_FOUND, {"detail": f"fake curl: no route for {method} {path}"}
 
 
-def _proxy_route(state: dict[str, Any], url: str) -> tuple[int, Any]:
-    """The evaluator proxy on port 30443: PS Service and Authentik's public discovery document."""
-    path = urlsplit(url).path
+def _ingress_route(state: dict[str, Any], url: str) -> tuple[int, Any, str]:
+    """The ingress on port 30443: PS Service, Authentik's public paths, and a 404 for the rest.
+
+    Returns the status, the JSON payload and the redirect target (empty when none).
+    """
+    split = urlsplit(url)
+    path = split.path
+    if path in state.get("ingress_open_paths", []):
+        return HTTP_OK, {"detail": "reachable"}, ""
     if path == "/health":
-        return state.get("proxy_health_status", HTTP_OK), {"status": "ok"}
+        return state.get("ingress_health_status", HTTP_OK), {"status": "ok"}, ""
     if path == "/mcp/":
-        return state.get("proxy_mcp_status", HTTP_UNAUTHORIZED), {"detail": "unauthorized"}
+        return state.get("ingress_mcp_status", HTTP_UNAUTHORIZED), {"detail": "unauthorized"}, ""
     if path.endswith("/.well-known/openid-configuration"):
         requested = url.removesuffix(".well-known/openid-configuration")
-        return HTTP_OK, {"issuer": state.get("proxy_issuer", requested)}
-    return HTTP_NOT_FOUND, {"detail": f"fake curl: no proxy route for {path}"}
+        return HTTP_OK, {"issuer": state.get("ingress_issuer", requested)}, ""
+    if path == "/auth/flows/-/default/authentication/":
+        default = f"{split.scheme}://{split.netloc}/auth/if/flow/default-authentication-flow/"
+        return HTTP_FOUND, None, state.get("ingress_redirect_location", default)
+    denied = state.get("ingress_denied_status", HTTP_NOT_FOUND)
+    return denied, {"detail": f"fake curl: no ingress route for {path}"}, ""
 
 
 def main() -> int:
@@ -332,12 +349,19 @@ def main() -> int:
         with Path(log_path).open("a", encoding="utf-8") as log:
             log.write(json.dumps({"argv": sys.argv[1:], "url": args["url"]}) + "\n")
     url: str = args["url"]
-    if urlsplit(url).port == PROXY_PORT and "/api/v3/" not in url:
-        status, payload = _proxy_route(state, url)
+    # An authenticated Authentik API call (token on stdin) stands for the script's own call to the
+    # API; an anonymous request to the same path is what the ingress must refuse.
+    authenticated_api = args["config_stdin"] and "/api/v3/" in url
+    if urlsplit(url).port == INGRESS_PORT and not authenticated_api:
+        status, payload, redirect = _ingress_route(state, url)
         if payload is not None:
             sys.stdout.write(json.dumps(payload))
         if args["write_out"]:
-            sys.stdout.write(args["write_out"].replace("%{http_code}", str(status)))
+            sys.stdout.write(
+                args["write_out"]
+                .replace("%{http_code}", str(status))
+                .replace("%{redirect_url}", redirect)
+            )
         return 0
     if state.get("unreachable"):
         return EXIT_UNREACHABLE

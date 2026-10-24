@@ -596,7 +596,7 @@ Add the marketplace first. Then install the plugin from it.
 
    This is the evaluator value. Use the production URL for a production deployment.
 
-   - Evaluator: the proxy serves PS Service on port `30443`, so the URL is
+   - Evaluator: the ingress controller serves PS Service on port `30443`, so the URL is
      `https://<hostname>:30443/mcp/` (`https://ps.test:30443/mcp/` by default). The script prints
      this value as `PS_MCP_URL=...` in its closing summary.
    - Production: the service URL with `/mcp/` added, for example

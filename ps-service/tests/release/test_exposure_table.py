@@ -53,7 +53,7 @@ def test_exposure_table_non_loopback_set_equals_cluster_yaml() -> None:
     cluster_off, _ = _cluster_ports()
 
     assert _table_non_loopback_ports() == cluster_off
-    assert cluster_off, "the cluster must expose the proxy port"
+    assert cluster_off, "the cluster must expose the ingress controller port"
 
 
 def test_exposure_table_rows_cover_every_cluster_mapping() -> None:

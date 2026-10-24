@@ -65,7 +65,7 @@ split, because Authentik's `aud` claim is always the bare OAuth2 Provider
 `scripts/deploy-ps-prod.sh` sets all four via `ensure_release`'s `--set`
 overrides, as fixed script constants computed once the hostname resolves —
 never fetched from a live API call. `scripts/deploy-ps-eval.sh` sets the same four
-from the hostname and the fixed proxy port `30443`. See `docs/architecture/customer-azure-deployment.md`'s [Helm
+from the hostname and the fixed ingress port `30443`. See `docs/architecture/customer-azure-deployment.md`'s [Helm
 release and chart hardening
 profile](../architecture/customer-azure-deployment.md#helm-release-and-chart-hardening-profile)
 section for the exact `--set` list.
@@ -117,7 +117,7 @@ bootstrap](./installation-guide.md#systemowner-bootstrap)).
 `ps-cli` refuses to send credentials to an issuer,
 device-authorization endpoint or token endpoint that is neither `https://` nor a loopback address
 (`_assert_secure_or_loopback` in `oidc_discovery.py`); this rule is unchanged. The evaluator
-profile therefore serves Authentik over HTTPS behind the evaluator proxy, with a certificate from a local certificate
+profile therefore serves Authentik over HTTPS behind the evaluator ingress controller, with a certificate from a local certificate
 authority created by `scripts/deploy-ps-eval.sh`. PS Service's pod trusts that CA through
 `SSL_CERT_FILE` (a bundle of the system CAs plus the local CA, mounted by the chart); nothing
 disables TLS verification. `ps-cli` verifies the certificate against the

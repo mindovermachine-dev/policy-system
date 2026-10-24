@@ -1,17 +1,22 @@
 # kind cluster config for local-test Policy System deployment (Podman).
-# Cross-referenced with charts/policy-system/values.yaml:
+# Cross-referenced with charts/policy-system/values.yaml and deploy/kind/ingress-nginx.yaml:
 #   - hostPort 3001 -> containerPort 30300 matches falkordb.browser.nodePort
-#   - hostPort 30443 == containerPort 30443 -> the proxy Service NodePort (proxy.service.nodePort);
+#   - hostPort 30443 == containerPort 30443 -> the ingress controller Service https NodePort;
 #     listenAddress 0.0.0.0, not 127.0.0.1 -- LAN clients traverse this mapping, in-cluster pods
-#     reach the node's own container IP directly on the NodePort, bypassing it entirely. The proxy
-#     routes /auth/ allowlisted paths to Authentik and everything else to PS Service; neither has
-#     a node port of its own.
-# FalkorDB's own Redis port is intentionally never mapped here — it stays
+#     reach the node's own container IP directly on the NodePort, bypassing it entirely. The
+#     controller routes the chart Ingress paths to Authentik and PS Service; neither has a node
+#     port of its own.
+#   - networking.podSubnet is pinned so that AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS in the chart
+#     values names the range the ingress controller pod address comes from.
+# FalkorDB's own Redis port is intentionally never mapped here -- it stays
 # ClusterIP-only in every environment. Postgres and the PS Service and Authentik Services are
-# never mapped either: the proxy is the only off-loopback listener.
+# never mapped either, and neither is host port 80 or 443: the ingress controller is the only
+# off-loopback listener.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: policy-system
+networking:
+  podSubnet: "10.244.0.0/16"
 nodes:
   - role: control-plane
     extraPortMappings:

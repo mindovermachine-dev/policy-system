@@ -32,8 +32,8 @@
 #                  that maps the hostname to another address is reported, never edited.
 #   --allow-public-host
 #                  Accept a machine that has a non-private address. The cluster publishes
-#                  the proxy on every interface of the host (port 30443), so the run stops
-#                  before any cluster call when an interface holds an address outside the
+#                  the ingress controller on every interface of the host (port 30443), so the
+#                  run stops before any cluster call when an interface holds an address outside the
 #                  loopback, link-local and private ranges (10/8, 172.16/12, 192.168/16,
 #                  169.254/16, fc00::/7, fe80::/10). VPN addresses such as Tailscale's
 #                  100.64/10 and global IPv6 addresses count as public. Pass the flag on every
@@ -94,12 +94,30 @@ readonly TLS_SECRET_NAME="policy-system-local-tls"
 readonly CA_SECRET_NAME="policy-system-local-ca"
 readonly API_TOKEN_SECRET_NAME="policy-system-authentik-api-token"
 readonly AUTHENTIK_SERVER_SERVICE="${HELM_RELEASE_NAME}-authentik-server"
-# The kind cluster maps this host port to the proxy's NodePort (deploy/kind/cluster.yaml,
-# proxy.service.nodePort in the chart): the proxy serves PS Service and Authentik on it.
-readonly PROXY_PORT=30443
+# The kind cluster maps this host port to the ingress controller's https NodePort
+# (deploy/kind/cluster.yaml, deploy/kind/ingress-nginx.yaml): the chart Ingress serves PS Service
+# and Authentik on it.
+readonly INGRESS_PORT=30443
+readonly INGRESS_NAMESPACE="ingress-nginx"
+readonly INGRESS_CONTROLLER_MANIFEST="deploy/kind/ingress-nginx.yaml"
+readonly INGRESS_CLASS_NAME="nginx"
 # Authentik serves every page under this path (the chart's AUTHENTIK_WEB__PATH), so the issuer,
 # the API base, the enrolment link and the admin UI all sit below it.
 readonly AUTHENTIK_WEB_PATH="/auth"
+# Paths the ingress must not route: the metrics endpoint, the Authentik admin UI and admin APIs,
+# and encoded forms that try to reach them through an allowlisted prefix.
+readonly INGRESS_DENIED_PATHS=(
+  /metrics
+  "${AUTHENTIK_WEB_PATH}/if/admin/"
+  "${AUTHENTIK_WEB_PATH}/api/v3/core/users/"
+  "${AUTHENTIK_WEB_PATH}/static/%2e%2e/if/admin/"
+  "${AUTHENTIK_WEB_PATH}/%2e%2e/api/v3/core/users/"
+  "${AUTHENTIK_WEB_PATH}/static/%2f..%2fif/admin/"
+  "${AUTHENTIK_WEB_PATH}/static/..;/if/admin/"
+)
+# An allowlisted Authentik path that answers with a redirect; its Location shows the port the
+# browser is sent back to.
+readonly INGRESS_REDIRECT_PATH="${AUTHENTIK_WEB_PATH}/flows/-/default/authentication/"
 readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
 readonly PS_CLI_CONTEXT="eval"
@@ -119,7 +137,6 @@ hostname_arg="$EVALUATOR_HOSTNAME"
 kind_context=""
 namespace="default"
 node_ip=""
-made_release_change=false
 apply_host_setup=false
 allow_public_host=false
 check_exposure_only=false
@@ -327,7 +344,7 @@ detect_lan_address() {
 }
 
 # check_host_exposure: hard-stops (before any tool check or cluster call) when an interface of this
-# machine holds a public address, because the kind cluster publishes the proxy on all of them.
+# machine holds a public address, because the kind cluster publishes the ingress controller on all of them.
 # --allow-public-host accepts that. Fails closed when the addresses cannot be listed.
 check_host_exposure() {
   local addresses address offending=()
@@ -347,7 +364,7 @@ check_host_exposure() {
     for address in "${offending[@]}"; do
       print_error 'exposure: public address %s on this machine\n' "$address"
     done
-    print_error 'The cluster publishes the proxy (port 30443) on every interface of this machine, so it would be reachable from those addresses. Fix: disconnect or firewall them, or re-run with --allow-public-host to accept the exposure (see %s, What is exposed).\n' \
+    print_error 'The cluster publishes the ingress controller (port 30443) on every interface of this machine, so it would be reachable from those addresses. Fix: disconnect or firewall them, or re-run with --allow-public-host to accept the exposure (see %s, What is exposed).\n' \
       "$INSTALL_GUIDE"
     exit "$EXIT_FAILURE"
   fi
@@ -385,6 +402,37 @@ require_kind_context() {
     exit "$EXIT_FAILURE"
   fi
   namespace="$(current_kube_namespace)"
+}
+
+# free_ingress_node_port: deletes the Service <release>-proxy when it exists, because it holds
+# NodePort 30443, which the ingress controller Service needs. Changes nothing else.
+free_ingress_node_port() {
+  local service="${HELM_RELEASE_NAME}-proxy"
+  if kubectl -n "$namespace" get service "$service" -o name >/dev/null 2>&1; then
+    log_step "Freeing port ${INGRESS_PORT} held by the old proxy Service"
+    kubectl -n "$namespace" delete service "$service" >/dev/null
+  fi
+}
+
+# require_ingress_controller: hard-stops, before helm, unless the ingress controller Deployment is
+# Ready and its admission webhook has an endpoint (without one, helm's Ingress creation is
+# rejected).
+require_ingress_controller() {
+  local timeout="${PS_INGRESS_TIMEOUT:-180s}" addresses
+  if ! kubectl -n "$INGRESS_NAMESPACE" get deployment ingress-nginx-controller -o name >/dev/null 2>&1 \
+    || ! kubectl -n "$INGRESS_NAMESPACE" rollout status deployment/ingress-nginx-controller \
+      --timeout="$timeout" >/dev/null 2>&1; then
+    print_error 'No ready ingress controller. Fix: kubectl apply -f %s, wait for it (kubectl wait --namespace %s --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=180s), then re-run.\n' \
+      "$INGRESS_CONTROLLER_MANIFEST" "$INGRESS_NAMESPACE"
+    exit "$EXIT_FAILURE"
+  fi
+  addresses="$(kubectl -n "$INGRESS_NAMESPACE" get endpointslices \
+    -l kubernetes.io/service-name=ingress-nginx-controller-admission \
+    -o jsonpath='{.items[*].endpoints[*].addresses[*]}' 2>/dev/null || true)"
+  if [[ -z "$addresses" ]]; then
+    print_error 'The ingress admission webhook has no endpoints yet. Fix: wait a few seconds and re-run.\n'
+    exit "$EXIT_FAILURE"
+  fi
 }
 
 # require_llm_secret: the chart's PS Service reads its LLM credentials from this Secret.
@@ -583,13 +631,13 @@ announce_migration() {
 # and without a trailing slash. The issuer, PS Service's Authentik base URL and the owner API
 # base are all this value plus a suffix.
 authentik_base_url() {
-  printf 'https://%s:%s%s' "$1" "$PROXY_PORT" "$AUTHENTIK_WEB_PATH"
+  printf 'https://%s:%s%s' "$1" "$INGRESS_PORT" "$AUTHENTIK_WEB_PATH"
 }
 
-# ps_service_url <host>: prints the address clients use for PS Service (REST and MCP), the proxy
+# ps_service_url <host>: prints the address clients use for PS Service (REST and MCP), the ingress
 # on the configured name, without a trailing slash.
 ps_service_url() {
-  printf 'https://%s:%s' "$1" "$PROXY_PORT"
+  printf 'https://%s:%s' "$1" "$INGRESS_PORT"
 }
 
 # authentik_cluster_base_url: prints the in-cluster Authentik address PS Service calls, with the
@@ -603,24 +651,22 @@ authentik_issuer() {
   printf '%s/application/o/%s/' "$(authentik_base_url "$1")" "$AUTHENTIK_APP_SLUG"
 }
 
-# release_values_json <host> <issuer> <checksum>: prints the complete set of user values this
-# script gives the chart, in the JSON shape `helm get values -o json` returns (so the release
-# comparison is exact). Sets, in ONE deploy: the proxy and its TLS Secret (with a certificate
-# checksum that restarts it on a rotated leaf), PS Service's CA-only Secret, the issuer/audience/
-# client for ps-cli, the bootstrap owner (subject == the owner's email, issuer == the issuer
-# above), the in-cluster Authentik base URL PS Service calls for invitations with the public
-# address handed to invitees, and the one origin PS Service publishes for itself and serves the
-# approval page from (the proxy on the configured name).
+# release_values_json <host> <issuer>: prints the complete set of user values this script gives
+# the chart, in the JSON shape `helm get values -o json` returns (so the release comparison is
+# exact). Sets, in ONE deploy: the chart Ingress with its TLS Secret, PS Service's CA-only Secret, the issuer/audience/client for ps-cli, the bootstrap owner
+# (subject == the owner's email, issuer == the issuer above), the in-cluster Authentik base URL PS
+# Service calls for invitations with the public address handed to invitees, and the one origin PS
+# Service publishes for itself and serves the approval page from (the ingress on the configured
+# name). The test bypass is always off: the evaluator is reachable from the LAN.
 release_values_json() {
-  local host="$1" issuer="$2" checksum="$3"
+  local host="$1" issuer="$2"
   jq -n --arg llm "$LLM_SECRET_NAME" --arg tls "$TLS_SECRET_NAME" --arg ca "$CA_SECRET_NAME" \
     --arg host "$host" --arg ip "$node_ip" --arg issuer "$issuer" --arg app "$AUTHENTIK_APP_SLUG" \
     --arg scopes "$AUTHENTIK_SCOPES" --arg owner "$OWNER_EMAIL" \
     --arg base "$(authentik_cluster_base_url)" --arg public "$(authentik_base_url "$host")" \
-    --arg sum "$checksum" --arg origin "$(ps_service_url "$host")" \
+    --arg origin "$(ps_service_url "$host")" --arg class "$INGRESS_CLASS_NAME" \
     '{llm: {existingSecret: $llm},
-      proxy: {enabled: true, lanExposure: {enabled: true}, tls: {secretName: $tls},
-        podAnnotations: {"checksum/local-tls": $sum}},
+      ingress: {enabled: true, className: $class, tls: {secretName: $tls}},
       authentik: {enabled: true},
       psService: {localTestBypass: {enabled: false},
         localCa: {secretName: $ca},
@@ -632,12 +678,22 @@ release_values_json() {
         authentik: {baseUrl: $base, publicUrl: $public}}}'
 }
 
+# assert_bypass_disabled <values-json>: stops before helm when the values would enable the test
+# bypass, because the chart does not refuse that combination with a LAN-published ingress.
+assert_bypass_disabled() {
+  if [[ "$(jq -r '.psService.localTestBypass.enabled' <<<"$1")" != false ]]; then
+    print_error 'Refusing to deploy: the release values enable psService.localTestBypass, which would let any LAN client skip authentication. Fix: this is a script defect; report it.\n'
+    exit "$EXIT_FAILURE"
+  fi
+}
+
 # ensure_release <values-json>: write-if-changed. Plain `helm upgrade --install` always creates a
 # new revision, so the desired values are compared with `helm get values` first; the script
 # passes every value it sets in one file and no other, so the comparison is on the whole object.
 ensure_release() {
   local desired_json="$1" chart_ref="${PS_CHART_REF:-$DEFAULT_CHART_REF}"
   local values_file current_json
+  assert_bypass_disabled "$desired_json"
   set_chart_version_args "$SCRIPT_DIR" "$chart_ref"
   if helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
     current_json="$(helm get values "$HELM_RELEASE_NAME" -o json)"
@@ -650,7 +706,6 @@ ensure_release() {
   printf '%s\n' "$desired_json" >"$values_file"
   helm upgrade --install "$HELM_RELEASE_NAME" "$chart_ref" ${chart_version_args[@]+"${chart_version_args[@]}"} \
     -f "$values_file" >/dev/null
-  made_release_change=true
 }
 
 # wait_for_rollouts <name...>: blocks until each named Deployment of the release is Ready. Image
@@ -668,7 +723,7 @@ wait_for_rollouts() {
 }
 
 # probe_issuer_discovery <issuer>: PS Service's own pod fetches the issuer's discovery document
-# through the proxy, verifying the certificate against the pod's trust bundle. This is the path
+# through the ingress, verifying the certificate against the pod's trust bundle. This is the path
 # PS Service needs at startup, so a failure here is reported with its cause instead of surfacing
 # later as a crash loop. Bounded by PS_DISCOVERY_ATTEMPTS (default 5) two seconds apart.
 probe_issuer_discovery() {
@@ -682,55 +737,86 @@ probe_issuer_discovery() {
     fi
     sleep 2
   done
-  print_error 'PS Service cannot reach the OIDC issuer %s through the proxy. Fix: check the proxy and Authentik pods (kubectl get pods; kubectl logs deploy/%s-proxy), that %s resolves to the node inside the PS Service pod, and that the local CA is in its trust bundle, then re-run.\n' \
-    "$1" "$HELM_RELEASE_NAME" "$hostname_arg"
+  print_error 'PS Service cannot reach the OIDC issuer %s through the ingress. Fix: check the ingress controller and Authentik pods (kubectl -n %s get pods; kubectl get pods; kubectl get ingress), that %s resolves to the node inside the PS Service pod, and that the local CA is in its trust bundle, then re-run.\n' \
+    "$1" "$INGRESS_NAMESPACE" "$hostname_arg"
   return 1
 }
 
-# proxy_get <host> <url>: one request to the proxy from this machine, resolving <host> to the
-# loopback address the cluster publishes the proxy on and verifying against the evaluator CA. Sets
-# proxy_status (000 when nothing answered) and proxy_body. No credentials are sent.
-proxy_get() {
-  local out
-  proxy_status=000
-  proxy_body=""
-  out="$(curl -sS --max-time 10 --cacert "$(local_tls_state_dir)/ca.pem" \
-    --resolve "${1}:${PROXY_PORT}:127.0.0.1" -w $'\n%{http_code}' "$2" 2>/dev/null)" || return 0
-  proxy_status="${out##*$'\n'}"
-  proxy_body="${out%$'\n'*}"
+# ingress_get <host> <path-or-url> [curl-arg...]: one request to the ingress from this machine,
+# resolving <host> to the loopback address the cluster publishes the ingress on and verifying
+# against the evaluator CA. The path is sent as written. Sets ingress_status (000 when nothing
+# answered), ingress_body and ingress_redirect (the Location of a redirect, else empty). No
+# credentials are sent and redirects are not followed.
+ingress_get() {
+  local host="$1" url="$2" out last
+  shift 2
+  ingress_status=000
+  ingress_body=""
+  ingress_redirect=""
+  out="$(curl -sS --path-as-is --max-time 10 --cacert "$(local_tls_state_dir)/ca.pem" \
+    --resolve "${host}:${INGRESS_PORT}:127.0.0.1" "$@" \
+    -w $'\n%{http_code} %{redirect_url}' "$url" 2>/dev/null)" || return 0
+  last="${out##*$'\n'}"
+  ingress_status="${last%% *}"
+  ingress_redirect="${last#* }"
+  ingress_body="${out%$'\n'*}"
 }
 
-# proxy_expect <host> <url> <status> <what>: requests <url> through the proxy until it answers
-# <status> (PS_PROXY_PROBE_ATTEMPTS tries, default 5, two seconds apart). Leaves proxy_body
+# ingress_expect <host> <url> <status> <what>: requests <url> through the ingress until it answers
+# <status> (PS_INGRESS_PROBE_ATTEMPTS tries, default 5, two seconds apart). Leaves ingress_body
 # of the last answer. Prints the failure with its fix and returns 1 otherwise.
-proxy_expect() {
-  local i attempts="${PS_PROXY_PROBE_ATTEMPTS:-5}"
+ingress_expect() {
+  local i attempts="${PS_INGRESS_PROBE_ATTEMPTS:-5}"
   for ((i = 0; i < attempts; i++)); do
-    proxy_get "$1" "$2"
-    [[ "$proxy_status" == "$3" ]] && return 0
+    ingress_get "$1" "$2"
+    [[ "$ingress_status" == "$3" ]] && return 0
     sleep 2
   done
-  print_error '%s through the proxy answered %s, expected %s (%s). Fix: check the proxy and PS Service pods (kubectl get pods; kubectl logs deploy/%s-proxy) and that port %s of this machine reaches the cluster, then re-run.\n' \
-    "$4" "$proxy_status" "$3" "$2" "$HELM_RELEASE_NAME" "$PROXY_PORT"
+  print_error '%s through the ingress answered %s, expected %s (%s). Fix: check the ingress controller and PS Service pods (kubectl -n %s get pods; kubectl get pods; kubectl get ingress) and that port %s of this machine reaches the cluster, then re-run.\n' \
+    "$4" "$ingress_status" "$3" "$2" "$INGRESS_NAMESPACE" "$INGRESS_PORT"
   return 1
 }
 
-# probe_proxy_from_host <host> <issuer>: the closing end-to-end check, through the published proxy
-# port with the evaluator CA verifying the certificate: PS Service answers /health, the issuer
-# discovery document reports exactly the issuer the release was given, and PS Service refuses a
-# request that carries no bearer token with 401.
-probe_proxy_from_host() {
-  local host="$1" issuer="$2" reported
-  proxy_expect "$host" "$(ps_service_url "$host")/health" 200 "/health" || return 1
-  proxy_expect "$host" "${issuer}.well-known/openid-configuration" 200 "The issuer discovery document" \
+# ingress_expect_denied <host> <path>: requests <path>, unencoded and unnormalised, through the
+# ingress; only 403 and 404 pass. Any other answer (a 200 especially) means the ingress routes a
+# path it must not, and is reported with the path.
+ingress_expect_denied() {
+  ingress_get "$1" "https://${1}:${INGRESS_PORT}${2}"
+  case "$ingress_status" in
+    403 | 404) return 0 ;;
+  esac
+  print_error 'The ingress answered %s for %s on port %s, expected 403 or 404: that path must not be reachable. Fix: check the Ingress paths (kubectl get ingress -o yaml) and the ingress controller version, then re-run.\n' \
+    "$ingress_status" "$2" "$INGRESS_PORT"
+  return 1
+}
+
+# probe_ingress_from_host <host> <issuer>: the closing end-to-end check, through the published
+# ingress port with the evaluator CA verifying the certificate: PS Service answers /health, the
+# issuer discovery document reports exactly the issuer the release was given, PS Service refuses a
+# request that carries no bearer token with 401, a redirect from Authentik keeps the port, and
+# the metrics endpoint and the Authentik admin paths (plain and encoded) are not routed.
+probe_ingress_from_host() {
+  local host="$1" issuer="$2" reported path expected
+  ingress_expect "$host" "$(ps_service_url "$host")/health" 200 "/health" || return 1
+  ingress_expect "$host" "${issuer}.well-known/openid-configuration" 200 "The issuer discovery document" \
     || return 1
-  reported="$(jq -r '.issuer // empty' <<<"$proxy_body" 2>/dev/null || true)"
+  reported="$(jq -r '.issuer // empty' <<<"$ingress_body" 2>/dev/null || true)"
   if [[ "$reported" != "$issuer" ]]; then
-    print_error 'The issuer discovery document through the proxy reports issuer "%s", not "%s". Fix: the proxy must pass the Host and port the browser used to Authentik; check the proxy ConfigMap and the Authentik trusted-proxy setting, then re-run.\n' \
+    print_error 'The issuer discovery document through the ingress reports issuer "%s", not "%s". Fix: the ingress must pass the Host and port the browser used to Authentik; check the Authentik trusted-proxy setting and the ingress controller, then re-run.\n' \
       "$reported" "$issuer"
     return 1
   fi
-  proxy_expect "$host" "$(ps_service_url "$host")/mcp/" 401 "An unauthenticated request to /mcp/" || return 1
+  ingress_expect "$host" "$(ps_service_url "$host")/mcp/" 401 "An unauthenticated request to /mcp/" || return 1
+  expected="$(authentik_base_url "$host")/"
+  ingress_get "$host" "$(ps_service_url "$host")${INGRESS_REDIRECT_PATH}"
+  if [[ "$ingress_redirect" != "$expected"* ]]; then
+    print_error 'The redirect from %s answered %s with Location "%s", not one starting with %s. Fix: the ingress must pass the port the browser used; check the ingress controller and the Authentik trusted-proxy setting, then re-run.\n' \
+      "$INGRESS_REDIRECT_PATH" "$ingress_status" "$ingress_redirect" "$expected"
+    return 1
+  fi
+  for path in "${INGRESS_DENIED_PATHS[@]}"; do
+    ingress_expect_denied "$host" "$path" || return 1
+  done
 }
 
 # warn_stale_tls_keypair: an earlier version of this script registered the local certificate in
@@ -941,35 +1027,36 @@ main() {
   check_required_tools
   detect_lan_address
   require_kind_context
+  free_ingress_node_port
+  require_ingress_controller
   require_llm_secret
   prompt_owner_email || exit "$EXIT_FAILURE"
   detect_node_ip
 
   trap stop_authentik_port_forward EXIT
 
-  local issuer checksum
+  local issuer
   issuer="$(authentik_issuer "$hostname_arg")"
   log_step "Preparing local TLS for ${hostname_arg}"
   ensure_local_leaf "$hostname_arg" || exit "$EXIT_FAILURE"
   announce_migration "$hostname_arg" "$issuer" "$(local_tls_state_dir)/ca.pem"
   apply_local_tls_secret "$namespace" "$TLS_SECRET_NAME" "$CA_SECRET_NAME"
 
-  checksum="$(leaf_fingerprint | tr -d ':' | tr '[:upper:]' '[:lower:]')"
   log_step "Reconciling the Helm release"
-  ensure_release "$(release_values_json "$hostname_arg" "$issuer" "$checksum")"
+  ensure_release "$(release_values_json "$hostname_arg" "$issuer")"
 
-  # Authentik and the proxy first: PS Service discovers the OIDC issuer through the proxy at
-  # startup and crash-loops until both answer.
-  log_step "Waiting for Authentik and the proxy to become Ready"
-  wait_for_rollouts authentik-server authentik-worker proxy
+  # Authentik first: PS Service discovers the OIDC issuer through the ingress at startup and
+  # crash-loops until Authentik answers.
+  log_step "Waiting for Authentik to become Ready"
+  wait_for_rollouts authentik-server authentik-worker
 
   read_bootstrap_token "$namespace" "$API_TOKEN_SECRET_NAME" || exit "$EXIT_FAILURE"
   log_step "Waiting for PS Service to become Ready"
   wait_for_rollouts ps-service
   log_step "Checking OIDC discovery from inside the cluster"
   probe_issuer_discovery "$issuer" || exit "$EXIT_FAILURE"
-  log_step "Checking the proxy from this machine"
-  probe_proxy_from_host "$hostname_arg" "$issuer" || exit "$EXIT_FAILURE"
+  log_step "Checking the ingress from this machine"
+  probe_ingress_from_host "$hostname_arg" "$issuer" || exit "$EXIT_FAILURE"
 
   log_step "Creating the owner and issuing the enrolment link"
   start_authentik_port_forward "$namespace" "$AUTHENTIK_SERVER_SERVICE" 80 || exit "$EXIT_FAILURE"

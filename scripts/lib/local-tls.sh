@@ -1,7 +1,7 @@
 # shellcheck shell=bash disable=SC2034
 # Local TLS for the evaluator profile: a name-constrained, short-lived local CA plus a leaf
 # certificate for the evaluator hostname, kept outside the repo, delivered to the cluster as a
-# Secret, and served by the evaluator proxy. No mkcert; only `openssl` (OpenSSL or LibreSSL: config files, never `-addext`).
+# Secret, and served by the ingress controller. No mkcert; only `openssl` (OpenSSL or LibreSSL: config files, never `-addext`).
 #
 # Sourced, never executed (mode 100644):
 #   source "$script_dir/lib/local-tls.sh"
@@ -239,7 +239,7 @@ CNF
 }
 
 # apply_local_tls_secret <namespace> <tls-secret> <ca-secret>: (over)writes two Secrets via the
-# create --dry-run | apply idiom: <tls-secret> holds tls.crt and tls.key (mounted by the proxy
+# create --dry-run | apply idiom: <tls-secret> holds tls.crt and tls.key (used by the ingress
 # only), <ca-secret> holds ca.crt only (the PS Service trust bundle).
 apply_local_tls_secret() {
   local namespace="$1" tls_secret="$2" ca_secret="$3" dir
@@ -251,9 +251,4 @@ apply_local_tls_secret() {
   kubectl -n "$namespace" create secret generic "$ca_secret" \
     --from-file=ca.crt="$dir/ca.pem" \
     --dry-run=client -o yaml | kubectl -n "$namespace" apply -f - >/dev/null
-}
-
-# leaf_fingerprint: prints the sha256 fingerprint of the local leaf.
-leaf_fingerprint() {
-  openssl x509 -in "$(local_tls_state_dir)/leaf.pem" -noout -fingerprint -sha256 | sed 's/.*=//'
 }

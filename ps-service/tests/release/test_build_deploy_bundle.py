@@ -48,6 +48,10 @@ def test_bundle_has_the_cluster_config_the_guide_uses(unpacked: Path) -> None:
     assert (unpacked / "deploy" / "kind" / "cluster.yaml").is_file()
 
 
+def test_bundle_has_the_ingress_controller_manifest_the_guide_applies(unpacked: Path) -> None:
+    assert (unpacked / "deploy" / "kind" / "ingress-nginx.yaml").is_file()
+
+
 def test_bundle_has_the_production_values_and_defaults(unpacked: Path) -> None:
     assert (unpacked / "charts" / "policy-system" / "values-prod.yaml").is_file()
     assert (unpacked / "scripts" / "ps-defaults.conf").is_file()

@@ -102,15 +102,15 @@ def test_no_doc_claims_ps_service_is_this_machine_only() -> None:
     assert offenders == []
 
 
-def test_cluster_yaml_comments_name_the_proxy() -> None:
+def test_cluster_yaml_comments_name_the_ingress_controller() -> None:
     comments = " ".join(
         line.lstrip("# ").strip()
         for line in _CLUSTER_YAML.read_text().splitlines()
         if line.lstrip().startswith("#")
     )
 
-    assert "the proxy Service NodePort" in comments
-    assert "the proxy is the only off-loopback listener" in comments
+    assert "the ingress controller Service https NodePort" in comments
+    assert "the ingress controller is the only off-loopback listener" in comments
 
 
 def test_no_direct_authentik_or_ps_service_host_mapping_anywhere() -> None:

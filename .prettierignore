@@ -19,3 +19,5 @@ curated-content/**/native.json
 # Frozen copies of exported artifacts; their golden hashes depend on the exact bytes.
 ps-service/tests/export/fixtures/**/*.json
 ps-service/tests/graph_gateway/fixtures/**/*.json
+# Vendored upstream manifest; a test pins its bytes to the upstream checksum.
+deploy/kind/ingress-nginx.yaml

@@ -68,7 +68,7 @@ def _leaf_sans(fixture: EvalFixture) -> list[str]:
 
 
 def _api_calls(fixture: EvalFixture) -> list[dict[str, Any]]:
-    """The curl calls that provision Authentik, not the closing probes of the proxy."""
+    """The curl calls that provision Authentik, not the closing probes of the ingress."""
     return [c for c in fixture.curl_calls() if ":30443/" not in str(c["url"])]
 
 
@@ -103,12 +103,17 @@ def test_fresh_run_deploys_once_with_owner_subject_issuer_and_base_url(
     assert ps["localTestBypass"] == {"enabled": False}
     assert values["authentik"]["enabled"] is True
     assert ps["localCa"] == {"secretName": "policy-system-local-ca"}
-    assert values["proxy"]["tls"] == {"secretName": "policy-system-local-tls"}
+    assert values["ingress"] == {
+        "enabled": True,
+        "className": "nginx",
+        "tls": {"secretName": "policy-system-local-tls"},
+    }
+    assert "proxy" not in values
     assert "localTls" not in values
     assert values["llm"] == {"existingSecret": "policy-system-llm-credentials"}
 
 
-def test_the_release_pins_the_signing_origin_to_the_configured_name_and_proxy_port(
+def test_the_release_pins_the_signing_origin_to_the_configured_name_and_ingress_port(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL, "--hostname", "ps.example.test")
@@ -134,16 +139,25 @@ def test_default_hostname_is_the_single_evaluator_name_everywhere(
     assert ".local" not in json.dumps(values)
 
 
-def test_only_the_proxy_gets_the_tls_secret_and_a_certificate_checksum(
+def test_only_the_ingress_gets_the_tls_secret_and_no_pod_is_annotated(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     values = eval_fixture.deployed_values()
-    assert values["proxy"]["tls"] == {"secretName": "policy-system-local-tls"}
-    assert len(values["proxy"]["podAnnotations"]["checksum/local-tls"]) >= 32
+    assert values["ingress"]["tls"] == {"secretName": "policy-system-local-tls"}
+    assert "podAnnotations" not in json.dumps(values)
+    assert "checksum/local-tls" not in json.dumps(values)
     assert "global" not in values["authentik"]
     assert "policy-system-local-tls" not in json.dumps(values["psService"])
+
+
+def test_the_script_never_hands_helm_the_test_bypass_enabled(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    written = json.loads((eval_fixture.state_dir / "release-values.json").read_text())
+    assert written["psService"]["localTestBypass"] == {"enabled": False}
+    assert "true" not in json.dumps(written["psService"]["localTestBypass"])
 
 
 def test_helm_installs_the_chart_named_by_ps_chart_ref(eval_fixture: EvalFixture) -> None:
@@ -358,7 +372,8 @@ def test_the_tls_secret_carries_leaf_and_key_only_and_is_applied_before_helm(
     assert f"--from-file=tls.crt={eval_fixture.state_dir}/leaf.pem" in create
     assert f"--from-file=tls.key={eval_fixture.state_dir}/leaf.key" in create
     assert "ca.crt" not in create
-    assert kube.index(create) < next(i for i, c in enumerate(kube) if "rollout status" in c)
+    first_rollout = next(i for i, c in enumerate(kube) if "rollout status deployment/policy-" in c)
+    assert kube.index(create) < first_rollout
 
 
 def test_the_ca_secret_carries_the_ca_certificate_only(eval_fixture: EvalFixture) -> None:
@@ -559,7 +574,7 @@ def _fake_sudo(fixture: EvalFixture) -> Path:
     return log
 
 
-def test_final_probe_hits_health_and_issuer_through_the_proxy(
+def test_final_probe_hits_health_and_issuer_through_the_ingress(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
@@ -574,10 +589,10 @@ def test_final_probe_hits_health_and_issuer_through_the_proxy(
         assert str(eval_fixture.state_dir / "ca.pem") in argv
 
 
-def test_final_probe_fails_when_the_proxy_reports_another_issuer(
+def test_final_probe_fails_when_the_ingress_reports_another_issuer(
     eval_fixture: EvalFixture,
 ) -> None:
-    eval_fixture.seed_curl(proxy_issuer="https://ps.test:8443/auth/application/o/ps-cli/")
+    eval_fixture.seed_curl(ingress_issuer="https://ps.test:8443/auth/application/o/ps-cli/")
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
 
@@ -587,7 +602,7 @@ def test_final_probe_fails_when_the_proxy_reports_another_issuer(
 
 
 def test_final_probe_fails_when_health_does_not_answer(eval_fixture: EvalFixture) -> None:
-    eval_fixture.seed_curl(proxy_health_status=502)
+    eval_fixture.seed_curl(ingress_health_status=502)
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
 
@@ -602,7 +617,7 @@ def test_final_probe_requires_401_without_a_bearer_token(eval_fixture: EvalFixtu
     mcp = next(c for c in eval_fixture.curl_calls() if c["url"].endswith("/mcp/"))
     assert not any("authorization" in part.lower() for part in mcp["argv"])
 
-    eval_fixture.seed_curl(proxy_mcp_status=200)
+    eval_fixture.seed_curl(ingress_mcp_status=200)
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
 
     assert run.returncode == 1
@@ -1677,6 +1692,8 @@ def test_discovery_probe_failure_names_the_issuer_and_exits_1(eval_fixture: Eval
     )
 
     assert ISSUER in run.stderr
+    assert "ingress" in run.stderr
+    assert "proxy" not in run.stderr.lower()
     assert "Fix:" in run.stderr
     assert eval_fixture.curl_users() == {}
 
@@ -1688,7 +1705,8 @@ def test_ps_service_is_awaited_without_any_certificate_refresh_or_restart(
 
     kube = eval_fixture.kubectl_calls()
     assert not any("rollout restart" in c for c in kube)
-    assert _index(kube, "rollout status deployment/policy-system-proxy") < _index(
+    assert not any("deployment/policy-system-proxy" in c for c in kube)
+    assert _index(kube, "rollout status deployment/policy-system-authentik-server") < _index(
         kube, "rollout status deployment/policy-system-ps-service"
     )
 
@@ -1706,6 +1724,172 @@ def test_no_leftover_keypair_prints_no_certificate_fix(eval_fixture: EvalFixture
     run = eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     assert "ps-local-tls" not in run.stderr
+
+
+# --- the ingress controller is a precondition, and the old proxy Service is freed ---------------
+
+CONTROLLER_APPLY = "kubectl apply -f deploy/kind/ingress-nginx.yaml"
+
+
+def _first_index(calls: list[str], needle: str) -> int:
+    return next(i for i, call in enumerate(calls) if needle in call)
+
+
+def test_a_missing_controller_stops_with_the_apply_command_and_no_helm_call(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_INGRESS_MISSING="1", expect=1)
+
+    assert CONTROLLER_APPLY in run.stderr
+    assert eval_fixture.helm_calls() == []
+    assert _mutations(eval_fixture) == []
+
+
+def test_a_controller_that_is_not_ready_stops_with_the_apply_command(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run(
+        "--owner-email",
+        OWNER_EMAIL,
+        PS_TEST_INGRESS_NOT_READY="1",
+        PS_INGRESS_TIMEOUT="1s",
+        expect=1,
+    )
+
+    assert CONTROLLER_APPLY in run.stderr
+    assert eval_fixture.helm_calls() == []
+
+
+def test_a_controller_without_admission_webhook_endpoints_stops_before_helm(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_INGRESS_NO_ENDPOINTS="1", expect=1)
+
+    assert "admission" in run.stderr
+    assert "Fix:" in run.stderr
+    assert eval_fixture.helm_calls() == []
+
+
+def test_the_controller_and_webhook_are_checked_before_helm_upgrades(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    kube = eval_fixture.kubectl_calls()
+    assert any("rollout status deployment/ingress-nginx-controller" in c for c in kube)
+    assert any(
+        "get endpointslices" in c and "ingress-nginx-controller-admission" in c for c in kube
+    )
+    assert len(eval_fixture.helm_upgrades()) == 1
+
+
+def test_an_existing_proxy_service_is_deleted_before_the_controller_check_and_helm(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_PROXY_SERVICE="1")
+
+    kube = eval_fixture.kubectl_calls()
+    deletes = [c for c in kube if " delete " in f" {c} "]
+    assert deletes == ["-n default delete service policy-system-proxy"]
+    assert kube.index(deletes[0]) < _first_index(kube, "ingress-nginx-controller")
+
+
+def test_the_proxy_service_is_deleted_even_when_the_controller_is_missing_and_helm_never_ran(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.run(
+        "--owner-email",
+        OWNER_EMAIL,
+        PS_TEST_PROXY_SERVICE="1",
+        PS_TEST_INGRESS_MISSING="1",
+        expect=1,
+    )
+
+    assert any(" delete service policy-system-proxy" in c for c in eval_fixture.kubectl_calls())
+    assert eval_fixture.helm_calls() == []
+
+
+def test_no_service_is_deleted_without_an_old_proxy_service(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert not any(" delete " in f" {c} " for c in eval_fixture.kubectl_calls())
+
+
+# --- closing probes through port 30443: nothing but the public paths answers -------------------
+
+DENIED_PATHS = (
+    "/metrics",
+    "/auth/if/admin/",
+    "/auth/api/v3/core/users/",
+    "/auth/static/%2e%2e/if/admin/",
+    "/auth/%2e%2e/api/v3/core/users/",
+    "/auth/static/%2f..%2fif/admin/",
+    "/auth/static/..;/if/admin/",
+)
+
+
+def test_closing_probes_request_metrics_and_admin_paths_as_is_through_the_ingress_port(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    calls = {c["url"]: c["argv"] for c in eval_fixture.curl_calls()}
+    for path in DENIED_PATHS:
+        argv = calls[f"https://{HOST}:30443{path}"]
+        assert "--path-as-is" in argv
+        assert f"{HOST}:30443:127.0.0.1" in argv
+        assert str(eval_fixture.state_dir / "ca.pem") in argv
+
+
+@pytest.mark.parametrize("path", DENIED_PATHS)
+def test_a_reachable_denied_path_fails_the_deploy_naming_the_path(
+    eval_fixture: EvalFixture, path: str
+) -> None:
+    eval_fixture.seed_curl(ingress_open_paths=[path])
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
+
+    assert path in run.stderr
+    assert "200" in run.stderr
+    assert eval_fixture.curl_users() == {}
+
+
+@pytest.mark.parametrize("status", [301, 401, 500, 502])
+def test_only_403_and_404_count_as_denied(eval_fixture: EvalFixture, status: int) -> None:
+    eval_fixture.seed_curl(ingress_denied_status=status)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
+
+    assert "/metrics" in run.stderr
+    assert str(status) in run.stderr
+
+
+def test_a_403_on_a_denied_path_is_accepted(eval_fixture: EvalFixture) -> None:
+    eval_fixture.seed_curl(ingress_denied_status=403)
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert f"https://{HOST}:30443/metrics" in eval_fixture.curl_urls()
+
+
+def test_the_printed_enrolment_link_and_the_flow_redirect_keep_the_ingress_port(
+    eval_fixture: EvalFixture,
+) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert f"https://{HOST}:30443/auth/" in run.stdout
+    assert f"https://{HOST}:30443/auth/flows/-/default/authentication/" in eval_fixture.curl_urls()
+
+
+def test_a_redirect_that_drops_the_port_fails_the_deploy(eval_fixture: EvalFixture) -> None:
+    eval_fixture.seed_curl(
+        ingress_redirect_location=f"https://{HOST}/auth/if/flow/default-authentication-flow/"
+    )
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
+
+    assert f"https://{HOST}:30443/auth/" in run.stderr
+    assert eval_fixture.curl_users() == {}
 
 
 # --- exposure preflight: the LAN-facing listener must not meet a public address -----------------
@@ -1735,6 +1919,10 @@ def test_public_address_aborts_before_any_cluster_call_and_names_it(
     assert "192.168.1.5" not in run.stderr
     assert "--allow-public-host" in run.stderr
     assert eval_fixture.kubectl_calls() == []
+    assert eval_fixture.helm_calls() == []
+    assert eval_fixture.curl_calls() == []
+    assert "proxy" not in run.stderr.lower()
+    assert "ingress controller" in run.stderr
     assert _mutations(eval_fixture) == []
 
 

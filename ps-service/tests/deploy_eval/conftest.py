@@ -98,6 +98,19 @@ case "$line" in
     cat >> "$PS_TEST_KUBECTL_APPLIED"
     printf 'secret/applied configured\n'
     ;;
+  "get service policy-system-proxy -o name")
+    [[ -n "${PS_TEST_PROXY_SERVICE:-}" ]] || { echo 'NotFound' >&2; exit 1; }
+    printf 'service/policy-system-proxy\n'
+    ;;
+  "get deployment ingress-nginx-controller -o name")
+    [[ -z "${PS_TEST_INGRESS_MISSING:-}" ]] || { echo 'NotFound' >&2; exit 1; }
+    ;;
+  "rollout status deployment/ingress-nginx-controller"*)
+    [[ -z "${PS_TEST_INGRESS_NOT_READY:-}" ]] || exit 1
+    ;;
+  "get endpointslices"*)
+    [[ -n "${PS_TEST_INGRESS_NO_ENDPOINTS:-}" ]] || printf '10.244.0.7'
+    ;;
   "rollout status"*) exit "${PS_TEST_ROLLOUT_EXIT:-0}" ;;
   exec*) [[ -z "${PS_TEST_EXEC_FAIL:-}" ]] || { echo 'urlopen error' >&2; exit 1; } ;;
   port-forward*)
@@ -448,7 +461,7 @@ class EvalFixture:
             "PS_FEDORA_CA_ANCHOR": str(self.fedora_anchor),
             "PS_TEST_OPENSSL_LOG": str(self.root / "openssl.log"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
-            "PS_PROXY_PROBE_ATTEMPTS": "1",
+            "PS_INGRESS_PROBE_ATTEMPTS": "1",
             "PS_TLS_REFRESH_ATTEMPTS": "5",
             "PS_TLS_REFRESH_INTERVAL_SECONDS": "0.05",
             "PS_PORT_FORWARD_INTERVAL_SECONDS": "0.05",

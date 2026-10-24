@@ -25,12 +25,11 @@ psService:
     repository: ghcr.io/mindovermachine-dev/ps-service
     tag: ""
   service:
-    # ClusterIP in every profile: clients reach PS Service through the proxy (proxy.* below) or
-    # the chart-owned Ingress (ingress.* below). Port is named "http" and serves both the REST API and, once built,
+    # ClusterIP in every profile: clients reach PS Service through the chart-owned Ingress
+    # (ingress.* below). Port is named "http" and serves both the REST API and, once built,
     # the Streamable HTTP MCP endpoint under the same host:port. A nodePort is rendered only when
     # type is NodePort and nodePort is set.
-    # /metrics is anonymous and served on this port: the chart proxy and the chart Ingress never
-    # route it, but a NodePort Service or a hand-written Ingress that forwards to this Service
+    # /metrics is anonymous and served on this port: the chart Ingress never routes it, but a NodePort Service or a hand-written Ingress that forwards to this Service
     # publishes it. Keep ClusterIP; the chart Ingress requires it.
     type: ClusterIP
     nodePort: null
@@ -148,8 +147,8 @@ psService:
     # baseUrl. Set it when baseUrl is an in-cluster address (production: the public
     # `https://<host>/auth`); leave empty when baseUrl is already user-reachable (evaluator:
     # `https://<host>:30443/auth`). Authentik's admin and core APIs are not reachable through the
-    # evaluator proxy, so the evaluator sets baseUrl to the in-cluster Service and publicUrl to the
-    # proxy address.
+    # evaluator Ingress, so the evaluator sets baseUrl to the in-cluster Service and publicUrl to the
+    # Ingress address.
     # Empty = PS_AUTHENTIK_PUBLIC_URL is not rendered.
     publicUrl: ""
   # IP of the Podman network gateway (e.g. `podman network inspect podman
@@ -159,9 +158,9 @@ psService:
   ollamaHostGatewayIP: ""
   # Hostname PS Service's own pod must resolve to the kind node's container IP so its
   # OIDC issuer validation (PS_AUTH_ISSUER, issue #58) reaches the SAME bundled Authentik
-  # instance a LAN client reaches -- via the proxy's fixed NodePort mapped in deploy/kind/cluster.yaml
-  # (proxy.service.nodePort), never a Service DNS name (a browser/ps-cli off-cluster cannot
-  # resolve cluster-internal DNS). The proxy's server_name is this hostname. Both empty by default --
+  # instance a LAN client reaches -- via the ingress controller's fixed NodePort mapped in
+  # deploy/kind/cluster.yaml, never a Service DNS name (a browser/ps-cli off-cluster cannot
+  # resolve cluster-internal DNS). The Ingress host is this hostname. Both empty by default --
   # the chart can't know either statically, same posture as ollamaHostGatewayIP above.
   # A human/ps-cli client on the evaluator's own machine adds the same hostname to their own
   # /etc/hosts pointing at 127.0.0.1; a colleague on the same LAN points it at the
@@ -191,52 +190,6 @@ ingress:
     # Secret holding the certificate for the PS Service Ingress host. Empty renders no tls block.
     # The Authentik Ingress never has one: it shares the host and so the certificate.
     secretName: ""
-
-# Reverse proxy in front of PS Service and Authentik (local-test/evaluator profile). One nginx
-# Deployment terminates TLS with the certificate in `tls.secretName` (keys `tls.crt` and `tls.key`;
-# created by the evaluator install script, never by this chart, and mounted by this workload only),
-# routes `/auth/` paths on the shared allowlist (files/authentik-public-paths.txt) to Authentik
-# and everything else to PS Service. Off by default and in production, where an Ingress does this.
-proxy:
-  enabled: false
-  image:
-    repository: nginx
-    tag: 1.31.7-alpine
-  service:
-    # Fixed NodePort that deploy/kind/cluster.yaml maps to the host, and the port in the OIDC
-    # issuer URL: in-cluster pods reach the issuer through the node on this port.
-    nodePort: 30443
-  tls:
-    secretName: ""
-  # Set by the evaluator script, which maps the proxy port to all host interfaces. Rendering
-  # fails when this is on together with psService.localTestBypass.enabled: a machine reachable
-  # from the LAN must not serve an unauthenticated PS Service.
-  lanExposure:
-    enabled: false
-  # Extra pod annotations; the evaluator script sets a certificate checksum so a rotated leaf
-  # restarts the proxy.
-  podAnnotations: {}
-  tunables:
-    # Evaluator proxy body limit. Independent of psService.maxRequestBodyBytes, which governs the PS Service Ingress and the application limit.
-    clientMaxBodySize: 150m
-    proxyTimeoutSeconds: 3600
-  # Provisional sizing: configuration, not a measurement.
-  resources:
-    requests:
-      cpu: 50m
-      memory: 32Mi
-    limits:
-      cpu: 500m
-      memory: 128Mi
-  probes:
-    readiness:
-      timeoutSeconds: 3
-      periodSeconds: 10
-      failureThreshold: 3
-    liveness:
-      timeoutSeconds: 3
-      periodSeconds: 15
-      failureThreshold: 5
 
 llm:
   # ollama | azure
@@ -393,7 +346,8 @@ authentik:
       - name: AUTHENTIK_WEB__PATH
         value: /auth/
       # Source addresses whose forwarding headers Authentik honours: the pod network of the kind
-      # cluster, where the evaluator proxy runs. Replaces Authentik's built-in default list.
+      # cluster (networking.podSubnet in deploy/kind/cluster.yaml), where the ingress controller runs and
+      # is the TCP peer Authentik sees. Replaces Authentik's built-in default list.
       - name: AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS
         value: 10.244.0.0/16
   worker:
@@ -410,8 +364,7 @@ authentik:
           secretKeyRef:
             name: policy-system-authentik-api-token
             key: PS_AUTHENTIK_API_TOKEN
-    # ClusterIP in every profile: clients reach Authentik through the proxy (proxy.* above) or
-    # the production Ingress, never a node port of its own.
+    # ClusterIP in every profile: clients reach Authentik through the chart Ingress, never a node port of its own.
     service:
       type: ClusterIP
   authentik:

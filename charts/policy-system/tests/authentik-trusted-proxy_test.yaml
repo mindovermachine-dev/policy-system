@@ -1,5 +1,6 @@
-suite: authentik trusts only the proxy network
-# The evaluator profile sets the trusted proxy CIDRs on every Authentik workload explicitly.
+suite: authentik trusts only the ingress controller network
+# The evaluator profile sets the trusted proxy CIDRs on every Authentik workload explicitly to the
+# pod network of the kind cluster, where the ingress controller runs.
 release:
   name: policy-system
 set:

@@ -89,16 +89,16 @@ podman info
 > **Why 4 CPUs and 8 GB:** kind under Podman needs enough headroom to run a control plane and
 > both Policy System containers. 4 CPUs and 8 GB is the tested minimum.
 >
-> **Proxy footprint: measured.** The evaluator proxy adds one more container (`nginx:1.31.7-alpine`).
-> On a Podman machine with 9 CPUs and 16 GiB (macOS, 2026-10-20) it used 13 MiB of memory and 0m
-> CPU idle, and 19 MiB and 417m CPU while 8 workers requested `/health` for 60 seconds. The
-> proxy's memory is small next to the rest of the stack, so the minimum above is unchanged.
-> The measurement was taken on a larger machine than the minimum, and it has no node-wide row
-> because the kind cluster had no metrics-server. The declared `proxy.resources` limits are 128Mi
-> memory and 500m CPU, so a sustained load near the measured 417m CPU is close to the CPU limit.
-> To measure the footprint on your machine, follow [Operations Guide: Measuring the proxy
-> footprint](./operations-guide.md#measuring-the-proxy-footprint-evaluator) with
-> `scripts/measure-proxy-footprint.sh`.
+> **Footprint: measured.** The evaluator runs one ingress controller (ingress-nginx controller
+> v1.15.1) in front of PS Service and Authentik. It was measured on its own on 2026-10-24, on a
+> Podman machine with 4 CPUs and 8 GiB (macOS, arm64), with a stub backend behind it and without
+> the rest of the Policy System stack. It used 60 MiB of memory and 4m CPU idle (120 seconds), and
+> 77 MiB and 760m CPU while 8 clients requested `/health` over HTTPS for 60 seconds. The full stack
+> was not run with it, so the minimum above is not re-validated for the full stack; the controller
+> is heavier than the reverse proxy it replaced, and the controller's declared request is 100m CPU
+> and 90Mi memory with no limits. The memory and CPU figures are the controller's cgroup readings.
+> To measure the footprint on your machine, follow [Operations Guide: Measuring the ingress
+> controller footprint](./operations-guide.md#measuring-the-ingress-controller-footprint-evaluator).
 
 Install kind and kubectl:
 
@@ -123,7 +123,7 @@ cd policy-system-deploy
 
 #### Step 2: Check that the machine is safe to expose
 
-The cluster publishes the proxy on every network interface of the machine (port `30443`). Check
+The cluster publishes the ingress controller on every network interface of the machine (port `30443`). Check
 the machine first. The check lists the machine's addresses and fails when one is outside the
 loopback, link-local and private ranges:
 
@@ -150,6 +150,15 @@ Create the cluster:
 kind create cluster --config deploy/kind/cluster.yaml --name policy-system
 ```
 
+Install the ingress controller (ingress-nginx), the only component that listens on port `30443`,
+and wait until it is ready:
+
+```bash
+kubectl apply -f deploy/kind/ingress-nginx.yaml
+kubectl wait --namespace ingress-nginx --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller --timeout=180s
+```
+
 Check that it runs:
 
 ```bash
@@ -161,8 +170,8 @@ kubectl cluster-info --context kind-policy-system
 > it again with `kind delete cluster --name policy-system`. **This destroys the graph and both
 > Postgres databases stored in that cluster.**
 >
-> After you delete it, run the exposure check of step 2 and the `kind create cluster` command of
-> this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
+> After you delete it, run the exposure check of step 2 and the `kind create cluster` and
+> `kubectl apply` commands of this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
 > Restore](./operations-guide.md#restore)) or load the content again (see [User Guide: Load curated
 > content](./user-guide.md#load-curated-content)).
 
@@ -288,7 +297,7 @@ cd policy-system-deploy
 
 #### Step 2: Check that the machine is safe to expose
 
-The cluster publishes the proxy on every network interface of the machine (port `30443`). Check
+The cluster publishes the ingress controller on every network interface of the machine (port `30443`). Check
 the machine first. The check lists the machine's addresses and fails when one is outside the
 loopback, link-local and private ranges:
 
@@ -315,6 +324,15 @@ Create the cluster:
 kind create cluster --config deploy/kind/cluster.yaml --name policy-system
 ```
 
+Install the ingress controller (ingress-nginx), the only component that listens on port `30443`,
+and wait until it is ready:
+
+```bash
+kubectl apply -f deploy/kind/ingress-nginx.yaml
+kubectl wait --namespace ingress-nginx --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller --timeout=180s
+```
+
 Check that it runs:
 
 ```bash
@@ -326,8 +344,8 @@ kubectl cluster-info --context kind-policy-system
 > it again with `kind delete cluster --name policy-system`. **This destroys the graph and both
 > Postgres databases stored in that cluster.**
 >
-> After you delete it, run the exposure check of step 2 and the `kind create cluster` command of
-> this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
+> After you delete it, run the exposure check of step 2 and the `kind create cluster` and
+> `kubectl apply` commands of this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
 > Restore](./operations-guide.md#restore)) or load the content again (see [User Guide: Load curated
 > content](./user-guide.md#load-curated-content)).
 
@@ -456,7 +474,7 @@ cd policy-system-deploy
 
 #### Step 2: Check that the machine is safe to expose
 
-The cluster publishes the proxy on every network interface of the machine (port `30443`). Check
+The cluster publishes the ingress controller on every network interface of the machine (port `30443`). Check
 the machine first. The check lists the machine's addresses and fails when one is outside the
 loopback, link-local and private ranges:
 
@@ -483,6 +501,15 @@ Create the cluster:
 kind create cluster --config deploy/kind/cluster.yaml --name policy-system
 ```
 
+Install the ingress controller (ingress-nginx), the only component that listens on port `30443`,
+and wait until it is ready:
+
+```bash
+kubectl apply -f deploy/kind/ingress-nginx.yaml
+kubectl wait --namespace ingress-nginx --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller --timeout=180s
+```
+
 Check that it runs:
 
 ```bash
@@ -494,8 +521,8 @@ kubectl cluster-info --context kind-policy-system
 > it again with `kind delete cluster --name policy-system`. **This destroys the graph and both
 > Postgres databases stored in that cluster.**
 >
-> After you delete it, run the exposure check of step 2 and the `kind create cluster` command of
-> this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
+> After you delete it, run the exposure check of step 2 and the `kind create cluster` and
+> `kubectl apply` commands of this step again, then the steps after it. Restore a PS Postgres backup (see [Operations Guide:
 > Restore](./operations-guide.md#restore)) or load the content again (see [User Guide: Load curated
 > content](./user-guide.md#load-curated-content)).
 
@@ -797,29 +824,33 @@ Claude Desktop did not work reliably. Do it from the CLI.
 
 ### What is exposed
 
-The evaluator exposes one reverse proxy (nginx) to the network on purpose, so other machines can
-log in. It serves PS Service and the allowlisted Authentik login paths on one port.
+The evaluator exposes one ingress controller (ingress-nginx) to the network on purpose, so other
+machines can log in. The chart Ingress routes PS Service and the allowlisted Authentik login paths
+through it on one port. PS Service's `/metrics` has no Ingress rule, so the controller answers it
+`404`.
 
 | Listener | Address | Reachable by | What it serves |
 | --- | --- | --- | --- |
-| Proxy over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`) | Anyone who can reach port `30443` of the backend machine. On a shared LAN, everyone on the LAN. | PS Service (REST and MCP) and the allowlisted Authentik login paths |
+| Ingress controller over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`) | Anyone who can reach port `30443` of the backend machine. On a shared LAN, everyone on the LAN. | PS Service (REST and MCP) and the allowlisted Authentik login paths |
 | Authentik | ClusterIP only | Pods in the cluster only | The deploy script reaches its API through a loopback `kubectl port-forward` |
-| PS Service | ClusterIP only | Pods in the cluster, and clients through the proxy | The REST API and the MCP endpoint |
+| PS Service | ClusterIP only | Pods in the cluster, and clients through the ingress controller | The REST API and the MCP endpoint |
 | FalkorDB Browser | `127.0.0.1:3001` | The backend machine only | The graph explorer UI. Authentik does not protect it. |
 | FalkorDB (Redis) | ClusterIP only | Pods in the cluster only | The graph database |
 
 To reach the Authentik admin UI, see [Operations Guide: Reaching the Authentik admin UI
 (evaluator)](./operations-guide.md#reaching-the-authentik-admin-ui-evaluator). The admin UI is not
-served through the proxy.
+routed by the Ingress. It is reached by port-forward only.
 
 To limit access to your own machine, block port `30443` from the LAN with the host firewall.
 
-**Transport and accepted risks.** The proxy accepts TLS 1.2 and TLS 1.3 only, every listener
-speaks TLS, and plain HTTP to port `30443` gets an nginx error page, never an API response. It
-sets `Secure` and `SameSite=Lax` on every cookie it relays and adds `HttpOnly` to all but
-Authentik's CSRF cookie, which the login page reads from JavaScript. A flag the upstream already
-set is not repeated. It sends no HSTS header, because the certificate comes from a local CA. Only
-the proxy pod mounts the private key of the local certificate. These risks remain on a shared LAN:
+**Transport and accepted risks.** The controller serves HTTPS on port `30443` with the local
+certificate in the Secret `policy-system-local-tls`, and answers any path or host the Ingress does
+not list with `404`. Cookies pass through as Authentik sets them; the controller adds no cookie
+flags. The controller sends no HSTS header for this certificate, which comes from a local CA. The
+private key of the certificate is in a Secret that anyone with `kubectl` access to the cluster can
+read. Paths that normalise into an allowlisted path (for example through a percent-encoded dot or
+slash) are forwarded as the normalised path; paths that leave the allowlist get `404`. These risks
+remain on a shared LAN:
 
 - **A rogue host on the LAN.** Anyone who can reach port `30443` can attempt logins and probe the
   allowlisted paths (`charts/policy-system/files/authentik-public-paths.txt`). Every PS Service
@@ -829,6 +860,8 @@ the proxy pod mounts the private key of the local certificate. These risks remai
 - **One shared origin.** PS Service and the Authentik login pages are served from one origin, so a
   script injected into one can read what the other sets for that origin.
 - **MCP and DNS rebinding.** The MCP endpoint is protected by its bearer token alone.
+- **The Authentik admin UI and API are not routed.** They are not in the allowlist, so the Ingress
+  has no rule for them; reaching the admin UI is by port-forward.
 
 **Approval-page names.** The deploy script sets `psService.passkeySigning.allowedOrigins` to
 `https://<hostname>:30443`, where `<hostname>` is the name you pass to `--hostname` (`ps.test` by
@@ -878,14 +911,19 @@ Anyone with `kubectl` access to the cluster can read it. The scripts never print
    (`https://<hostname>:30443/auth/application/o/ps-cli/`) and the bootstrap owner together. The
    bootstrap owner is the owner's email as `sub`, with that issuer. There is no second deployment.
    The script runs the upgrade again only when its values change.
-6. It waits until Authentik, the proxy and PS Service are Ready. The script then checks from inside
-   the PS Service pod that the issuer's OIDC discovery document can be fetched through the proxy.
+6. It waits until Authentik, the ingress controller and PS Service are Ready. The script then checks
+   from inside the PS Service pod that the issuer's OIDC discovery document can be fetched through
+   the ingress.
    Last, it checks from this machine, through port `30443` and verifying the CA, that `/health`
    answers, that the discovery document reports exactly the issuer the release was given, and that a
    request to `/mcp/` without a bearer token is refused with `401`.
 7. It creates the owner as an Authentik administrator. The username and email are the address you
    gave. **No password is set, prompted for, or logged.** It prints a single-use, time-limited link
    to register a passkey.
+
+An evaluator that ran the older reverse proxy keeps its cluster: run
+`kubectl apply -f deploy/kind/ingress-nginx.yaml` once, then the deploy script. The script deletes
+the old proxy Service, which held port `30443`, and its Helm upgrade removes the proxy workload.
 
 The hostname is `ps.test` by default. The script rejects any `--hostname` that ends in `.local`,
 because Claude Code cannot resolve `.local` names. The hostname is also the issuer and the WebAuthn

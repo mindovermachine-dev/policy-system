@@ -1553,7 +1553,7 @@ None — shared infrastructure utility.
 
 **Implementation Guidance:**
 - Instruments are created only through the OpenTelemetry Metrics API from one catalog (`METRIC_CATALOG`), so a second metric reader (for example an OTLP push exporter) can be added without touching a call site. `exposition.py` is the single module that imports `prometheus_client`; it only renders the scrape body from a private registry (the OpenTelemetry Prometheus exporter has no text renderer).
-- `/metrics` is anonymous and exempt from the startup replay gate and from REST authentication, like `/health` and `/ready`. The chart proxy returns 403 for it; it is reachable in-cluster only.
+- `/metrics` is anonymous and exempt from the startup replay gate and from REST authentication, like `/health` and `/ready`. The chart ingress has no route for it; it is reachable in-cluster only.
 - Labels are content-free: the route label is a route template or the fixed `__unmatched__`, a method outside the standard set is `_OTHER`, the dependency gauge carries only `gating`, the pending-entries gauge is one total. Nothing that anonymous `/ready` withholds is exposed.
 - Metric data sources are read-only and bounded. The dependency gauge reads the Dependency Health registry (no probe). The pending-entries total is read from PS state Postgres on its own short-lived connection with a 2 s connect timeout and a 2 s statement timeout, behind a 15 s cache and a 5 s deadline; a source that fails or exceeds its deadline is omitted from that scrape and the others are still served. A scrape never changes a dependency's recorded health.
 - The metrics middleware is the outermost HTTP middleware, so replay-gate 503s and authentication 401s are counted. The ingestion outcome is recorded by MCP Interface through a process slot once, by the call that wrote the terminal run row.
@@ -1580,7 +1580,7 @@ None — shared infrastructure utility.
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
 | CollectMetrics | Gather the current value of every registered metric for one scrape | No (internal call) | n/a | The app built its metrics handle | Every metric whose source answered is included | Reads the Dependency Health registry; may read PS state Postgres once per cache window | PS state Postgres (read-only, bounded) | At most 5 s (the source deadline); typically < 50ms | Yes | A failing or slow source is logged once with its error class and omitted; never raised to the scraper |
-| ExposeMetrics | Serve the Prometheus text exposition at `GET /metrics` | No — anonymous by decision; exempt from authentication and the replay gate; in-cluster only (denied at the chart proxy) | n/a | None | `200` with the exposition body, also while the graph replay is running | None | None | At most 5 s (see CollectMetrics) | Yes | Never raises: a failed metric source is omitted and the response stays `200` |
+| ExposeMetrics | Serve the Prometheus text exposition at `GET /metrics` | No — anonymous by decision; exempt from authentication and the replay gate; in-cluster only (denied at the chart ingress) | n/a | None | `200` with the exposition body, also while the graph replay is running | None | None | At most 5 s (see CollectMetrics) | Yes | Never raises: a failed metric source is omitted and the response stays `200` |
 
 ---
 

@@ -21,9 +21,9 @@ def test_the_shared_file_lists_the_paths() -> None:
     assert len(_defined_paths()) >= 1
 
 
-def test_the_evaluator_proxy_template_reads_the_shared_file() -> None:
-    helpers = (CHART_DIR / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
-    assert f'.Files.Lines "{PATHS_FILE_RELATIVE}"' in helpers
+def test_the_authentik_ingress_template_reads_the_shared_file() -> None:
+    template = (CHART_DIR / "templates" / "ingress-authentik.yaml").read_text(encoding="utf-8")
+    assert f'"file" "{PATHS_FILE_RELATIVE}"' in template
 
 
 def test_the_production_script_reads_the_shared_file() -> None:

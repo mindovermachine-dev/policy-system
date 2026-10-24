@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 _GUIDE = Path(__file__).resolve().parents[3] / "docs" / "artifacts" / "operations-guide.md"
 _EXPOSURE_PHRASES = (
     "in-cluster only",
-    "the chart proxy returns 403",
+    "the chart ingress has no route for it",
     "deny `/metrics` on any ingress",
     "do not expose the service with nodeport",
     "anonymous",

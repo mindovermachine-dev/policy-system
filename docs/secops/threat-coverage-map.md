@@ -14,7 +14,7 @@ everything."
 ## Assets & trust boundaries (from `charts/policy-system`)
 
 - **ps-service** — serves the **REST API and the Streamable-HTTP MCP endpoint on the same host:port**
-  (ClusterIP; the evaluator reaches it through the proxy on port `30443`). Auth = **IdP-agnostic OIDC bearer tokens** applied via middleware
+  (ClusterIP; the evaluator reaches it through the ingress controller on port `30443`). Auth = **IdP-agnostic OIDC bearer tokens** applied via middleware
   (`ps_service/auth/` — `verifier`, `middleware`, `discovery`, `protected_resource`, `startup`, `models`, `errors`).
 - **FalkorDB** — graph store (deployment + `falkordb-service`). **We expose** a FalkorDB **browser
   UI on NodePort `30300`** (`falkordb-browser-service.yaml`).

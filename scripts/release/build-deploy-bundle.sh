@@ -17,6 +17,7 @@ readonly USAGE
 readonly BUNDLE_DIR="policy-system-deploy"
 readonly BUNDLE_FILES=(
   deploy/kind/cluster.yaml
+  deploy/kind/ingress-nginx.yaml
   scripts/deploy-llm.sh
   scripts/llm-defaults.conf
   scripts/sync-llm-secrets-to-kind.sh
