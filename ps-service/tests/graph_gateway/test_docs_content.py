@@ -1813,3 +1813,24 @@ def test_each_cleanup_tool_function_is_defined_in_exactly_one_module() -> None:
     ]
 
     assert len(owners) == len(_CLEANUP_TOOL_FUNCTIONS)
+
+
+def test_operations_guide_documents_the_scheduled_restore_verification_job() -> None:
+    section = _section(_read(_OPS), "### Verify a restore in a throwaway kind cluster")
+
+    for needle in (
+        "backup-restore-e2e.yml",
+        "workflow_dispatch",
+        "gh workflow run backup-restore-e2e.yml",
+        "-f skip_restore=true",
+        "e2e-diagnostics",
+        "never uploaded",
+        "kind-registry:5000",
+        "KUBECONFIG",
+        "stub OIDC issuer",
+        "45 minutes",
+    ):
+        assert needle in section, needle
+    assert re.search(r"destroys the volumes of the cluster it targets", section)
+    assert "--allow-context" in section
+    assert re.search(r"never\s+(?:pass\s+)?`?--allow-context", section)

@@ -709,3 +709,9 @@ def on_main_workflow() -> WorkflowFile:
 def pr_to_ready_workflow() -> WorkflowFile:
     """`.github/workflows/pr-to-ready.yml`, parsed."""
     return load_workflow("pr-to-ready.yml")
+
+
+@pytest.fixture
+def backup_restore_e2e_workflow() -> WorkflowFile:
+    """`.github/workflows/backup-restore-e2e.yml`, parsed."""
+    return load_workflow("backup-restore-e2e.yml")

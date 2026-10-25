@@ -1,0 +1,239 @@
+name: Backup restore e2e
+
+# Runs scripts/verify-backup-restore.sh end to end (seed, back up, wipe the volumes, restore,
+# compare) against a kind cluster this job creates and deletes. Not a release gate: it is slow
+# and depends on external networks.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      skip_restore:
+        description: Leave the wiped volumes unrestored; the run must fail on the comparison
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Queue rather than cancel: a run cancelled between the wipe and the restore proves nothing.
+concurrency:
+  group: backup-restore-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: Verify a restore in a throwaway kind cluster
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      E2E_OUT: /tmp/backup-restore-e2e/out
+      E2E_LOG: /tmp/backup-restore-e2e/e2e.log
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.12.4"
+
+      - name: Set up helm
+        uses: azure/setup-helm@v4.3.1
+        with:
+          version: v3.18.4
+
+      # The registry is reachable as kind-registry:5000 from the runner and from the nodes; the
+      # chart pins imagePullPolicy: Always, so images must come from a registry, not kind load.
+      # Port 5000 on purpose: registry v3 serves its debug endpoint on 5001 and exits when the
+      # API is told to listen there too.
+      - name: Create the kind cluster and local registry
+        uses: helm/kind-action@v1.15.1
+        with:
+          version: v0.33.0
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+          kubectl_version: v1.37.1
+          cluster_name: backup-restore-e2e
+          wait: 180s
+          registry: true
+          registry_name: kind-registry
+          registry_port: 5000
+          registry_image: registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
+
+      - name: Show the cluster nodes
+        run: kubectl get nodes -o wide
+
+      # network=host lets the build container reach kind-registry on the runner's loopback; the
+      # registry speaks plain HTTP, which BuildKit only accepts when told so.
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v4.4.1
+        with:
+          driver-opts: network=host
+          buildkitd-config-inline: |
+            [registry."kind-registry:5000"]
+              http = true
+              insecure = true
+
+      - name: Build and push the ps-service image
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          push: true
+          tags: kind-registry:5000/ps-service:${{ github.sha }}
+          cache-from: type=gha,scope=backup-restore-e2e
+          cache-to: type=gha,mode=max,scope=backup-restore-e2e
+
+      # PS Service refuses to start with the local-test bypass on the container's non-loopback
+      # bind, so the release runs with real authentication against a stub issuer: a static OIDC
+      # discovery document served by the built image. Nothing here validates a token; the
+      # verifier works through the pod and never calls an authenticated endpoint.
+      - name: Start a stub OIDC issuer
+        run: |
+          kubectl create configmap oidc-stub-files \
+            --from-literal=openid-configuration='{"issuer":"http://oidc-stub.default.svc:8080","jwks_uri":"http://oidc-stub.default.svc:8080/jwks","id_token_signing_alg_values_supported":["RS256"]}' \
+            --from-literal=jwks='{"keys":[]}'
+          kubectl apply -f - <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: oidc-stub
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: oidc-stub
+            template:
+              metadata:
+                labels:
+                  app: oidc-stub
+              spec:
+                containers:
+                  - name: stub
+                    image: kind-registry:5000/ps-service:${{ github.sha }}
+                    command:
+                      - sh
+                      - -c
+                      - >-
+                        mkdir -p /tmp/s/.well-known &&
+                        cp /files/openid-configuration /tmp/s/.well-known/ &&
+                        cp /files/jwks /tmp/s/jwks &&
+                        cd /tmp/s && python -m http.server 8080
+                    volumeMounts:
+                      - name: files
+                        mountPath: /files
+                volumes:
+                  - name: files
+                    configMap:
+                      name: oidc-stub-files
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: oidc-stub
+          spec:
+            selector:
+              app: oidc-stub
+            ports:
+              - port: 8080
+          EOF
+          kubectl rollout status deployment/oidc-stub --timeout=180s
+
+      - name: Add the chart dependency repository
+        run: helm repo add authentik https://charts.goauthentik.io
+
+      - name: Build the chart dependencies
+        run: helm dependency build charts/policy-system
+
+      # The verifier hardcodes release policy-system in the default namespace. Seeding restores
+      # curated instruments and calls no LLM, so the LLM values only satisfy chart validation;
+      # the auth values point at the stub issuer.
+      - name: Install the chart
+        run: |
+          helm install policy-system charts/policy-system \
+            --set psService.image.repository=kind-registry:5000/ps-service \
+            --set psService.image.tag="$GITHUB_SHA" \
+            --set psService.auth.issuer=http://oidc-stub.default.svc:8080 \
+            --set psService.auth.audience=backup-restore-e2e \
+            --set psService.authzBootstrapOwner.subject=backup-restore-e2e \
+            --set psService.authzBootstrapOwner.issuer=http://oidc-stub.default.svc:8080 \
+            --set psService.publicUrl=https://ps.invalid \
+            --set authentik.enabled=false \
+            --set llm.azure.apiKey=dummy-not-a-credential \
+            --set llm.azure.apiBase=https://llm.invalid \
+            --wait --wait-for-jobs --timeout 15m
+
+      - name: Wait for all pods Ready
+        run: kubectl wait --for=condition=Ready pod --all --field-selector=status.phase!=Succeeded --timeout=300s
+
+      # The state-provision Job pod carries a different component label than ps-service, so
+      # select both.
+      - name: Assert the pods run the built image
+        env:
+          EXPECTED: kind-registry:5000/ps-service:${{ github.sha }}
+        run: |
+          images="$(kubectl get pods \
+            -l 'app.kubernetes.io/component in (ps-service,ps-state-provision)' \
+            -o jsonpath='{range .items[*]}{range .spec.initContainers[*]}{.image}{"\n"}{end}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' | sort -u)"
+          if [ "$images" != "$EXPECTED" ]; then
+            echo "unexpected images: $images" >&2
+            exit 1
+          fi
+
+      - name: Wait for ps-service to report ready
+        run: scripts/verify-backup-restore.sh wait-ready
+
+      # The context guard of the verifier accepts only kind-* contexts, and e2e wipes the volumes
+      # of the cluster it targets, so --allow-context is never passed. The dispatch input reaches
+      # bash through the environment only.
+      - name: Retain the generated secrets
+        run: scripts/verify-backup-restore.sh retain-secrets --chart charts/policy-system
+
+      - name: Run the verifier end to end
+        id: e2e
+        shell: bash
+        env:
+          SKIP_RESTORE: ${{ inputs.skip_restore }}
+        run: |
+          mkdir -p "$(dirname "$E2E_LOG")"
+          args=(e2e --yes --chart charts/policy-system --out-dir "$E2E_OUT")
+          if [ "$SKIP_RESTORE" = "true" ]; then
+            args+=(--skip-restore)
+          fi
+          scripts/verify-backup-restore.sh "${args[@]}" 2>&1 | tee "$E2E_LOG"
+          grep -E '^event=e2e_verified .* graphs=[1-9][0-9]*$' "$E2E_LOG"
+
+      # Only named files are collected: the backup tar in E2E_OUT holds password hashes and
+      # must never leave the runner. Each collection command tolerates failure so a partial
+      # cluster still yields what it can.
+      - name: Collect diagnostics
+        if: always() && steps.e2e.outcome != 'success'
+        run: |
+          dest="$RUNNER_TEMP/diagnostics"
+          mkdir -p "$dest/pods"
+          for name in digests-before.json digests-after.json; do
+            cp "$E2E_OUT/$name" "$dest/" || true
+          done
+          cp "$E2E_LOG" "$dest/" || true
+          for pod in $(kubectl get pods -o name || true); do
+            kubectl logs "$pod" --all-containers --prefix > "$dest/pods/${pod#pod/}.log" || true
+            kubectl logs "$pod" --all-containers --prefix --previous >> "$dest/pods/${pod#pod/}.log" || true
+          done
+          kubectl get pods,events -o wide > "$dest/cluster.txt" || true
+          helm status policy-system > "$dest/helm-status.txt" || true
+          helm get values policy-system > "$dest/helm-values.txt" || true
+
+      - name: Upload diagnostics
+        if: always() && steps.e2e.outcome != 'success'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: e2e-diagnostics
+          path: ${{ runner.temp }}/diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Delete the kind cluster
+        if: always()
+        run: kind delete cluster --name backup-restore-e2e

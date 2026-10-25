@@ -1528,6 +1528,119 @@ keep the version the release runs. The final line logs the row count of every ta
 `ps_state` and `ps_signing` (`event=counts phase=restored`), keyed
 `<database>.<schema>.<table>` as in [Backup](#backup).
 
+### Verify a restore in a throwaway kind cluster
+
+The workflow `.github/workflows/backup-restore-e2e.yml` runs `scripts/verify-backup-restore.sh e2e`
+against a kind cluster that it creates and deletes. It runs on a weekly schedule (Mondays, 03:17
+UTC) and on `workflow_dispatch`, and nothing else triggers it. It is not a release gate: a red run
+is a signal to investigate, and it blocks nothing. GitHub runs scheduled workflows only from the
+default branch and disables them after 60 days without repository activity.
+
+The job builds the `ps-service` image, pushes it to a registry inside the runner, installs the
+chart from the checked-out tree, waits until every pod is Ready and runs the image it built,
+retains the generated secrets, and then runs `e2e --yes`. It passes only when the log has an
+`event=e2e_verified` line with at least one graph. The job times out at 45 minutes. The run
+installs the release with real authentication against a stub OIDC issuer (a static discovery
+document served from the built image), not with the local test bypass: PS Service refuses to
+start with the bypass on the container's non-loopback bind. The stub validates no token; the
+verifier works through the pod and calls no authenticated endpoint.
+
+To run it by hand:
+
+```bash
+gh workflow run backup-restore-e2e.yml --ref main
+gh workflow run backup-restore-e2e.yml --ref main -f skip_restore=true
+```
+
+The second form is the negative control: it leaves the wiped volumes unrestored, so the run must
+fail on the comparison with `event=e2e_failed`. A negative control that goes green means the check
+cannot fail.
+
+When a run fails, the artifact `e2e-diagnostics` (kept 14 days) holds `digests-before.json`,
+`digests-after.json`, the verifier log, one log file per pod, the pods and events, and the
+`helm status` and `helm get values` output. The backup tar is never uploaded, because it holds
+password hashes; it stays on the runner.
+
+> **Warning:** `e2e` destroys the volumes of the cluster it targets: it wipes the PS Postgres and
+> FalkorDB data. Run it only against a cluster created for the purpose. The script accepts only
+> `kind-*` contexts; never pass `--allow-context` for this procedure, and give the cluster its own
+> kubeconfig so no other context is reachable.
+
+To reproduce a run on your own machine (Docker, `kind`, `kubectl`, `helm` and `uv` installed):
+
+1. Create the cluster with an isolated kubeconfig, and a registry on the `kind` network that the
+   nodes and your machine both reach as `kind-registry:5000`.
+
+   ```bash
+   export KUBECONFIG="$(mktemp -d)/kubeconfig"
+   kind create cluster --name backup-restore-e2e --wait 180s
+   docker run -d --restart=always --name kind-registry --network kind \
+     -p 127.0.0.1:5000:5000 registry:3.1.2
+   for node in $(kind get nodes --name backup-restore-e2e); do
+     docker exec "$node" mkdir -p /etc/containerd/certs.d/kind-registry:5000
+     printf '[host."http://kind-registry:5000"]\n' |
+       docker exec -i "$node" tee /etc/containerd/certs.d/kind-registry:5000/hosts.toml >/dev/null
+   done
+   echo "127.0.0.1 kind-registry" | sudo tee -a /etc/hosts
+   ```
+
+   The registry must listen on port 5000: the registry image serves its debug endpoint on 5001.
+
+2. Build and push the image under the tag the chart will pull. The chart pins
+   `imagePullPolicy: Always`, so `kind load` is not enough.
+
+   ```bash
+   docker build -t kind-registry:5000/ps-service:local .
+   docker push kind-registry:5000/ps-service:local
+   ```
+
+   Docker accepts the plain-HTTP push because `kind-registry` resolves to loopback.
+
+3. Start the stub OIDC issuer: create the `oidc-stub-files` ConfigMap, the `oidc-stub`
+   Deployment and the `oidc-stub` Service exactly as the step "Start a stub OIDC issuer" of the
+   workflow does, with the image `kind-registry:5000/ps-service:local`, and wait for the rollout.
+
+4. Install the chart. The verifier expects the release `policy-system` in the `default`
+   namespace.
+
+   ```bash
+   helm repo add authentik https://charts.goauthentik.io
+   helm dependency build charts/policy-system
+   helm install policy-system charts/policy-system \
+     --set psService.image.repository=kind-registry:5000/ps-service \
+     --set psService.image.tag=local \
+     --set psService.auth.issuer=http://oidc-stub.default.svc:8080 \
+     --set psService.auth.audience=backup-restore-e2e \
+     --set psService.authzBootstrapOwner.subject=backup-restore-e2e \
+     --set psService.authzBootstrapOwner.issuer=http://oidc-stub.default.svc:8080 \
+     --set psService.publicUrl=https://ps.invalid \
+     --set authentik.enabled=false \
+     --set llm.azure.apiKey=dummy-not-a-credential \
+     --set llm.azure.apiBase=https://llm.invalid \
+     --wait --wait-for-jobs --timeout 15m
+   ```
+
+5. Wait for readiness, retain the generated secrets, and run the verifier. The `--out-dir`
+   receives the backup tar and the two digest files; delete it afterwards.
+
+   ```bash
+   scripts/verify-backup-restore.sh wait-ready
+   scripts/verify-backup-restore.sh retain-secrets --chart charts/policy-system
+   scripts/verify-backup-restore.sh e2e --yes --chart charts/policy-system --out-dir ./e2e-out
+   ```
+
+   Add `--skip-restore` to the last command for the negative control.
+
+6. Delete everything you created.
+
+   ```bash
+   kind delete cluster --name backup-restore-e2e
+   docker rm -f kind-registry
+   rm -rf ./e2e-out
+   ```
+
+   Remove the `kind-registry` line from `/etc/hosts` and unset `KUBECONFIG`.
+
 ### Restore by hand
 
 1. Stop PS Service, FalkorDB and PS Postgres, and wait until their pods are gone:
