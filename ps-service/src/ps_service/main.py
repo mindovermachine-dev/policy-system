@@ -1,6 +1,7 @@
 """PS Service process harness and composition root: the FastAPI app.
 
-Owns liveness and readiness (`/health`, `/ready`) and builds the one ASGI app (`create_app`)
+Owns the in-cluster liveness and readiness probes (`/livez`, `/readyz`), publishes the recorded
+readiness the REST `/status` handler reports, and builds the one ASGI app (`create_app`)
 that serves the `ps_service.api` REST router, the companion-browser signing-ceremony router
 (`ps_service.passkey_signing.router`) and the MCP Interface Streamable HTTP transport
 (`ps_service.mcp_interface.http_transport`) on one process and one port. Those are the
@@ -18,8 +19,7 @@ import functools
 import threading
 import time
 from contextlib import asynccontextmanager
-from importlib.metadata import version as installed_version
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
 
 import uvicorn
 from fastapi import FastAPI, status
@@ -113,7 +113,6 @@ from ps_service.state_migrations import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
-    from typing import Any
 
     import psycopg
     from psycopg.rows import TupleRow
@@ -189,8 +188,7 @@ class _MaxBodySizeMiddleware:
         await self._app(scope, receive, send)
 
 
-_BEARER_PREFIX = "Bearer "
-_REPLAY_GATE_EXEMPT_PATHS = frozenset({"/health", "/ready", "/metrics"})
+_REPLAY_GATE_EXEMPT_PATHS = frozenset({"/livez", "/readyz", "/status", "/metrics"})
 _REPLAY_GATE_EXEMPT_PREFIX = "/.well-known/"
 _REPLAY_GATE_RETRY_AFTER_SECONDS = "5"
 
@@ -199,8 +197,9 @@ class _ReplayReadGateMiddleware:
     """Pure ASGI middleware that serves nothing graph-related while the startup replay runs.
 
     While `graph_replay` is unhealthy a graph may be empty or half rebuilt, so any request that
-    could read it gets `503` with the status-only `/ready` body. Exempt: `/health`, `/ready`,
-    `/metrics` and the `/.well-known/` metadata, the only paths that are unauthenticated and
+    could read it gets `503` with the status-only `/readyz` body. Exempt: `/livez`, `/readyz`,
+    `/status`, `/metrics` and the `/.well-known/` metadata, the only paths that are
+    unauthenticated (or, for `/status`, verify an optional token in their own handler) and
     graph-free. It is the outermost layer, so it runs before authentication: a caller who is not
     authenticated learns nothing beyond "not ready". A dependency that was never recorded counts
     healthy, so a service without a replay is never gated. Only HTTP scopes are looked at.
@@ -253,9 +252,9 @@ _READY_DEPENDENCIES = (
     GRAPH_REPLAY,
 )
 
-# Which of `_READY_DEPENDENCIES` gate `/ready`'s overall status, as opposed to only being named in
+# Which of `_READY_DEPENDENCIES` gate `/readyz`'s overall status, as opposed to only being named in
 # `unhealthy_dependencies`. FalkorDB and PS state Postgres gate; `_check_dependencies_at_startup`
-# and the `/ready` re-probe (`GatingReprobe`) are written against this set, not against any
+# and the `/readyz` re-probe (`GatingReprobe`) are written against this set, not against any
 # dependency by name, so a future gating dependency (e.g. an identity provider) is added here and
 # inherits both behaviors unchanged.
 # PS state Postgres gates because it backs every privileged read and write (access roles, the
@@ -263,7 +262,7 @@ _READY_DEPENDENCIES = (
 # store must not enter Service rotation -- and a first `helm install` must not report ready
 # before the store is provisioned. Each action's own fail-closed check of the state store stays.
 # Passkey Signing Postgres is deliberately NOT added here: an outage of this optional,
-# pilot-scope instance must never block `/ready` for the rest of the system -- only the one
+# pilot-scope instance must never block `/readyz` for the rest of the system -- only the one
 # gated merge path degrades.
 # Startup replay of the graph mutation log gates as well: until it ends, graphs may be
 # empty or half rebuilt, so the pod must not take traffic. Its state is owned by the replay task
@@ -275,7 +274,7 @@ def _unhealthy_dependency_counts() -> tuple[int, int]:
     """Count unhealthy `_READY_DEPENDENCIES` as `(gating, non_gating)`, for the metrics gauge.
 
     A pure read of the dependency-health registry: it probes nothing and marks nothing, so a
-    scrape cannot change what `/ready` reports. Only counts leave this function, never names.
+    scrape cannot change what `/readyz` reports. Only counts leave this function, never names.
 
     Returns:
         The number of unhealthy gating dependencies and of unhealthy non-gating ones.
@@ -345,7 +344,7 @@ def _all_dependency_probes(
     The startup graph replay has no row: its state belongs to the replay task, not to a probe.
 
     The single source of truth both `_check_dependencies_at_startup` (probes all, unconditionally)
-    and the `/ready` re-probe (which looks a probe up by name and only runs it for an unhealthy
+    and the `/readyz` re-probe (which looks a probe up by name and only runs it for an unhealthy
     member of `_GATING_DEPENDENCIES`) build on, so the two never drift apart on which callable
     answers for which dependency name. Passkey Signing
     Postgres's own probe (`check_passkey_signing_postgres_connectivity`) is a no-op when
@@ -412,7 +411,7 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
 
     Skipped, without a connection attempt, when `config.state_postgres_host` is unset: PS state
     Postgres is optional at config-load time, and an unconfigured store keeps the process up but
-    out of `/ready` (its connectivity probe raises when unconfigured and `STATE_POSTGRES` is a
+    out of `/readyz` (its connectivity probe raises when unconfigured and `STATE_POSTGRES` is a
     gating dependency).
 
     With a host configured, a failure to connect or to apply a migration is FATAL: it is logged
@@ -602,7 +601,7 @@ async def _start_graph_replay_at_startup(
     replay) or the gateway cannot be built (logged with the exception class only; startup goes
     on). Otherwise, before this returns (so before any request is served): every graph is closed
     to writes (`hold_for_startup_replay`), the `graph_replay` dependency is marked unhealthy, which
-    holds `/ready` at `not_ready`, and the replay is started as a task whose completion marks it
+    holds `/readyz` at `not_ready`, and the replay is started as a task whose completion marks it
     healthy again. The replay is blocking, so it runs on a worker thread; startup does not wait
     for it. The ingestion pipelines write through it.
 
@@ -649,7 +648,7 @@ async def _run_startup_replay(gateway: _StartupGateway, drift_interval_seconds: 
     that failed starts no check.
 
     Ending includes graphs that stay closed because their own replay failed: the others are
-    unaffected and `/ready` goes green (the failure is logged and the graph refuses writes with a
+    unaffected and `/readyz` goes green (the failure is logged and the graph refuses writes with a
     typed error). An unexpected exception (infrastructure down, a bug) leaves `graph_replay`
     unhealthy, so the pod stays out of rotation, and is logged with its class only.
 
@@ -694,6 +693,56 @@ def _log_graph_gateway_startup_replay(outcome: str, extra: dict[str, object]) ->
     emit_log_entry(
         component="entrypoint", action="graph_gateway_startup_replay", outcome=outcome, extra=extra
     )
+
+
+def _is_ready(app: FastAPI) -> bool:
+    """Whether the readiness probe reports ready for the state recorded now.
+
+    Reads only `app.state` and the dependency health registry; writes nothing. A complete
+    configuration with every gating dependency healthy counts as ready even before the probe has
+    latched `app.state.ready`, because that latch would set it from the same registry.
+    """
+    may_be_ready = bool(app.state.ready) or bool(app.state.config_complete)
+    return may_be_ready and all_healthy(_GATING_DEPENDENCIES)
+
+
+def _unhealthy_ready_dependencies() -> list[str]:
+    """Every `_READY_DEPENDENCIES` member recorded unhealthy, gating or not, in that order."""
+    return [dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)]
+
+
+class _HarnessReadiness:
+    """The recorded readiness of one app, as the REST `/status` handler reads it."""
+
+    def __init__(self, app: FastAPI) -> None:
+        """Read the readiness of `app`.
+
+        Args:
+            app: The app whose `app.state` and gateway are read.
+        """
+        self._app = app
+
+    def status(self) -> Literal["ready", "not_ready"]:
+        """`"ready"` when the readiness probe would report ready for the recorded state."""
+        return "ready" if _is_ready(self._app) else "not_ready"
+
+    def unhealthy_dependencies(self) -> list[str]:
+        """The tracked dependencies recorded unhealthy, gating or not."""
+        return _unhealthy_ready_dependencies()
+
+    def gated_graphs(self) -> list[str]:
+        """The graphs that refuse writes until an operator acts."""
+        return _gated_graphs(self._app)
+
+
+def _publish_status_sources(app: FastAPI, verifier: PsTokenVerifier | None) -> None:
+    """Publish what the REST `/status` handler reads: the verifier and the recorded readiness.
+
+    Side Effects:
+        Sets `app.state.token_verifier` and `app.state.recorded_readiness`.
+    """
+    app.state.token_verifier = verifier
+    app.state.recorded_readiness = _HarnessReadiness(app)
 
 
 def _gated_graphs(app: FastAPI) -> list[str]:
@@ -886,18 +935,18 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     Returns whether every `_GATING_DEPENDENCIES` member is healthy after the probes -- the only
     outcome that gates `app.state.ready`. Non-gating dependencies (LLM Interface, Cellar/ELI) are
     still probed unconditionally, in the same fixed order, and a failure in either is still
-    logged, but they never affect the return value. `ready()`'s live gate still reports either by
-    name via `unhealthy_dependencies`.
+    logged, but they never affect the return value. The recorded readiness `/status` reports to a
+    verified caller still names either via `unhealthy_dependencies`.
 
     Deliberately never raises: unlike `configure()`'s failures, a dependency outage must never
-    crash the process, only keep it out of `/ready`'s pool. Runs every probe even after an
+    crash the process, only keep it out of `/readyz`'s pool. Runs every probe even after an
     earlier one fails, so a single startup gives the full picture of what is down rather than
     stopping at the first failure.
 
     Each probe also records its outcome in `ps_service.dependency_health`
     (`falkordb_client.check_connectivity_from_config`, `llm_interface.check_connectivity`,
     `cellar_eli.fetch.check_connectivity` all do this themselves). That registry is what
-    `all_healthy(_GATING_DEPENDENCIES)` reads back here and what `/ready` keeps reading after
+    `all_healthy(_GATING_DEPENDENCIES)` reads back here and what `/readyz` keeps reading after
     startup, where a gating dependency that fails later is re-probed on each poll.
 
     Args:
@@ -923,51 +972,36 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     return all_healthy(_GATING_DEPENDENCIES)
 
 
-async def _refresh_and_verify(
-    app: FastAPI,
-    reprobe: GatingReprobe,
-    config: ServiceConfig,
-    request: Request,
-    verifier: PsTokenVerifier | None,
-) -> bool:
-    """Run the `/ready` re-probe and the caller's token check together, under one deadline.
+async def _refresh_readiness(app: FastAPI, reprobe: GatingReprobe, config: ServiceConfig) -> None:
+    """Run the `/readyz` re-probe under its deadline, then latch `app.state.ready` if it may.
 
     The deadline is `config.ready_reprobe_deadline_seconds` from the start of this call, so the
-    whole poll stays bounded however slow a dependency or the token verifier is. The re-probe
-    runs only while `app.state.config_complete` is `True`: missing configuration cannot be cured
-    by a dependency recovering. When the deadline passes first, unfinished work is cancelled (a
-    probe thread keeps running and keeps its slot) and a caller whose token check has not
-    finished is treated as unverified. Afterwards, if `app.state.ready` is `False` and the
+    whole poll stays bounded however slow a dependency is. The re-probe runs only while
+    `app.state.config_complete` is `True`: missing configuration cannot be cured by a dependency
+    recovering. When the deadline passes first, the re-probe is cancelled (a probe thread keeps
+    running and keeps its slot). Afterwards, if `app.state.ready` is `False` and the
     configuration is complete, it is set from the registry. It is never reset to `False`.
 
     Args:
         app: The app whose readiness state is read and, at most, latched `True`.
         reprobe: The re-probe harness for the gating dependencies.
         config: Supplies the deadline.
-        request: The poll, whose bearer token is checked.
-        verifier: The process-wide token verifier, or `None` when the bypass is active.
-
-    Returns:
-        Whether the caller's bearer token verified before the deadline.
 
     Side Effects:
         May start probe threads that call dependencies and update the dependency health registry;
         may set `app.state.ready`.
     """
+    if not app.state.config_complete:
+        return
     loop = asyncio.get_running_loop()
     deadline_at = loop.time() + config.ready_reprobe_deadline_seconds
-    verify = loop.create_task(_is_verified_caller(request, verifier))
-    tasks: set[asyncio.Task[Any]] = {verify}
-    if app.state.config_complete:
-        tasks.add(loop.create_task(reprobe.refresh(deadline_at)))
+    refresh = loop.create_task(reprobe.refresh(deadline_at))
     try:
-        await asyncio.wait(tasks, timeout=max(0.0, deadline_at - loop.time()))
+        await asyncio.wait({refresh}, timeout=max(0.0, deadline_at - loop.time()))
     finally:
-        for task in tasks:
-            task.cancel()
-    if app.state.config_complete and not app.state.ready:
+        refresh.cancel()
+    if not app.state.ready:
         app.state.ready = all_healthy(_GATING_DEPENDENCIES)
-    return verify.done() and not verify.cancelled() and verify.result()
 
 
 def _build_app_metrics(
@@ -1094,31 +1128,6 @@ def _emit_startup_warnings(config: ServiceConfig) -> None:
         )
 
 
-async def _is_verified_caller(request: Request, verifier: PsTokenVerifier | None) -> bool:
-    """Whether `request` carries a bearer token the verifier accepts.
-
-    No header, a non-`Bearer` scheme, an empty token, no verifier (local-test bypass) and a token
-    the verifier rejects all answer `False`; nothing here ever raises or answers 401.
-
-    Args:
-        request: The request whose `Authorization` header is inspected.
-        verifier: The process-wide token verifier, or `None` when the bypass is active.
-
-    Returns:
-        `True` only when a bearer token is present and verifies.
-
-    Side Effects:
-        One verifier call (and its single log line) per request that presents a bearer token.
-    """
-    if verifier is None:
-        return False
-    value = request.headers.get("authorization")
-    if value is None or not value.startswith(_BEARER_PREFIX):
-        return False
-    token = value[len(_BEARER_PREFIX) :].strip()
-    return bool(token) and await verifier.verify_token(token) is not None
-
-
 def _require_complete_startup_config(config: ServiceConfig) -> None:
     """Fail closed on any startup configuration the process cannot run without.
 
@@ -1153,7 +1162,7 @@ def create_app(
     (`/approvals/*`, exempt from bearer authentication because it is gated by its own per-request
     `code` check) are mounted with `app.include_router`, as is the anonymous `GET /metrics`
     scrape route (`ps_service.metrics`), whose `MetricsHandle` is stashed on `app.state.metrics`
-    and shut down with the app. `/health`, `/ready` and the
+    and shut down with the app. The in-cluster probes `/livez`, `/readyz` and the
     `/.well-known/oauth-protected-resource` metadata (RFC 9728, the URL named in
     `RestAuthMiddleware`'s `WWW-Authenticate` header) are registered directly. The metadata route
     is the only one publishing that document: the MCP sub-app leaves its resource server URL
@@ -1183,8 +1192,10 @@ def create_app(
     `PS_PUBLIC_URL` is set. `RestAuthMiddleware`
     is then wired to a `PsTokenVerifier` built from the auth context (or `None` when the bypass
     is active, in which case every request is let through unauthenticated). Every path other than
-    `/health`, `/ready`, `/.well-known/*`, `/mcp*` (gated by the MCP SDK) and `/approvals/*`
-    requires a verified bearer token.
+    `/livez`, `/readyz`, `/status` (whose handler verifies an optional token itself),
+    `/.well-known/*`, `/mcp*` (gated by the MCP SDK) and `/approvals/*` requires a verified
+    bearer token. The verifier and the recorded readiness are published on `app.state` for the
+    REST `/status` handler.
 
     Args:
         config: The resolved service configuration. It is captured by reference for the life of
@@ -1238,14 +1249,14 @@ def create_app(
         and logged on failure, but neither outcome affects this flag: a transient outage at boot
         must not wedge readiness for the rest of the process's life. Unlike `configure()`, neither
         a dependency failure nor incomplete config propagates here: each only keeps this instance
-        out of `/ready`'s pool, so an outage or an incomplete deploy never crash-loops an
+        out of `/readyz`'s pool, so an outage or an incomplete deploy never crash-loops an
         otherwise-healthy process.
 
         Missing config is checked once here, not folded into `dependency_health`'s live-updating
         registry: `config` is a frozen `ServiceConfig` resolved once by `load_config()`, so unlike
         dependency reachability it cannot change or recover for the life of this process. Its
         result is stashed on `app.state.config_complete` (not only folded into the
-        `app.state.ready` assignment) because `ready()` reads it again on every retry:
+        `app.state.ready` assignment) because `readyz()` reads it again on every poll:
         `app.state.ready` can flip `True` after this function returns once a gating dependency
         recovers, and `config_complete` being `False` must keep blocking that forever.
 
@@ -1282,7 +1293,7 @@ def create_app(
         _apply_passkey_signing_migrations_at_startup(config)
         _apply_state_migrations_at_startup(config)
         # Marks `graph_replay` unhealthy before anything can read readiness, then replays in the
-        # background: the server starts, `/ready` stays `not_ready` until the replay ends.
+        # background: the server starts, `/readyz` stays `not_ready` until the replay ends.
         app.state.graph_write_gateway, replay_task = await _start_graph_replay_at_startup(config)
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
@@ -1312,8 +1323,10 @@ def create_app(
     # One `PsTokenVerifier` instance per `create_app()` call, never module-level (no import-time
     # side effects) -- this exact instance is what both `RestAuthMiddleware` below and the MCP
     # `token_verifier=` wiring share, so there is one discovery fetch, one `PyJWKClient`, one JWKS
-    # cache per process, never two parallel verifiers.
+    # cache per process, never two parallel verifiers. The REST `/status` handler reads the same
+    # instance through `app.state`.
     verifier = PsTokenVerifier(auth_context) if auth_context is not None else None
+    _publish_status_sources(app, verifier)
     metrics = app.state.metrics = _build_app_metrics(config, pending_entries)
     _add_http_middleware(
         app, verifier, auth_context, config.max_request_body_bytes, metrics, config.public_url
@@ -1325,21 +1338,17 @@ def create_app(
     )
     app.mount(MCP_HTTP_MOUNT_PATH, mcp_asgi_app)
 
-    async def health() -> dict[str, str]:
+    async def livez() -> dict[str, str]:
         """Report liveness: "alive" as soon as the ASGI server accepts connections.
 
         Must never depend on `lifespan` startup progress or check external dependencies -- a
-        dependency outage must never fail liveness. `version` reads this process's own installed
-        distribution metadata (`importlib.metadata.version`): no I/O, no network, no dependency
-        call, so it introduces no liveness risk.
+        dependency outage must never fail liveness. The orchestrator probes it in-cluster; it is
+        not routed through the Ingress, and the client-facing version is served by `/status`.
 
         Returns:
-            `{"status": "alive", "version": <installed ps-service version>}`, always with HTTP 200.
-
-        Raises:
-            PackageNotFoundError: If the `ps-service` distribution is not installed.
+            `{"status": "alive"}`, always with HTTP 200.
         """
-        return {"status": "alive", "version": installed_version("ps-service")}
+        return {"status": "alive"}
 
     reprobe = GatingReprobe(
         dependencies=lambda: _GATING_DEPENDENCIES,
@@ -1348,12 +1357,12 @@ def create_app(
         min_interval_seconds=config.ready_reprobe_min_interval_seconds,
     )
 
-    async def ready(request: Request) -> JSONResponse:
+    async def readyz() -> JSONResponse:
         """Report "ready" only once startup succeeded AND every gating dependency is healthy now.
 
         Two independent gates: `app.state.ready` AND the live `dependency_health` registry's
         `_GATING_DEPENDENCIES` entries (read via `all_healthy`) both have to hold. The live gate is
-        what lets `/ready` flip back to `not_ready` if a gating dependency fails mid-run.
+        what lets `/readyz` flip back to `not_ready` if a gating dependency fails mid-run.
 
         A pod that is not ready receives no traffic, so no real call would ever mark a failed
         dependency healthy again. Every poll therefore re-probes each gating dependency that the
@@ -1376,56 +1385,31 @@ def create_app(
         caught solely by the `all_healthy(_GATING_DEPENDENCIES)` half. LLM Interface and
         Cellar/ELI are deliberately excluded from `_GATING_DEPENDENCIES`: they are still probed at
         startup and tracked live in `dependency_health`, but neither their startup nor live health
-        ever flips `/ready`'s status.
+        ever flips `/readyz`'s status.
 
-        The body depends on who asks. An anonymous caller (no `Authorization: Bearer` header, a
-        token the verifier rejects, or the local-test bypass, which has no verifier) gets only
-        `{"status": ...}`: the dependency and graph names stay private to authenticated callers.
-        This route is exempt from the REST bearer middleware, so a rejected or stale token is
-        never a 401 here; it is simply treated as anonymous and the probe keeps its answer.
-
-        `unhealthy_dependencies` (authenticated callers only) names every currently-unhealthy
-        member of `_READY_DEPENDENCIES`
-        (gating or not) by its `dependency_health` constant string, read directly off the live
-        registry via `is_healthy` -- never the raw error text `mark_unhealthy` stores, which stays
-        private to `dependency_health`. Always present, empty when every dependency is healthy, so
-        callers get one predictable shape rather than two distinguished by key presence. A
-        dependency may appear here even while `status` stays `"ready"`, when it is LLM Interface
-        or Cellar/ELI.
-
-        `gated_graphs` (authenticated callers only) names the graphs that refuse writes until an
-        operator acts: a graph whose replay failed verification, or whose logged entry FalkorDB
-        refuses. Empty when there are none; it never changes the status code, since the other
-        graphs are unaffected.
-
-        Args:
-            request: The incoming request; only its `Authorization` header is read.
+        The body is `{"status": ...}` alone, whoever asks: the `Authorization` header is never
+        read and no token is verified here. The orchestrator probes this route in-cluster; it is
+        not routed through the Ingress. The dependency and graph names reach a verified caller
+        only through the REST `/status` handler, which reads the same recorded readiness.
 
         Returns:
-            A JSON response `{"status": "ready" | "not_ready"}`, plus `"unhealthy_dependencies"`
-            and `"gated_graphs"` lists for a caller whose bearer token verifies. The HTTP status
-            is `200` when ready and `503` when not, so the chart's body-blind `httpGet`
-            `readinessProbe` pulls the pod from Service rotation on a real outage.
+            A JSON response `{"status": "ready" | "not_ready"}`. The HTTP status is `200` when
+            ready and `503` when not, so the chart's body-blind `httpGet` `readinessProbe` pulls
+            the pod from Service rotation on a real outage.
 
         Side Effects:
             Re-probes the gating dependencies that are recorded unhealthy (the probes update the
             dependency health registry) and, while not yet ready, may set `app.state.ready`.
         """
-        is_verified = await _refresh_and_verify(app, reprobe, config, request, verifier)
-        is_ready = app.state.ready and all_healthy(_GATING_DEPENDENCIES)
-        content: dict[str, object] = {"status": "ready" if is_ready else "not_ready"}
-        if is_verified:
-            content["unhealthy_dependencies"] = [
-                dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)
-            ]
-            content["gated_graphs"] = _gated_graphs(app)
+        await _refresh_readiness(app, reprobe, config)
+        is_ready = _is_ready(app)
         return JSONResponse(
             status_code=status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE,
-            content=content,
+            content={"status": "ready" if is_ready else "not_ready"},
         )
 
-    app.add_api_route("/health", health, methods=["GET"])
-    app.add_api_route("/ready", ready, methods=["GET"])
+    app.add_api_route("/livez", livez, methods=["GET"])
+    app.add_api_route("/readyz", readyz, methods=["GET"])
     app.add_api_route(
         "/.well-known/oauth-protected-resource",
         protected_resource_metadata,

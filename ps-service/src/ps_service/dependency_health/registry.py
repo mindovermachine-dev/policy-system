@@ -1,6 +1,6 @@
 """Process-wide registry of whether each external dependency was reachable on its last call.
 
-Purpose: let the readiness endpoint report current reachability of FalkorDB, the LLM
+Purpose: let the readiness probe and `/status` report current reachability of FalkorDB, the LLM
 Interface, Cellar/ELI, the Passkey Signing Postgres, the PS state Postgres and the startup
 graph replay without any extra probing. The module adds no probes of its own; it records the
 outcomes that call sites (graph writes, LLM calls, Cellar/ELI fetches, Postgres connectivity
@@ -13,7 +13,7 @@ rather than by a call site.
 The registry is a process-wide singleton rather than request-scoped application state,
 because most callers (graph writer, LLM Interface, Cellar/ELI adapter) run outside any web
 request and have no application state to write into. The service entry point reads it through
-`all_healthy()` for `/ready` and does not own it.
+`all_healthy()` for `/readyz` and does not own it.
 
 Thread safety: all reads and writes are guarded by one lock.
 """

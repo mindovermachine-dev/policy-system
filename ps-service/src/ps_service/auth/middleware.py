@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from ps_service.auth.models import AuthContext
     from ps_service.auth.verifier import PsTokenVerifier
 
-_EXEMPT_PATHS = frozenset({"/health", "/ready", "/metrics"})
+_EXEMPT_PATHS = frozenset({"/livez", "/readyz", "/status", "/metrics"})
 _EXEMPT_PREFIX = "/.well-known/"
 _MCP_MOUNT_PREFIX = "/mcp"
 _APPROVALS_PREFIX = "/approvals/"
@@ -85,7 +85,8 @@ def _resource_metadata_url(scope: Scope, public_url: str | None) -> str:
 class RestAuthMiddleware:
     """Default-deny ASGI middleware: every non-exempt path requires a verified bearer token.
 
-    Exempt: `/health`, `/ready`, `/metrics` (anonymous by design, in-cluster only), anything under
+    Exempt: `/livez`, `/readyz`, `/metrics` (anonymous by design, in-cluster only), `/status`
+    (anonymous or with an optional token its own handler verifies, never a 401), anything under
     `/.well-known/`, `/approvals/` (the signing ceremony's own capability-URL check) and `/mcp`
     (gated by the MCP SDK with the same verifier).
     For every other HTTP request the bearer token is verified; success binds a `Principal` to

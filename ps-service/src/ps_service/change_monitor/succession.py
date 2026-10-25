@@ -92,7 +92,7 @@ def _execute_query(
     Wraps `redis.exceptions.RedisError` -- the base class every
     connection/timeout error the `falkordb`/`redis-py` stack raises
     subclasses -- into `SuccessionPersistenceError`, records the outage in
-    `ps_service.dependency_health` for `/ready`'s live signal, and
+    `ps_service.dependency_health` for `/readyz`'s live signal, and
     self-heals on the next successful call. Same behaviour as
     `ps_service.ingestion.graph_writer._execute_query`.
     """

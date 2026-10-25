@@ -31,11 +31,11 @@ keys below for you; you only set them by hand when deploying the chart without a
 | `psService.companyMerge.capabilityMergeThreshold` | `0.59` | `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD` — fuzzy-match threshold for company entity merging. Empirically recommended by a labeled precision/recall/F1 sweep, not an undocumented judgment call. |
 | `psService.companyMerge.capabilityReviewThreshold` | `0.43` | `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` — a Capability near miss is raised for review only when its best similarity score is at or above this value; `0.0` raises every one. Must not exceed `capabilityMergeThreshold`. Calibrated with `tools/company-merge/company_merge_similarity_sweep.py` (`--floor 0.43` passes): the lowest labelled true duplicate scores 0.4359, so the default is at or below it, rounded down to 0.01 (GH #349). |
 | `psService.companyMerge.roleReviewThreshold` | `0.80` | `PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD` — a Role near miss (two Roles of one instrument) is raised for review only when its best similarity score is at or above this value; `0.0` raises every pair. Roles are review-only and are never merged automatically, so there is no Role merge threshold. The default is provisional until it is calibrated against a real instrument. |
-| `psService.graphGateway.driftCheckIntervalSeconds` | `3600` | `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS` — seconds between two passes of the Graph Write Gateway's drift check, which compares each graph with the digest checkpointed after its last gateway write and logs an alert (`drift_check`, outcome `failed`, `error_class` `GraphDriftDetected`) if they differ. Internal only: no endpoint, no `/ready` field. `0` turns the check off. |
+| `psService.graphGateway.driftCheckIntervalSeconds` | `3600` | `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS` — seconds between two passes of the Graph Write Gateway's drift check, which compares each graph with the digest checkpointed after its last gateway write and logs an alert (`drift_check`, outcome `failed`, `error_class` `GraphDriftDetected`) if they differ. Internal only: no endpoint, no `/status` field. `0` turns the check off. |
 | `psService.resources.requests.cpu` / `psService.resources.requests.memory` / `psService.resources.limits.cpu` / `psService.resources.limits.memory` | `500m` / `512Mi` / `2` / `2Gi` | CPU and memory requests and limits of the `ps-service` container. An unmeasured starting point; unlike the other workloads it carries a CPU limit, because it predates them (the others are memory-limited only). A container that exceeds its memory limit is `OOMKilled` and restarts. Override the keys individually; there is no opt-out, and setting the whole block to `null` is not supported. |
-| `psService.probes.readiness.timeoutSeconds` / `psService.probes.readiness.periodSeconds` / `psService.probes.readiness.failureThreshold` | `5` / `15` / `5` | Readiness probe of the `ps-service` container (`GET /ready`). A pod that fails it `failureThreshold` times in a row leaves the Service rotation. The same poll drives the `/ready` re-probe of an unhealthy FalkorDB or state Postgres; its deadline (`PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS`, 3 s) must stay below `timeoutSeconds`, and the chart does not expose the two re-probe variables. |
-| `psService.probes.liveness.timeoutSeconds` / `psService.probes.liveness.periodSeconds` / `psService.probes.liveness.failureThreshold` | `5` / `15` / `5` | Liveness probe of the `ps-service` container (`GET /health`). A pod that fails it `failureThreshold` times in a row is restarted. |
-| `psService.probes.startup.timeoutSeconds` / `psService.probes.startup.periodSeconds` | `5` / `10` | Startup probe of the `ps-service` container (`GET /health`); liveness and readiness probes begin once it succeeds. Its failure threshold is derived as `ceil((psService.auth.discoveryRetryBudgetSeconds + 90) / periodSeconds)`, so the window (390 s at the defaults) covers the discovery retry budget plus process boot and one last discovery attempt. |
+| `psService.probes.readiness.timeoutSeconds` / `psService.probes.readiness.periodSeconds` / `psService.probes.readiness.failureThreshold` | `5` / `15` / `5` | Readiness probe of the `ps-service` container (`GET /readyz`, in-cluster only). A pod that fails it `failureThreshold` times in a row leaves the Service rotation. The same poll drives the `/readyz` re-probe of an unhealthy FalkorDB or state Postgres; its deadline (`PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS`, 3 s) must stay below `timeoutSeconds`, and the chart does not expose the two re-probe variables. |
+| `psService.probes.liveness.timeoutSeconds` / `psService.probes.liveness.periodSeconds` / `psService.probes.liveness.failureThreshold` | `5` / `15` / `5` | Liveness probe of the `ps-service` container (`GET /livez`, in-cluster only). A pod that fails it `failureThreshold` times in a row is restarted. |
+| `psService.probes.startup.timeoutSeconds` / `psService.probes.startup.periodSeconds` | `5` / `10` | Startup probe of the `ps-service` container (`GET /livez`); liveness and readiness probes begin once it succeeds. Its failure threshold is derived as `ceil((psService.auth.discoveryRetryBudgetSeconds + 90) / periodSeconds)`, so the window (390 s at the defaults) covers the discovery retry budget plus process boot and one last discovery attempt. |
 | `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass. Off by default and **not used by the evaluator install**: the bypass refuses to bind a non-loopback host and every container image binds `0.0.0.0`, so it cannot start in a container. The evaluator profile runs real OIDC login against the bundled Authentik instead. |
 | `psService.publicUrl` | `""` | `PS_PUBLIC_URL` — the public origin of PS Service, as `https://host[:port]` with no path, query or fragment. PS Service publishes it as `resource` in its `/.well-known/oauth-protected-resource` metadata and in the `resource_metadata` URL of every `401` `WWW-Authenticate` challenge; no request header can change it. Required (render fails naming the value) unless `psService.localTestBypass.enabled=true`. An `http://` origin is accepted only with the bypass on. **Script:** production `https://<hostname>`; evaluator `https://<hostname>:30443`. |
 | `psService.maxRequestBodyBytes` | `104857600` | `PS_SERVICE_MAX_REQUEST_BODY_BYTES` — the largest accepted request body, a positive integer number of bytes (default 100 MiB). A request whose `Content-Length` is larger is answered `413` before its body is read; a non-positive value fails the render. The PS Service Ingress limit (`nginx.ingress.kubernetes.io/proxy-body-size`) is derived from it as 1.5 times the value, rounded up. |
@@ -115,7 +115,7 @@ helm install policy-system ./charts/policy-system \
   --wait
 ```
 
-Without `psService.ollamaHostGatewayIP` set, PS Service cannot reach Ollama. `/ready` still
+Without `psService.ollamaHostGatewayIP` set, PS Service cannot reach Ollama. `/status` still
 reports `"status": "ready"` — readiness depends on FalkorDB, PS state Postgres and the startup graph replay, not on the LLM provider — but an authenticated call lists
 `llm_interface` under `unhealthy_dependencies`, and `ps-cli ingest document` and the
 `ingest-regulation`, `start-ingestion` and `check-regulations` tools stop at their pre-flight check with
@@ -189,7 +189,7 @@ helm install policy-system ./charts/policy-system \
 `psService.ollamaHostGatewayIP` is not needed under Azure — no `hostAliases` entry is
 rendered.
 
-Verify what reached the pod, then check readiness. `/ready`'s `status` reflects FalkorDB,
+Verify what reached the pod, then check readiness. The `status` field of `/status` reflects FalkorDB,
 PS state Postgres and the startup graph replay only, so `helm install --wait` succeeding and `"status": "ready"` do **not**
 prove the Azure credentials or deployment names work. The LLM signal is the
 `unhealthy_dependencies` list in the response to a call with a valid bearer token: at startup PS Service makes one real
@@ -201,10 +201,10 @@ kubectl exec deploy/policy-system-ps-service -- env | grep '^PS_LLMINTERFACE_'
 ```
 
 ```bash
-curl -s https://<hostname>:30443/ready
-# anonymous: {"status":"ready"} (status only, no dependency names)
-curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://<hostname>:30443/ready
-# healthy: {"status":"ready","unhealthy_dependencies":[],"gated_graphs":[]}
+curl -s https://<hostname>:30443/status
+# anonymous: {"status":"ready","version":"<version>"} (status and version, no dependency names)
+curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://<hostname>:30443/status
+# healthy: {"status":"ready","version":"<version>","unhealthy_dependencies":[],"gated_graphs":[]}
 # "llm_interface" listed: wrong key, base URL or deployment name — fix the --set
 # values and `helm upgrade`; the restarted pod re-probes at startup.
 ```

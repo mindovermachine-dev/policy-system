@@ -145,7 +145,7 @@ def apply_discount(total: Decimal, rate: Decimal) -> Decimal:
 
 - REST framework: **FastAPI** — chosen for its native Pydantic integration (already mandated above for REST/MCP request/response payloads), async support matching the rest of `ps-service`, and auto-generated OpenAPI docs.
 - Routing, middleware, and dependency-injection conventions for `ps_service/api/`:
-  - **Routing**: one `APIRouter` per concern, built by a `build_*_router()` factory (no module-level singleton router — mirrors `create_app` being a factory), included via `app.include_router(...)` inside `create_app`. `main.py`'s own `/health`/`/ready` keep `app.add_api_route` — they predate the router and carry no request models.
+  - **Routing**: one `APIRouter` per concern, built by a `build_*_router()` factory (no module-level singleton router — mirrors `create_app` being a factory), included via `app.include_router(...)` inside `create_app`. `main.py`'s own probes `/livez` and `/readyz`, and the `/.well-known/` metadata routes, keep `app.add_api_route`: they are Process Harness and auth plumbing, not client API. The client status endpoint `GET /status` is an ordinary route of the `api` router; it reads the harness's recorded readiness through `app.state`, like every other collaborator.
   - **Config injection**: `create_app` sets `app.state.config = config`; routes depend on `get_service_config(request) -> ServiceConfig`, which returns `request.app.state.config`. No closure over `create_app`, no module global.
   - **Collaborator injection**: the pipeline stage/adapter/graph-opener bundle is a provider dependency (`provide_pipeline_dependencies`) overridden in tests via `app.dependency_overrides` — the idiomatic FastAPI seam, never monkeypatching.
   - **Run-id**: `provide_run_id` is an **`async def` generator** dependency (`with bind_run_context() as run_id: request.state.run_id = run_id; yield run_id`). It must be async, not a sync generator (a sync generator dependency is entered on a worker thread via `run_in_threadpool`, so the `contextvars` binding is lost to the endpoint) and not `BaseHTTPMiddleware` (its `dispatch` runs the endpoint in a separate task the binding does not reach).
@@ -157,10 +157,10 @@ def apply_discount(total: Decimal, rate: Decimal) -> Decimal:
 
 - The `ps-service` entrypoint runs as a FastAPI app served by `uvicorn`, invoked programmatically — no custom `asyncio` signal handling. SIGTERM/SIGINT graceful shutdown is delegated entirely to uvicorn's built-in handling, with `timeout_graceful_shutdown` set explicitly rather than left at its default.
 - Startup and shutdown logic lives in FastAPI's `lifespan` context manager, not the deprecated `@app.on_event(...)` decorators.
-- Health is split into two endpoints, matching the standard liveness/readiness distinction — do not collapse them into one:
-  - `/health` (liveness) — reports "alive" as soon as the ASGI server is accepting connections, independent of startup progress. Must never check external dependencies: a dependency outage should never cause a liveness failure/restart.
-  - `/ready` (readiness) — reports "ready" only once `lifespan`'s startup block completes (today: Logging `configure()` + startup log entry). This is the extension point for future dependency checks (FalkorDB, LLM provider) as components get wired in — the endpoint shape does not change when those checks are added later.
-- Both endpoints are localhost-only and unauthenticated, matching the posture already established for `ps_service/api/` in Open Decisions below.
+- Health is split into two probe endpoints, matching the standard liveness/readiness distinction — do not collapse them into one:
+  - `/livez` (liveness, also the startup probe) — reports "alive" as soon as the ASGI server is accepting connections, independent of startup progress. Must never check external dependencies: a dependency outage should never cause a liveness failure/restart.
+  - `/readyz` (readiness) — reports "ready" only once `lifespan`'s startup block completes (today: Logging `configure()` + startup log entry). This is the extension point for future dependency checks (FalkorDB, LLM provider) as components get wired in — the endpoint shape does not change when those checks are added later.
+- The probes are in-cluster only and unauthenticated; `/status` is the client-facing status surface.
 - Readiness state is process-local (e.g. a module-level flag set inside `lifespan`) — valid under the current single-worker assumption; revisit if `ps_service/api/` ever runs multi-worker (same open item already flagged for Logging's multi-process write safety).
 
 ### Logging Conventions

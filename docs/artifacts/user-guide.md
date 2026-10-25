@@ -578,7 +578,7 @@ Global flags. You can use them before or after any subcommand:
 
 | Command | Arguments | Description |
 | --- | --- | --- |
-| `ps-cli get health` | — | Report the reachability, the health (`/health`), and the readiness (`/ready`) of the configured target. When you are logged in, the report names any unhealthy dependency; without a login it shows the readiness status only. Readiness depends on FalkorDB, PS state Postgres and the startup graph replay. The report also names an unhealthy LLM Interface or Cellar/ELI when there is one. Such a dependency does not by itself make the target not ready. |
+| `ps-cli get health` | — | Report the reachability, the health, and the readiness of the configured target, from one call to its `/status` endpoint. When you are logged in, the report names any unhealthy dependency; without a login it shows the readiness status only. Readiness depends on FalkorDB, PS state Postgres and the startup graph replay. The report also names an unhealthy LLM Interface or Cellar/ELI when there is one. Such a dependency does not by itself make the target not ready. |
 | `ps-cli ingest document <document_path>` | `document_path` — the path of a local `.json` file. `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. Requires `ComplianceOfficer`. |
 | `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (for example `CRA-1.0`). `destination` — an optional local directory. The default is the current directory | Export the baseline, native, and manifest files of an already-ingested instrument to a local destination. |
 | `ps-cli auth login` | — | Log in to the current context with the OIDC device flow (see [Credential storage](#credential-storage)). |
@@ -720,7 +720,7 @@ Policy Lifecycle to approve them.
 
 `ingest document` uses the full pipeline. The PS Service instance that you target
 therefore needs FalkorDB and its LLM interface configured. If a command fails and you do
-not know why, first check the `/ready` endpoint of the instance, for example with `ps-cli get health` while logged in (see
+not know why, first check the `/status` endpoint of the instance, for example with `ps-cli get health` while logged in (see
 [Troubleshooting](#troubleshooting) below).
 
 Know these behaviors of `export instrument`:
@@ -778,7 +778,7 @@ and Windows, `ps-cli` ignores them.
 
 If this does not help, check the health of PS Service. See the [Operations
 Guide: Troubleshooting / FAQ](./operations-guide.md#troubleshooting--faq) for
-`/health` and `/ready`.
+`/status` and the readiness probe.
 
 Note that `ready: ready` does not mean that the LLM Interface or Cellar/ELI are
 healthy. Readiness depends only on FalkorDB, PS state Postgres and the startup graph

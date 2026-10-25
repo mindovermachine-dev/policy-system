@@ -265,7 +265,7 @@ def test_runtime_image_contains_no_test_modules_or_fixtures(
 #
 # `on_semver.yml`'s build job runs this module against the image it just built, and only a
 # green run lets the publish job push. The four tests below are that gate: A proves the service
-# answers, B' pins `/ready`'s exact answer and the exact reason for it, C' proves FalkorDB
+# answers, B' pins `/readyz`'s exact answer and the exact reason for it, C' proves FalkorDB
 # specifically was healthy, and D is C's negative control.
 #
 # `create_app` fails closed without OIDC config, so every container
@@ -278,11 +278,11 @@ def test_runtime_image_contains_no_test_modules_or_fixtures(
 # `test_container_env_sets_ps_service_host_to_all_interfaces`; its
 # published-port-reachability half has no live coverage left in this module.
 #
-# Why `/ready` is asserted `not_ready` and not `ready` (stated once here):
+# Why `/readyz` is asserted `not_ready` and not `ready` (stated once here):
 # `app.state.ready` also requires the Cellar/ELI probe, whose endpoint is a hardcoded module
 # constant (`ingestion/adapters/cellar_eli/fetch.py`) with no configuration seam. A literal
 # `"ready"` would therefore make the release gate depend on a live third-party service. The
-# gate instead asserts `/ready` answers 503 `not_ready` for the exactly-known reason, and
+# gate instead asserts `/readyz` answers 503 `not_ready` for the exactly-known reason, and
 # proves FalkorDB specifically healthy -- which is the half of readiness this image controls.
 
 _FALKORDB_IMAGE = falkordb_image_ref()
@@ -541,7 +541,7 @@ def _start_service(
 
     `REQUIRED_STARTUP_ENV` supplies every env var `create_app` needs unconditionally,
     regardless of the local-test bypass (currently `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`)
-    -- without them the container never reaches a listening `/health` at
+    -- without them the container never reaches a listening `/livez` at
     all. It is the same dict `test_startup_env_parity.py` proves is sufficient, hermetically and
     without Docker, so a future addition to it can never again go unnoticed here.
     """
@@ -574,12 +574,12 @@ def _start_service(
 
 
 def _wait_for_liveness(cli: str, service: _RunningService) -> httpx.Response:
-    """Poll `/health` inside the container until it answers 200, then return the response."""
+    """Poll `/livez` inside the container until it answers 200, then return the response."""
     deadline = time.monotonic() + _LIVENESS_DEADLINE_SECONDS
     last_failure = "no response"
     while time.monotonic() < deadline:
         try:
-            response = _get_from_container(cli, service.name, "/health")
+            response = _get_from_container(cli, service.name, "/livez")
         except httpx.HTTPError as exc:
             last_failure = repr(exc)
         else:
@@ -588,7 +588,7 @@ def _wait_for_liveness(cli: str, service: _RunningService) -> httpx.Response:
             last_failure = f"HTTP {response.status_code}: {response.text}"
         time.sleep(_POLL_INTERVAL_SECONDS)
     pytest.fail(
-        f"{service.name}'s /health never answered {_HTTP_OK} within "
+        f"{service.name}'s /livez never answered {_HTTP_OK} within "
         f"{_LIVENESS_DEADLINE_SECONDS}s (last: {last_failure}):\n"
         f"{_container_logs(cli, service.name)}"
     )
@@ -658,28 +658,29 @@ def smoke_service(
         _remove_container(container_cli, name)
 
 
-def test_health_returns_200_alive(container_cli: str, smoke_service: _RunningService) -> None:
-    """`/health` answers 200 `alive`.
+def test_livez_returns_200_alive(container_cli: str, smoke_service: _RunningService) -> None:
+    """`/livez` answers 200 `alive`, and `/status` reports the built image's version.
 
-    Built-image half: `version` must match `ps-service/pyproject.toml`'s own
+    Built-image half: `/status`'s `version` must match `ps-service/pyproject.toml`'s own
     declared `[project] version` -- the real, non-editable wheel install baked into the image
     carries hatchling-stamped metadata equal to that source-tree value.
     """
-    response = _get_from_container(container_cli, smoke_service.name, "/health")
+    response = _get_from_container(container_cli, smoke_service.name, "/livez")
+    status_response = _get_from_container(container_cli, smoke_service.name, "/status")
 
     assert response.status_code == _HTTP_OK, (
-        f"/health answered {response.status_code}: {response.text}"
+        f"/livez answered {response.status_code}: {response.text}"
     )
     with (_REPO_ROOT / "ps-service/pyproject.toml").open("rb") as pyproject_file:
         expected_version = tomllib.load(pyproject_file)["project"]["version"]
-    assert response.json()["status"] == "alive"
-    assert response.json()["version"] == expected_version
+    assert response.json() == {"status": "alive"}
+    assert status_response.json()["version"] == expected_version
 
 
 def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     container_cli: str, smoke_service: _RunningService
 ) -> None:
-    """`/ready` answers 503 `not_ready`.
+    """`/readyz` answers 503 `not_ready`.
 
     Deterministic, not merely observed: `connectivity.check_connectivity` raises without a
     network call because neither model variable is set, and `missing_ingestion_config_fields`
@@ -691,10 +692,10 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     `test_no_falkordb_startup_warning_is_emitted_when_falkordb_is_reachable` proves the
     reason is not FalkorDB. Each is its own test so a failure names which half broke.
     """
-    response = _get_from_container(container_cli, smoke_service.name, "/ready")
+    response = _get_from_container(container_cli, smoke_service.name, "/readyz")
 
     assert response.status_code == _HTTP_SERVICE_UNAVAILABLE, (
-        f"/ready answered {response.status_code}: {response.text}"
+        f"/readyz answered {response.status_code}: {response.text}"
     )
     assert response.json() == {"status": "not_ready"}
 
@@ -702,7 +703,7 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
 def test_startup_probe_reports_the_llm_interface_dependency_unhealthy(
     container_cli: str, smoke_service: _RunningService
 ) -> None:
-    """The exactly-known reason `/ready` is `not_ready` is the LLM provider.
+    """The exactly-known reason `/readyz` is `not_ready` is the LLM provider.
 
     Fails if the wrong image is under test or if the JSONL sink is missing. `cellar_eli` is
     asserted neither present nor absent: its outcome depends on the runner's egress, and
@@ -739,7 +740,7 @@ def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
 
     `GET /catalog` needs no FalkorDB/LLM
     dependency, so this polls the same way `_wait_for_liveness`
-    polls `/health`, just against `/catalog` instead.
+    polls `/livez`, just against `/catalog` instead.
     """
     deadline = time.monotonic() + _LIVENESS_DEADLINE_SECONDS
     last_failure = "no response"
@@ -1004,7 +1005,7 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
             f"expected both dependencies unhealthy; got {sorted(unhealthy)}"
         )
 
-        response = _get_from_container(container_cli, service.name, "/ready")
+        response = _get_from_container(container_cli, service.name, "/readyz")
         assert response.status_code == _HTTP_SERVICE_UNAVAILABLE
         assert response.json() == {"status": "not_ready"}
     finally:

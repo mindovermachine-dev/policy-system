@@ -396,17 +396,17 @@ tests:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 8000
 
-  - it: readiness probe targets /ready
+  - it: readiness probe targets /readyz
     asserts:
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.path
-          value: /ready
+          value: /readyz
 
-  - it: liveness probe targets /health, never /ready
+  - it: liveness probe targets /livez, never /readyz
     asserts:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.httpGet.path
-          value: /health
+          value: /livez
 
   - it: runs as the non-root uid 10001 baked into the image
     asserts:
@@ -991,11 +991,11 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS")].value
           value: "45"
 
-  - it: startupProbe renders path /health, period 10, timeout 5 and failureThreshold 39 at defaults
+  - it: startupProbe renders path /livez, period 10, timeout 5 and failureThreshold 39 at defaults
     asserts:
       - equal:
           path: spec.template.spec.containers[0].startupProbe.httpGet.path
-          value: /health
+          value: /livez
       - equal:
           path: spec.template.spec.containers[0].startupProbe.httpGet.port
           value: http

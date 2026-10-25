@@ -116,8 +116,8 @@ def test_the_solution_architecture_lists_the_metrics_component_with_the_same_dom
     assert "never through the chart ingress" in solution
 
 
-def test_the_operations_guide_links_ready_and_metrics() -> None:
+def test_the_operations_guide_links_status_and_metrics() -> None:
     guide = (DOCS / "artifacts" / "operations-guide.md").read_text(encoding="utf-8")
-    ready = guide[guide.index("### What `/ready` reveals") : guide.index("### Metrics")]
+    status = guide[guide.index("### What `/status` reveals") : guide.index("### Metrics")]
 
-    assert "[Metrics](#metrics)" in ready
+    assert "[Metrics](#metrics)" in status

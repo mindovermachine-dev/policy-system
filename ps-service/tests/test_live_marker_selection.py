@@ -5,7 +5,7 @@
 FalkorDB and an LLM provider carries those markers (the repo convention: every external service a
 test needs is a marker on it, e.g. `cellar_live` + `falkordb_live`) and is selected by the
 conjunction, not by `postgres_live` alone. The real-socket startup test spawns the whole service,
-so `/ready` 200 needs state Postgres (provisioned through a fixture), FalkorDB and the LLM
+so `/readyz` 200 needs state Postgres (provisioned through a fixture), FalkorDB and the LLM
 Interface; it must not ride on the `postgres_live` marker.
 
 Placement: asserts facts about test selection, like `test_upgrade_scripts_wait_for_jobs.py`.

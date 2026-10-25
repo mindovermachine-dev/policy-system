@@ -42,7 +42,7 @@
 #         extract the artifact into `pgdata` and empty the FalkorDB volume from one helper pod;
 #         start PS Postgres and FalkorDB; `helm upgrade --reset-then-reuse-values --wait
 #         --wait-for-jobs` (runs the new provisioning Job); verify the Job and the Postgres logs
-#         (verify-provision); start ps-service and wait for `/ready` (wait-ready); log the counts.
+#         (verify-provision); start ps-service and wait for `/status` (wait-ready); log the counts.
 #         It refuses unless the three credentials Secrets are retained (psPostgres.admin,
 #         state and signing `existingSecret` set on the release and the Secrets present), the
 #         artifact is a readable tar, and the operator types "yes" (or passes --yes).
@@ -54,8 +54,8 @@
 #         script runs only on an empty data directory, so its line means the restore did not
 #         keep the restored data).
 # wait-ready
-#         Polls `/ready` inside the ps-service pod until it answers 200 with status ready; logs
-#         each 503 on the way. PS_READY_TOKEN (optional, an access token read from the
+#         Polls `/status` inside the ps-service pod until it answers 200 with status ready; logs
+#         each other answer on the way. PS_READY_TOKEN (optional, an access token read from the
 #         environment and handed to the pod on stdin) is sent as a Bearer header and then also
 #         requires an empty `gated_graphs`; without it the reply is status only, the gated check
 #         is skipped and `gated_graphs=unchecked` is logged. restore and e2e wait the same way
@@ -358,17 +358,18 @@ run_verify_provision() {
   verify_provision
 }
 
-# ready_probe prints "<http code> <body>" from /ready inside the ps-service pod, or nothing while
-# the pod cannot be reached (starting). Exec is used because a pod that is not Ready is not in the
+# status_probe prints "<http code> <body>" from /status inside the ps-service pod, or nothing while
+# the pod cannot be reached (starting). The body carries the readiness `status` and, for a
+# verified caller, `gated_graphs`; wait_ready reads both from it. Exec is used because a pod that is not Ready is not in the
 # Service endpoints, and that is exactly the state that is observed.
 # PS_READY_TOKEN, when set, reaches the pod on stdin (never as an argument or in a log line) and is
 # sent as a Bearer header, which is what makes PS Service include `gated_graphs` in the reply.
-ready_probe() {
+status_probe() {
   printf '%s' "${PS_READY_TOKEN:-}" | kubectl exec -i "$SERVICE_DEPLOYMENT" -- python -c '
 import sys, urllib.request, urllib.error
 token = sys.stdin.read().strip()
 headers = {"Authorization": "Bearer " + token} if token else {}
-request = urllib.request.Request("http://127.0.0.1:8000/ready", headers=headers)
+request = urllib.request.Request("http://127.0.0.1:8000/status", headers=headers)
 try:
     response = urllib.request.urlopen(request, timeout=5)
     print(response.status, response.read().decode())
@@ -392,7 +393,7 @@ wait_ready() {
   local deadline probe code body
   deadline=$((SECONDS + READY_TIMEOUT))
   while ((SECONDS < deadline)); do
-    probe="$(ready_probe | tail -n 1)"
+    probe="$(status_probe | tail -n 1)"
     code="${probe%% *}"
     body="${probe#* }"
     if [[ -z "$probe" ]]; then
@@ -410,7 +411,7 @@ wait_ready() {
     sleep "$POLL_INTERVAL"
   done
   log_event ready_timeout "seconds=${READY_TIMEOUT}"
-  print_error '/ready did not answer 200 and ready (with empty gated_graphs when PS_READY_TOKEN is set) within %s seconds\n' "$READY_TIMEOUT"
+  print_error '/status did not report ready (with empty gated_graphs when PS_READY_TOKEN is set) within %s seconds\n' "$READY_TIMEOUT"
   return "$EXIT_FAILURE"
 }
 
@@ -597,7 +598,7 @@ restore_sequence() {
   run_provisioning_upgrade
   (verify_provision) || fail_restore provision "the provisioning check failed"
   kubectl scale "$SERVICE_DEPLOYMENT" --replicas=1 || fail_restore start "could not scale ps-service to 1"
-  wait_ready || fail_restore ready "/ready did not reach 200 and ready"
+  wait_ready || fail_restore ready "/status did not report ready"
 }
 
 run_restore() {
@@ -744,7 +745,7 @@ run_e2e() {
     start_data_stores
     run_provisioning_upgrade
     kubectl scale "$SERVICE_DEPLOYMENT" --replicas=1 || fail_e2e "could not scale ps-service to 1"
-    wait_ready || fail_e2e "/ready did not reach 200 and ready"
+    wait_ready || fail_e2e "/status did not report ready"
   else
     restore_sequence
   fi

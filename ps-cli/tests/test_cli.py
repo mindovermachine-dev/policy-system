@@ -28,7 +28,8 @@ from ps_cli.models import (
     ExportResult,
     ExportStageOutcome,
     IngestionResult,
-    ReadinessResult,
+    ServiceStatus,
+    StatusDetail,
 )
 from ps_cli.modules.parser import build_parser
 from ps_cli.oidc_discovery import ResolvedAuthParameters
@@ -66,17 +67,10 @@ class _UnusedPsServiceClientMethods:
     `PsServiceClientProtocol` methods rather than just the one under test.
     """
 
-    def check_health(self) -> str:
-        """Fail: this test's fake does not expect `check_health()` to be called."""
-        raise AssertionError("check_health must not be called in this test")
-
-    def get_service_version(self) -> str:
-        """Fail: this test's fake does not expect `get_service_version()` to be called."""
-        raise AssertionError("get_service_version must not be called in this test")
-
-    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
-        """Fail: this test's fake does not expect `check_readiness()` to be called."""
-        raise AssertionError("check_readiness must not be called in this test")
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
+        """Fail: this test's fake does not expect `get_status()` to be called."""
+        msg = f"get_status must not be called in this test (detail={detail!r})"
+        raise AssertionError(msg)
 
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
@@ -101,34 +95,43 @@ def _fake_installed_version(name: str) -> str:
 
 
 class _FakeVersionClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in with a scripted get_service_version()."""
+    """A duck-typed PsServiceClient stand-in whose get_status() reports a scripted version."""
 
     def __init__(self, service_version: str) -> None:
-        """Store the version string this fake's get_service_version() returns."""
+        """Store the version string this fake's get_status() reports."""
         self._service_version = service_version
+        self.detail_seen: list[StatusDetail] = []
 
-    def get_service_version(self) -> str:
-        """Return the scripted service version string."""
-        return self._service_version
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
+        """Record the requested detail mode, then report the scripted version."""
+        self.detail_seen.append(detail)
+        return ServiceStatus(
+            status="ready",
+            version=self._service_version,
+            unhealthy_dependencies=None,
+            gated_graphs=None,
+        )
 
 
 class _FakeVersionErrorClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose get_service_version() always raises."""
+    """A duck-typed PsServiceClient stand-in whose get_status() always raises."""
 
     def __init__(self, error: PsCliError) -> None:
-        """Store the PsCliError this fake's get_service_version() raises."""
+        """Store the PsCliError this fake's get_status() raises."""
         self._error = error
 
-    def get_service_version(self) -> str:
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
         """Raise the scripted PsCliError."""
+        del detail
         raise self._error
 
 
 class _FakeFailingClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose check_health() always raises."""
+    """A duck-typed PsServiceClient stand-in whose get_status() always raises."""
 
-    def check_health(self) -> str:
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
         """Raise a PsCliError, simulating a PS Service failure response."""
+        del detail
         raise PsCliError(
             msg="PS Service reported catalog_identifier_not_found: CELEX not found",
             hint="check the CELEX identifier and try again",
@@ -136,24 +139,26 @@ class _FakeFailingClient(_UnusedPsServiceClientMethods):
 
 
 class _FakeKeyboardInterruptClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose check_health() raises KeyboardInterrupt.
+    """A duck-typed PsServiceClient stand-in whose get_status() raises KeyboardInterrupt.
 
-    Simulates an operator pressing Ctrl-C mid-call -- `check_health()`
+    Simulates an operator pressing Ctrl-C mid-call -- `get_status()`
     stands in for any blocking call; `run()`'s own catch site is command-agnostic,
     so this single fake proves the general boundary, not anything
     specific to `get health`.
     """
 
-    def check_health(self) -> str:
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
         """Raise KeyboardInterrupt, simulating Ctrl-C during a blocking call."""
+        del detail
         raise KeyboardInterrupt
 
 
 class _FakeUnexpectedErrorClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose check_health() raises an unhandled bug."""
+    """A duck-typed PsServiceClient stand-in whose get_status() raises an unhandled bug."""
 
-    def check_health(self) -> str:
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
         """Raise a plain RuntimeError, simulating a genuine, un-classified ps-cli bug."""
+        del detail
         raise RuntimeError("boom")
 
 
@@ -275,9 +280,9 @@ def test_run_version_prints_two_lines_and_returns_zero_when_versions_match(
 ) -> None:
     """`ps-cli --version` prints client then service version lines and returns 0.
 
-    Injects a fake client: `--version` resolves a client and calls
-    `get_service_version()`, so `client=None` would silently perform a real network
-    call on every test run.
+    Injects a fake client: `--version` resolves a client and calls `get_status()`, so
+    `client=None` would silently perform a real network call on every test run. The
+    version check never asks for dependency detail, so it never needs a login.
     """
     monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
     fake_client = _FakeVersionClient("1.4.0")
@@ -288,12 +293,141 @@ def test_run_version_prints_two_lines_and_returns_zero_when_versions_match(
     assert exit_code == 0
     assert captured.out == "PS-CLI Client Version: 1.4.0\nPS-Service Version: 1.4.0\n"
     assert captured.err == ""
+    assert fake_client.detail_seen == [StatusDetail.NONE]
+
+
+_VERSION_TEST_SERVICE_URL = "http://127.0.0.1:8000"
+
+
+def test_run_version_sends_exactly_one_get_status(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A real client on a recording transport: `--version` sends one unauthenticated request."""
+    monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
+    recorded: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
+        return httpx.Response(200, json={"status": "ready", "version": "1.4.0"})
+
+    client = PsServiceClient(_VERSION_TEST_SERVICE_URL, transport=httpx.MockTransport(_handler))
+
+    exit_code = run(["--version"], client=client)
+
+    assert exit_code == 0
+    assert [(r.method, r.url.path) for r in recorded] == [("GET", "/status")]
+    assert recorded[0].headers.get("authorization") is None
+    assert capsys.readouterr().out.splitlines()[1] == "PS-Service Version: 1.4.0"
+
+
+@pytest.mark.parametrize("status_code", [404, 401, 500, 503])
+def test_run_version_reports_unavailable_without_a_traceback_for_a_non_200_status(
+    status_code: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A non-200 `/status` reply prints the "unavailable" line naming the request and status."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(status_code, json={"detail": "Not Found"})
+
+    client = PsServiceClient(_VERSION_TEST_SERVICE_URL, transport=httpx.MockTransport(_handler))
+    expected_msg = (
+        f"PS Service at {_VERSION_TEST_SERVICE_URL} answered GET /status with HTTP {status_code}: "
+        "the URL may not point to PS Service, or this ps-cli and PS Service versions are "
+        "incompatible."
+    )
+
+    exit_code = run(["--version"], client=client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.splitlines()[1] == f"PS-Service Version: unavailable ({expected_msg})"
+    assert "Traceback" not in captured.err
+
+
+def test_run_version_reports_unavailable_without_a_traceback_for_a_non_json_200(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A 200 whose body is not JSON prints the "unavailable" line with the body-shape error."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200, text="<html><body>hello</body></html>", headers={"content-type": "text/html"}
+        )
+
+    client = PsServiceClient(_VERSION_TEST_SERVICE_URL, transport=httpx.MockTransport(_handler))
+
+    exit_code = run(["--version"], client=client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.splitlines()[1] == (
+        "PS-Service Version: unavailable (PS Service returned an unexpected response shape)"
+    )
+    assert "Traceback" not in captured.err
+
+
+def test_run_version_reports_unavailable_without_a_traceback_for_a_non_json_non_200(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A non-200 whose body is not JSON prints the "unavailable" line naming the status."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            502, text="<html><body>Bad Gateway</body></html>", headers={"content-type": "text/html"}
+        )
+
+    client = PsServiceClient(_VERSION_TEST_SERVICE_URL, transport=httpx.MockTransport(_handler))
+    expected_msg = (
+        f"PS Service at {_VERSION_TEST_SERVICE_URL} answered GET /status with HTTP 502: "
+        "the URL may not point to PS Service, or this ps-cli and PS Service versions are "
+        "incompatible."
+    )
+
+    exit_code = run(["--version"], client=client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.splitlines()[1] == f"PS-Service Version: unavailable ({expected_msg})"
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"status": "ready"},
+        {"status": "ready", "version": 14},
+        ["ready", "1.4.0"],
+    ],
+    ids=["version-missing", "version-not-a-string", "not-an-object"],
+)
+def test_run_version_reports_unavailable_without_a_traceback_for_a_wrong_shape_json_200(
+    body: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A 200 whose JSON body is not the status shape prints the "unavailable" line."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json=body)
+
+    client = PsServiceClient(_VERSION_TEST_SERVICE_URL, transport=httpx.MockTransport(_handler))
+
+    exit_code = run(["--version"], client=client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.splitlines()[1] == (
+        "PS-Service Version: unavailable (PS Service returned an unexpected response shape)"
+    )
+    assert "Traceback" not in captured.err
 
 
 def test_run_version_reports_unavailable_with_error_msg_when_service_client_raises(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A `PsCliError` from `get_service_version()` reports "unavailable (.msg)".
+    """A `PsCliError` from `get_status()` reports "unavailable (.msg)".
 
     Uses `.msg` verbatim, never `str(error)` (which would add the `❌`/`💡` decoration --
     `errors.py`'s `PsCliError.__str__`) -- and prints to stdout, not stderr.
@@ -466,7 +600,7 @@ def _build_ingest_document_handler_with_resource_metadata(
     captured_auth_headers: list[str | None], *, issuer: str, client_id: str
 ) -> type[BaseHTTPRequestHandler]:
     """Build a handler serving PS Service's own resource-metadata endpoint,
-    `GET /ready` (the `ingest document` pre-flight check), and `POST /ingestions`,
+    `GET /status` (the `ingest document` pre-flight check), and `POST /ingestions`,
     recording each `/ingestions` request's `Authorization`.
 
     The call is `ingest document` -> `POST /ingestions`, an authenticated business
@@ -504,9 +638,16 @@ def _build_ingest_document_handler_with_resource_metadata(
                     }
                 )
             else:
-                # `/ready` -- `_assert_llm_interface_available`'s pre-flight check; its
+                # `/status` -- `_assert_llm_interface_available`'s pre-flight check; its
                 # bearer header is not recorded here, only the POST's is.
-                self._write_json({"status": "ready", "unhealthy_dependencies": []})
+                self._write_json(
+                    {
+                        "status": "ready",
+                        "version": "0.0.0",
+                        "unhealthy_dependencies": [],
+                        "gated_graphs": [],
+                    }
+                )
 
         def do_POST(self) -> None:
             captured_auth_headers.append(self.headers.get("Authorization"))
@@ -622,9 +763,12 @@ _INTERNAL_NOT_IMPLEMENTED_MESSAGE = (
 class _FakeInternalIngestSuccessClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_internal() succeeds."""
 
-    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
         """Return a healthy default -- this fake's test is not about the pre-flight check."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+        del detail
+        return ServiceStatus(
+            status="ready", version="1.4.0", unhealthy_dependencies=[], gated_graphs=[]
+        )
 
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Return a fixed IngestionResult, ignoring `content`."""
@@ -646,9 +790,12 @@ class _FakeInternalIngest501Client(_UnusedPsServiceClientMethods):
     `cli.run()`'s handling of that failure without a real network call.
     """
 
-    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
         """Return a healthy default -- this fake's test is not about the pre-flight check."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+        del detail
+        return ServiceStatus(
+            status="ready", version="1.4.0", unhealthy_dependencies=[], gated_graphs=[]
+        )
 
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Raise the PsCliError PsServiceClient.ingest_internal() raises for the real 501."""
@@ -746,8 +893,8 @@ def test_ingest_document_surfaces_real_service_501_as_clean_failure(
     assert "Traceback" not in captured.err
 
 
-class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome for
+class _FakeStatusGatedInternalIngestClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in scripting `get_status()`'s outcome for
     `ingest document`.
 
     By default `ingest_internal()` raises `AssertionError` if called -- proving the
@@ -756,16 +903,23 @@ class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
     successful ingest.
     """
 
-    def __init__(self, *, readiness: ReadinessResult, allow_ingest: bool = False) -> None:
-        """Script this fake's check_readiness() outcome, and whether ingest may proceed."""
-        self._readiness = readiness
+    def __init__(
+        self, *, unhealthy_dependencies: list[str] | None, allow_ingest: bool = False
+    ) -> None:
+        """Script the dependency names get_status() reports, and whether ingest may proceed."""
+        self._status = ServiceStatus(
+            status="ready",
+            version="1.4.0",
+            unhealthy_dependencies=unhealthy_dependencies,
+            gated_graphs=None if unhealthy_dependencies is None else [],
+        )
         self._allow_ingest = allow_ingest
-        self.require_detail_seen: list[bool] = []
+        self.detail_seen: list[StatusDetail] = []
 
-    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
-        """Record whether the caller demanded the dependency names, then return the result."""
-        self.require_detail_seen.append(require_detail)
-        return self._readiness
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
+        """Record the requested detail mode, then return the scripted status."""
+        self.detail_seen.append(detail)
+        return self._status
 
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail the test unless `allow_ingest=True` -- proves the pre-flight check ran first."""
@@ -791,9 +945,7 @@ def test_ingest_document_fails_fast_when_llm_interface_unreachable(
     """
     document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
-    fake_client = _FakeReadinessGatedInternalIngestClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
-    )
+    fake_client = _FakeStatusGatedInternalIngestClient(unhealthy_dependencies=["llm_interface"])
 
     exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
@@ -803,39 +955,34 @@ def test_ingest_document_fails_fast_when_llm_interface_unreachable(
     assert "unavailable" in captured.err
 
 
-def test_ingest_document_requires_the_dependency_names_from_the_readiness_check(
+def test_ingest_document_requires_the_dependency_names_from_the_status_check(
     tmp_path: Path,
 ) -> None:
     """The pre-flight asks for the named dependencies, never the status-only reply."""
     document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
-    fake_client = _FakeReadinessGatedInternalIngestClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
-        allow_ingest=True,
-    )
+    fake_client = _FakeStatusGatedInternalIngestClient(unhealthy_dependencies=[], allow_ingest=True)
 
     exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
     assert exit_code == 0
-    assert fake_client.require_detail_seen == [True]
+    assert fake_client.detail_seen == [StatusDetail.REQUIRED]
 
 
-def test_ingest_document_fails_when_the_readiness_reply_names_no_dependencies(
+def test_ingest_document_fails_when_the_status_reply_names_no_dependencies(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A reply without names never counts as the LLM Interface being available."""
     document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
-    fake_client = _FakeReadinessGatedInternalIngestClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=None)
-    )
+    fake_client = _FakeStatusGatedInternalIngestClient(unhealthy_dependencies=None)
 
     exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert "readiness detail unavailable" in captured.err
+    assert "status detail unavailable" in captured.err
 
 
 def test_ingest_document_does_not_block_when_only_cellar_eli_unreachable(
@@ -844,9 +991,8 @@ def test_ingest_document_does_not_block_when_only_cellar_eli_unreachable(
     """Cellar_eli alone (LLM Interface healthy) never blocks `ingest document`."""
     document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
-    fake_client = _FakeReadinessGatedInternalIngestClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
-        allow_ingest=True,
+    fake_client = _FakeStatusGatedInternalIngestClient(
+        unhealthy_dependencies=["cellar_eli"], allow_ingest=True
     )
 
     exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
@@ -861,7 +1007,7 @@ def test_ingest_document_still_rejects_invalid_local_file_before_any_network_cal
     """DD2: local validation still runs before the pre-flight check.
 
     The bare `_UnusedPsServiceClientMethods()` fake raises `AssertionError` if
-    `check_readiness()` (or `ingest_internal()`) is ever called -- so the invalid
+    `get_status()` (or `ingest_internal()`) is ever called -- so the invalid
     fixture being rejected with a clean `PsCliError`-shaped exit, and no
     `AssertionError` escaping, proves the pre-flight check is never reached for an
     invalid local file.
@@ -1420,7 +1566,7 @@ def test_run_export_instrument_external_source_prints_no_confidentiality_notice(
 
 
 class _FakeHealthClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in with scripted check_health()/check_readiness().
+    """A duck-typed PsServiceClient stand-in with a scripted get_status() reply.
 
     Mirrors `ps-cli/tests/modules/test_handlers.py::_FakeHealthClient` at the
     `cli.run()` layer instead of calling `handle_get_health()` directly -- this file exercises
@@ -1428,18 +1574,19 @@ class _FakeHealthClient(_UnusedPsServiceClientMethods):
     isolation.
     """
 
-    def __init__(self, *, health_status: str, readiness: ReadinessResult) -> None:
-        """Script this fake's `check_health()`/`check_readiness()` return values."""
-        self._health_status = health_status
-        self._readiness = readiness
+    def __init__(self, *, status: str, unhealthy_dependencies: list[str] | None) -> None:
+        """Script the status and dependency names this fake's `get_status()` returns."""
+        self._status = ServiceStatus(
+            status=status,
+            version="1.4.0",
+            unhealthy_dependencies=unhealthy_dependencies,
+            gated_graphs=None if unhealthy_dependencies is None else [],
+        )
 
-    def check_health(self) -> str:
-        """Return the scripted health status."""
-        return self._health_status
-
-    def check_readiness(self, *, require_detail: bool = False) -> ReadinessResult:
-        """Return the scripted readiness result."""
-        return self._readiness
+    def get_status(self, *, detail: StatusDetail = StatusDetail.IF_LOGGED_IN) -> ServiceStatus:
+        """Return the scripted status."""
+        del detail
+        return self._status
 
 
 def test_run_get_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1447,8 +1594,8 @@ def test_run_get_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture
     lines to stdout.
     """
     fake_client = _FakeHealthClient(
-        health_status="alive",
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
+        status="ready",
+        unhealthy_dependencies=[],
     )
 
     exit_code = run(["get", "health"], client=fake_client)
@@ -1463,10 +1610,10 @@ def test_run_get_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture
 def test_run_get_health_without_a_login_succeeds_and_points_to_login(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A status-only readiness reply still reports success and hints how to see the detail."""
+    """A status-only reply still reports success and hints how to see the detail."""
     fake_client = _FakeHealthClient(
-        health_status="alive",
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=None),
+        status="ready",
+        unhealthy_dependencies=None,
     )
 
     exit_code = run(["get", "health"], client=fake_client)
@@ -1481,8 +1628,8 @@ def test_run_get_health_not_ready_without_a_login_hints_at_login(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     fake_client = _FakeHealthClient(
-        health_status="alive",
-        readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=None),
+        status="not_ready",
+        unhealthy_dependencies=None,
     )
 
     exit_code = run(["get", "health"], client=fake_client)
@@ -1500,8 +1647,8 @@ def test_run_get_health_returns_one_with_distinct_message_when_not_ready(
     dependency and is textually distinct from the unreachable-target wording.
     """
     fake_client = _FakeHealthClient(
-        health_status="alive",
-        readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=["falkordb"]),
+        status="not_ready",
+        unhealthy_dependencies=["falkordb"],
     )
 
     exit_code = run(["get", "health"], client=fake_client)

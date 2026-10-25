@@ -24,7 +24,7 @@ SCRIPT = REPO_ROOT / "scripts" / "verify-backup-restore.sh"
 TOOLS = REPO_ROOT / "tools" / "backup-restore-verify"
 
 SUBPROCESS_TIMEOUT_SECONDS = 120.0
-READY_OK = '200 {"status":"ready","unhealthy_dependencies":[],"gated_graphs":[]}'
+READY_OK = '200 {"status":"ready","version":"0.0.0","unhealthy_dependencies":[],"gated_graphs":[]}'
 RETAINED_VALUES = {
     "psPostgres": {
         "admin": {"existingSecret": "ps-admin-retained"},

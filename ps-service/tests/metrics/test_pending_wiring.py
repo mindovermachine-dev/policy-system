@@ -32,7 +32,7 @@ def test_a_failing_source_leaves_the_scrape_200_with_the_other_families(
         raise ConnectionError("pg.internal:5432 refused")
 
     client = TestClient(create_app(auth_enabled_config(), pending_entries=failing))
-    client.get("/health")
+    client.get("/livez")
 
     response = client.get("/metrics")
 

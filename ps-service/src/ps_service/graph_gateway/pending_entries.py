@@ -2,7 +2,7 @@
 
 Feeds the pending graph-log gauge. It is deliberately not a `PsycopgGraphLogStore` method: the
 store records every read in the PS state Postgres health, and a metrics scrape must never change
-what `/ready` reports. This function opens its own short-lived, bounded, read-only connection and
+what `/readyz` reports. This function opens its own short-lived, bounded, read-only connection and
 touches no dependency-health state.
 """
 

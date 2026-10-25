@@ -15,11 +15,11 @@ import pytest
 from ps_cli.credentials import TokenBundle
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import (
-    _UNEXPECTED_RESPONSE_SHAPE_MSG,  # pyright: ignore[reportPrivateUsage]  # asserted verbatim, per check_health()'s existing precedent
+    _UNEXPECTED_RESPONSE_SHAPE_MSG,  # pyright: ignore[reportPrivateUsage]  # asserted verbatim
     PsServiceClient,
     _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly
 )
-from ps_cli.models import ReadinessResult
+from ps_cli.models import ServiceStatus, StatusDetail
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -156,6 +156,24 @@ def _internal_not_implemented_handler(request: httpx.Request) -> httpx.Response:
     )
 
 
+# 200 bodies that are not JSON: every success-body parse must turn these into the
+# body-shape `PsCliError`, never let `ValueError` escape.
+_NON_JSON_200_BODIES = [
+    pytest.param(b"<html><body>PS Service</body></html>", id="html"),
+    pytest.param(b"", id="empty"),
+    pytest.param(b"\xff\xfe\xfa not utf-8", id="undecodable"),
+    pytest.param(b'{"run_id": "run-1", ', id="truncated-json"),
+]
+
+
+def _non_json_200_handler(content: bytes) -> Callable[[httpx.Request], httpx.Response]:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, content=content, headers={"content-type": "text/html"})
+
+    return _handler
+
+
 class TestIngestInternal:
     """PsServiceClient.ingest_internal(content)."""
 
@@ -195,6 +213,18 @@ class TestIngestInternal:
                 _ENVELOPE_CONTRACT["content_field_name"]: content,
             }
         ]
+
+    @pytest.mark.parametrize("content", _NON_JSON_200_BODIES)
+    def test_200_with_a_non_json_body_raises_the_body_shape_error(self, content: bytes) -> None:
+        """A 200 whose body is not JSON raises the body-shape error, never `ValueError`."""
+        client = PsServiceClient(
+            _SERVICE_URL, transport=httpx.MockTransport(_non_json_200_handler(content))
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.ingest_internal({"nodes": [], "edges": []})
+
+        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
 
     def test_501_internal_ingestion_not_implemented_raises_ps_cli_error(self) -> None:
         """The exact 501 body a real, unmodified ps-service returns today for this call.
@@ -309,6 +339,18 @@ class TestExportInstrument:
         client.export_instrument("CRA-1.0")
 
         assert captured_bodies == [{"instrument_id": "CRA-1.0"}]
+
+    @pytest.mark.parametrize("content", _NON_JSON_200_BODIES)
+    def test_200_with_a_non_json_body_raises_the_body_shape_error(self, content: bytes) -> None:
+        """A 200 whose body is not JSON raises the body-shape error, never `ValueError`."""
+        client = PsServiceClient(
+            _SERVICE_URL, transport=httpx.MockTransport(_non_json_200_handler(content))
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.export_instrument("CRA-1.0")
+
+        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
 
     def test_404_export_instrument_not_found_raises_ps_cli_error(self) -> None:
         """A 404 export_instrument_not_found body maps to PsCliError.
@@ -435,215 +477,206 @@ class TestExportInstrument:
         assert captured_timeouts == [{"connect": 5.0, "read": 1800.0, "write": 5.0, "pool": 5.0}]
 
 
-def _health_handler(request: httpx.Request) -> httpx.Response:
-    assert request.url.path == "/health"
-    assert request.method == "GET"
-    return httpx.Response(200, json={"status": "alive"})
-
-
-class TestCheckHealth:
-    """PsServiceClient.check_health()."""
-
-    def test_check_health_returns_status_string_on_success(self) -> None:
-        """A 200 GET /health body's `status` field is returned as-is."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_health_handler)
-        )
-
-        status = client.check_health()
-
-        assert status == "alive"
-
-    def test_check_health_raises_ps_cli_error_on_connect_failure(self) -> None:
-        """A transport-level ConnectError maps to PsCliError."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.check_health()
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-        assert "http://127.0.0.1:8000" in excinfo.value.msg
-        assert excinfo.value.hint is not None
-        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            ["not", "a", "dict"],
-            {"status": 123},
-            {"no_status_key": "alive"},
-        ],
-    )
-    def test_check_health_raises_generic_error_on_malformed_body(self, body: object) -> None:
-        """A malformed /health body raises the generic PsCliError, not a new exception type."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.check_health()
-
-        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
-
-
-def _service_version_handler(request: httpx.Request) -> httpx.Response:
-    assert request.url.path == "/health"
-    assert request.method == "GET"
-    return httpx.Response(200, json={"status": "alive", "version": "1.4.0"})
-
-
-class TestGetServiceVersion:
-    """PsServiceClient.get_service_version()."""
-
-    def test_get_service_version_returns_version_string_on_success(self) -> None:
-        """A 200 GET /health body's `version` field is returned as-is."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_service_version_handler)
-        )
-
-        version = client.get_service_version()
-
-        assert version == "1.4.0"
-
-    def test_get_service_version_raises_ps_cli_error_on_connect_failure(self) -> None:
-        """A transport-level ConnectError maps to PsCliError."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.get_service_version()
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-        assert "http://127.0.0.1:8000" in excinfo.value.msg
-        assert excinfo.value.hint is not None
-        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
-
-    def test_get_service_version_raises_ps_cli_error_on_connection_reset(self) -> None:
-        """A transport-level ReadError (e.g. connection reset) maps to PsCliError too.
-
-        Not just ConnectError/ConnectTimeout/ReadTimeout. A raw httpx.ReadError must not
-        escape and crash `ps-cli --version` with a traceback: it must produce the documented
-        "unavailable" line, because `--version` exits 0 whenever PS Service is unreachable.
-        """
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_read_error_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.get_service_version()
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-        assert "http://127.0.0.1:8000" in excinfo.value.msg
-        assert excinfo.value.hint is not None
-        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            ["not", "a", "dict"],
-            {"status": "alive"},
-            {"version": 123},
-        ],
-    )
-    def test_get_service_version_raises_generic_error_on_malformed_body(self, body: object) -> None:
-        """A malformed /health body raises the generic PsCliError, not a new exception type."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.get_service_version()
-
-        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
-
-
-_READY_BODY_HEALTHY: dict[str, object] = {"status": "ready", "unhealthy_dependencies": []}
-_READY_BODY_NOT_READY: dict[str, object] = {
-    "status": "not_ready",
-    "unhealthy_dependencies": ["falkordb", "cellar_eli"],
+_STATUS_PATH = "/status"
+_SERVICE_URL = "http://127.0.0.1:8000"
+_STATUS_BODY_ANONYMOUS: dict[str, object] = {"status": "ready", "version": "1.4.0"}
+_STATUS_BODY_DETAIL_READY: dict[str, object] = {
+    "status": "ready",
+    "version": "1.4.0",
+    "unhealthy_dependencies": [],
+    "gated_graphs": [],
 }
+_STATUS_BODY_DETAIL_NOT_READY: dict[str, object] = {
+    "status": "not_ready",
+    "version": "1.4.0",
+    "unhealthy_dependencies": ["falkordb", "cellar_eli"],
+    "gated_graphs": ["policy_system"],
+}
+# The status and probe paths PS Service serves, plus the two probe paths it does not serve,
+# so a test can assert which of them the client requests.
+_STATUS_AND_PROBE_PATHS = frozenset(
+    {"/status", "/livez", "/readyz", *(f"/{name}" for name in ("health", "ready"))}
+)
+_INCOMPATIBLE_SERVICE_WORDING = (
+    "the URL may not point to PS Service, or this ps-cli and PS Service versions are incompatible"
+)
 
 
-def _make_ready_handler(body: object) -> Callable[[httpx.Request], httpx.Response]:
+def _status_requests(recorded: list[httpx.Request]) -> list[tuple[str, str]]:
+    """The `(method, path)` of every recorded request to a status or probe path, in order."""
+    return [(r.method, r.url.path) for r in recorded if r.url.path in _STATUS_AND_PROBE_PATHS]
+
+
+def _make_status_handler(
+    body: object, *, recorded: list[httpx.Request] | None = None
+) -> Callable[[httpx.Request], httpx.Response]:
     def _handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/ready"
+        if recorded is not None:
+            recorded.append(request)
+        assert request.url.path == _STATUS_PATH
         assert request.method == "GET"
         return httpx.Response(200, json=body)
 
     return _handler
 
 
-class TestCheckReadiness:
-    """PsServiceClient.check_readiness()."""
+def _anonymous_client(handler: Callable[[httpx.Request], httpx.Response]) -> PsServiceClient:
+    return PsServiceClient(_SERVICE_URL, transport=httpx.MockTransport(handler))
 
-    def test_check_readiness_returns_readiness_result_when_ready(self) -> None:
-        """A ready /ready body parses into a ReadinessResult with an empty list."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(_make_ready_handler(_READY_BODY_HEALTHY)),
+
+class TestGetStatus:
+    """`PsServiceClient.get_status()`: one status-checked `GET /status`."""
+
+    def test_anonymous_reply_parses_with_no_detail(self) -> None:
+        client = _anonymous_client(_make_status_handler(_STATUS_BODY_ANONYMOUS))
+
+        result = client.get_status(detail=StatusDetail.NONE)
+
+        assert result == ServiceStatus(
+            status="ready", version="1.4.0", unhealthy_dependencies=None, gated_graphs=None
         )
 
-        result = client.check_readiness()
+    def test_detail_reply_parses_the_dependency_names_and_gated_graphs(self) -> None:
+        client = _anonymous_client(_make_status_handler(_STATUS_BODY_DETAIL_NOT_READY))
 
-        assert result == ReadinessResult(status="ready", unhealthy_dependencies=[])
+        result = client.get_status()
 
-    def test_check_readiness_returns_readiness_result_when_not_ready_with_unhealthy_names(
-        self,
+        assert result == ServiceStatus(
+            status="not_ready",
+            version="1.4.0",
+            unhealthy_dependencies=["falkordb", "cellar_eli"],
+            gated_graphs=["policy_system"],
+        )
+
+    @pytest.mark.parametrize("detail", list(StatusDetail))
+    def test_each_detail_mode_sends_exactly_one_get_status(self, detail: StatusDetail) -> None:
+        """Whatever the detail mode, the only status request is one `GET /status`.
+
+        Every request the client makes is recorded, including the login's discovery
+        and token calls, which are authentication rather than status requests.
+        """
+        recorded: list[httpx.Request] = []
+        client = _logged_in_client(
+            _make_status_handler(_STATUS_BODY_DETAIL_READY), recorded=recorded
+        )
+
+        client.get_status(detail=detail)
+
+        assert _status_requests(recorded) == [("GET", _STATUS_PATH)]
+
+    @pytest.mark.parametrize("status_code", [404, 401, 500, 503])
+    @pytest.mark.parametrize(
+        "response_kwargs",
+        [
+            pytest.param({"json": {"detail": "Not Found"}}, id="json-body"),
+            pytest.param(
+                {
+                    "text": "<html><body><h1>Not Found</h1></body></html>",
+                    "headers": {"content-type": "text/html"},
+                },
+                id="html-page",
+            ),
+        ],
+    )
+    def test_non_200_raises_naming_method_path_and_status(
+        self, status_code: int, response_kwargs: dict[str, object]
     ) -> None:
-        """A not-ready /ready body's unhealthy_dependencies names surface verbatim."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(_make_ready_handler(_READY_BODY_NOT_READY)),
-        )
+        """Any status other than 200 names the request and the status, never "unreachable"."""
 
-        result = client.check_readiness()
+        def _handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(status_code, **response_kwargs)  # pyright: ignore[reportArgumentType]  # kwargs are the two literal shapes parametrized above
 
-        assert result == ReadinessResult(
-            status="not_ready", unhealthy_dependencies=["falkordb", "cellar_eli"]
-        )
-
-    def test_check_readiness_raises_ps_cli_error_on_connect_failure(self) -> None:
-        """A transport-level ConnectError maps to PsCliError."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
-        )
+        client = _anonymous_client(_handler)
 
         with pytest.raises(PsCliError) as excinfo:
-            client.check_readiness()
+            client.get_status()
 
-        assert "Could not reach PS Service at" in excinfo.value.msg
-        assert excinfo.value.hint is not None
-        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
+        message = excinfo.value.msg
+        rendered = f"{message} {excinfo.value.hint or ''}".lower()
+        assert message == (
+            f"PS Service at {_SERVICE_URL} answered GET /status with HTTP {status_code}: "
+            f"{_INCOMPATIBLE_SERVICE_WORDING}."
+        )
+        assert "GET /status" in message
+        assert f"HTTP {status_code}" in message
+        assert _INCOMPATIBLE_SERVICE_WORDING in message
+        assert excinfo.value.hint is None
+        assert "unreachable" not in rendered
+        for word in ("livez", "readyz", "renamed", "rename"):
+            assert word not in rendered
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(b"<html><body>PS Service</body></html>", id="html"),
+            pytest.param(b"", id="empty"),
+            pytest.param(b"\xff\xfe\xfa not utf-8", id="undecodable"),
+            pytest.param(b'{"status": "ready", ', id="truncated-json"),
+        ],
+    )
+    def test_200_with_a_non_json_body_raises_the_body_shape_error(self, content: bytes) -> None:
+        """A 200 whose body is not JSON raises the body-shape error, never `ValueError`."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200, content=content, headers={"content-type": "text/html"})
+
+        client = _anonymous_client(_handler)
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.get_status()
+
+        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
 
     @pytest.mark.parametrize(
         "body",
         [
-            ["not", "a", "dict"],
-            {"status": 123, "unhealthy_dependencies": []},
-            {"status": "ready", "unhealthy_dependencies": "not-a-list"},
-            {"status": "ready", "unhealthy_dependencies": ["falkordb", 123]},
+            pytest.param(["not", "a", "dict"], id="non-dict"),
+            pytest.param({"version": "1.4.0"}, id="missing-status"),
+            pytest.param({"status": 123, "version": "1.4.0"}, id="non-str-status"),
+            pytest.param({"status": "ready"}, id="missing-version"),
+            pytest.param({"status": "ready", "version": 1}, id="non-str-version"),
+            pytest.param(
+                {"status": "ready", "version": "1.4.0", "unhealthy_dependencies": "falkordb"},
+                id="unhealthy-not-a-list",
+            ),
+            pytest.param(
+                {"status": "ready", "version": "1.4.0", "unhealthy_dependencies": ["x", 1]},
+                id="unhealthy-non-str-item",
+            ),
+            pytest.param(
+                {"status": "ready", "version": "1.4.0", "gated_graphs": "policy_system"},
+                id="gated-not-a-list",
+            ),
+            pytest.param(
+                {"status": "ready", "version": "1.4.0", "gated_graphs": [None]},
+                id="gated-non-str-item",
+            ),
         ],
     )
-    def test_check_readiness_raises_generic_error_on_malformed_body(self, body: object) -> None:
-        """Every malformed /ready body shape raises the generic PsCliError.
-
-        Covers: non-dict body, status not a string, unhealthy_dependencies not a
-        list, and a non-string list item.
-        """
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
-        )
+    def test_200_with_an_unexpected_shape_raises_the_body_shape_error(self, body: object) -> None:
+        client = _anonymous_client(lambda request: httpx.Response(200, json=body))
 
         with pytest.raises(PsCliError) as excinfo:
-            client.check_readiness()
+            client.get_status()
 
         assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
+
+    @pytest.mark.parametrize("handler", [_connect_error_handler, _read_error_handler])
+    def test_transport_failure_raises_the_could_not_reach_error(
+        self, handler: Callable[[httpx.Request], httpx.Response]
+    ) -> None:
+        """A refused or reset connection maps to the actionable reachability error."""
+        client = _anonymous_client(handler)
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.get_status(detail=StatusDetail.NONE)
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+        assert _SERVICE_URL in excinfo.value.msg
+        assert excinfo.value.hint is not None
+        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
 
 
 # --- token use, refresh-once -----------------------------------------------------
@@ -691,18 +724,23 @@ def _build_auth_and_business_transport(
     business_handler: Callable[[httpx.Request], httpx.Response],
     *,
     refresh_response: Callable[[int], httpx.Response] | None = None,
+    recorded: list[httpx.Request] | None = None,
 ) -> tuple[httpx.MockTransport, list[int]]:
     """One fake transport answering resource-metadata/discovery/refresh + business calls.
 
     `refresh_response`, when given, is called with the 1-based call number on every
     `POST <issuer>/token` and its return value is sent back verbatim -- lets a test
     simulate a refresh rejection. Defaults to minting `refreshed-token-<n>` on success.
+    `recorded`, when given, receives every request the transport sees, authentication
+    calls included, in order.
     Returns `(transport, call_count)` where `call_count[0]` is mutated on every refresh
     call, so a test can assert exactly how many refreshes happened.
     """
     call_count = [0]
 
     def _handle(request: httpx.Request) -> httpx.Response:
+        if recorded is not None:
+            recorded.append(request)
         if request.url.path == _RESOURCE_METADATA_PATH:
             return httpx.Response(
                 200,
@@ -799,33 +837,6 @@ class TestAuthenticatedRequestsAttachBearerHeader:
 
         assert refresh_calls == [1]
         assert captured_headers == ["Bearer refreshed-token-1", "Bearer refreshed-token-1"]
-
-    def test_check_health_attaches_no_authorization_header_even_with_credential_store_given(
-        self,
-    ) -> None:
-        """`check_health` is exempt -- never attaches a header, never refreshes,
-        even given credentials.
-        """
-        captured_headers: list[str | None] = []
-
-        def _business_handler(request: httpx.Request) -> httpx.Response:
-            captured_headers.append(request.headers.get("authorization"))
-            return httpx.Response(200, json={"status": "alive"})
-
-        transport, refresh_calls = _build_auth_and_business_transport(_business_handler)
-        store = _FakeCredentialStore()
-        store.set_tokens("dev", TokenBundle(refresh_token="seed-rt", issuer=_FAKE_ISSUER))
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=transport,
-            credential_store=store,
-            context="dev",
-        )
-
-        client.check_health()
-
-        assert captured_headers == [None]
-        assert refresh_calls == [0]
 
     def test_construction_with_no_auth_params_is_byte_for_byte_unaffected(self) -> None:
         """The pre-authentication construction shapes still work: no header is ever attached.
@@ -1004,55 +1015,63 @@ class TestUnauthorizedResponseMapping:
         assert marker_access_token not in (excinfo.value.hint or "")
 
 
-def _logged_in_client(handler: Callable[[httpx.Request], httpx.Response]) -> PsServiceClient:
-    transport, _ = _build_auth_and_business_transport(handler)
+def _logged_in_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+    *,
+    recorded: list[httpx.Request] | None = None,
+) -> PsServiceClient:
+    transport, _ = _build_auth_and_business_transport(handler, recorded=recorded)
     store = _FakeCredentialStore()
     store.set_tokens("dev", TokenBundle(refresh_token="seed-rt", issuer=_FAKE_ISSUER))
-    return PsServiceClient(
-        "http://127.0.0.1:8000", transport=transport, credential_store=store, context="dev"
-    )
+    return PsServiceClient(_SERVICE_URL, transport=transport, credential_store=store, context="dev")
 
 
 def _not_logged_in_client(handler: Callable[[httpx.Request], httpx.Response]) -> PsServiceClient:
     transport, _ = _build_auth_and_business_transport(handler)
     return PsServiceClient(
-        "http://127.0.0.1:8000",
+        _SERVICE_URL,
         transport=transport,
         credential_store=_FakeCredentialStore(),
         context="dev",
     )
 
 
-_READY_BODY_STATUS_ONLY: dict[str, object] = {"status": "ready"}
+class TestGetStatusDetail:
+    """`get_status` with each `StatusDetail` mode, logged in and not."""
 
+    def test_no_detail_never_reads_the_login_or_sends_a_token(self) -> None:
+        """`StatusDetail.NONE` sends no header and makes no discovery or refresh call."""
+        recorded: list[httpx.Request] = []
+        captured: list[str | None] = []
 
-class TestCheckReadinessDetail:
-    """`check_readiness` against a status-only reply and against an authenticated one."""
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request.headers.get("authorization"))
+            return httpx.Response(200, json=_STATUS_BODY_ANONYMOUS)
 
-    def test_status_only_body_parses_with_no_dependency_names(self) -> None:
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(_make_ready_handler(_READY_BODY_STATUS_ONLY)),
-        )
-
-        result = client.check_readiness()
-
-        assert result == ReadinessResult(status="ready", unhealthy_dependencies=None)
-
-    def test_required_detail_raises_when_the_reply_carries_no_dependency_names(self) -> None:
-        transport, _ = _build_auth_and_business_transport(
-            _make_ready_handler(_READY_BODY_STATUS_ONLY)
-        )
+        transport, refresh_calls = _build_auth_and_business_transport(_handler, recorded=recorded)
         store = _FakeCredentialStore()
         store.set_tokens("dev", TokenBundle(refresh_token="seed-rt", issuer=_FAKE_ISSUER))
         client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=transport, credential_store=store, context="dev"
+            _SERVICE_URL, transport=transport, credential_store=store, context="dev"
         )
 
-        with pytest.raises(PsCliError) as excinfo:
-            client.check_readiness(require_detail=True)
+        result = client.get_status(detail=StatusDetail.NONE)
 
-        assert "readiness detail unavailable" in excinfo.value.msg
+        assert captured == [None]
+        assert refresh_calls == [0]
+        assert [(r.method, r.url.path) for r in recorded] == [("GET", _STATUS_PATH)]
+        assert result.version == "1.4.0"
+
+    def test_required_detail_raises_when_the_reply_carries_no_dependency_names(self) -> None:
+        client = _logged_in_client(_make_status_handler(_STATUS_BODY_ANONYMOUS))
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.get_status(detail=StatusDetail.REQUIRED)
+
+        assert excinfo.value.msg == (
+            "status detail unavailable: PS Service did not name its dependencies."
+        )
+        assert excinfo.value.hint == "run `ps-cli auth login` and retry"
 
     def test_required_detail_without_credentials_configured_raises_and_sends_nothing(
         self,
@@ -1061,42 +1080,43 @@ class TestCheckReadinessDetail:
 
         def _handler(request: httpx.Request) -> httpx.Response:
             requests_seen.append(request)
-            return httpx.Response(200, json=_READY_BODY_HEALTHY)
+            return httpx.Response(200, json=_STATUS_BODY_DETAIL_READY)
 
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+        client = _anonymous_client(_handler)
 
         with pytest.raises(PsCliError) as excinfo:
-            client.check_readiness(require_detail=True)
+            client.get_status(detail=StatusDetail.REQUIRED)
 
-        assert "readiness detail unavailable" in excinfo.value.msg
+        assert excinfo.value.msg == "status detail unavailable: log in first."
+        assert excinfo.value.hint == "run `ps-cli auth login` and retry"
         assert requests_seen == []
 
-    def test_required_detail_when_not_logged_in_raises_and_never_asks_for_readiness(
+    def test_required_detail_when_not_logged_in_raises_and_never_asks_for_status(
         self,
     ) -> None:
         requests_seen: list[str] = []
 
         def _handler(request: httpx.Request) -> httpx.Response:
             requests_seen.append(request.url.path)
-            return httpx.Response(200, json=_READY_BODY_HEALTHY)
+            return httpx.Response(200, json=_STATUS_BODY_DETAIL_READY)
 
         client = _not_logged_in_client(_handler)
 
         with pytest.raises(PsCliError):
-            client.check_readiness(require_detail=True)
+            client.get_status(detail=StatusDetail.REQUIRED)
 
-        assert "/ready" not in requests_seen
+        assert _STATUS_PATH not in requests_seen
 
     def test_required_detail_sends_the_bearer_token_and_returns_the_names(self) -> None:
         captured: list[str | None] = []
 
         def _handler(request: httpx.Request) -> httpx.Response:
             captured.append(request.headers.get("authorization"))
-            return httpx.Response(200, json=_READY_BODY_NOT_READY)
+            return httpx.Response(200, json=_STATUS_BODY_DETAIL_NOT_READY)
 
         client = _logged_in_client(_handler)
 
-        result = client.check_readiness(require_detail=True)
+        result = client.get_status(detail=StatusDetail.REQUIRED)
 
         assert captured == ["Bearer refreshed-token-1"]
         assert result.unhealthy_dependencies == ["falkordb", "cellar_eli"]
@@ -1108,25 +1128,55 @@ class TestCheckReadinessDetail:
 
         def _handler(request: httpx.Request) -> httpx.Response:
             captured.append(request.headers.get("authorization"))
-            return httpx.Response(200, json=_READY_BODY_NOT_READY)
+            return httpx.Response(200, json=_STATUS_BODY_DETAIL_NOT_READY)
 
         client = _logged_in_client(_handler)
 
-        result = client.check_readiness()
+        result = client.get_status()
 
         assert captured == ["Bearer refreshed-token-1"]
         assert result.unhealthy_dependencies == ["falkordb", "cellar_eli"]
+        assert result.gated_graphs == ["policy_system"]
 
     def test_default_call_when_not_logged_in_still_succeeds_without_a_token(self) -> None:
         captured: list[str | None] = []
 
         def _handler(request: httpx.Request) -> httpx.Response:
             captured.append(request.headers.get("authorization"))
-            return httpx.Response(200, json=_READY_BODY_STATUS_ONLY)
+            return httpx.Response(200, json=_STATUS_BODY_ANONYMOUS)
 
         client = _not_logged_in_client(_handler)
 
-        result = client.check_readiness()
+        result = client.get_status()
 
         assert captured == [None]
-        assert result == ReadinessResult(status="ready", unhealthy_dependencies=None)
+        assert result == ServiceStatus(
+            status="ready", version="1.4.0", unhealthy_dependencies=None, gated_graphs=None
+        )
+
+    def test_default_call_when_the_refresh_is_rejected_still_succeeds_without_a_token(
+        self,
+    ) -> None:
+        captured: list[str | None] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request.headers.get("authorization"))
+            return httpx.Response(200, json=_STATUS_BODY_ANONYMOUS)
+
+        def _reject_refresh(call_number: int) -> httpx.Response:
+            del call_number
+            return httpx.Response(400, json={"error": "invalid_grant"})
+
+        transport, _ = _build_auth_and_business_transport(
+            _handler, refresh_response=_reject_refresh
+        )
+        store = _FakeCredentialStore()
+        store.set_tokens("dev", TokenBundle(refresh_token="stale-rt", issuer=_FAKE_ISSUER))
+        client = PsServiceClient(
+            _SERVICE_URL, transport=transport, credential_store=store, context="dev"
+        )
+
+        result = client.get_status()
+
+        assert captured == [None]
+        assert result.unhealthy_dependencies is None

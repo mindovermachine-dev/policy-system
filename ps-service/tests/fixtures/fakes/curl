@@ -19,7 +19,10 @@ State keys (all optional, tests seed them):
   next_pk           counter for new users
   blueprints        list of blueprint instances (default: the bundled and local-TLS ones)
   blueprint_list_empty_calls  the first N blueprint lists return no instance (fresh install)
-  ingress_health_status  HTTP status of /health through the ingress on port 30443 (default 200)
+  ingress_status_endpoint_status  HTTP status of /status through the ingress on port 30443
+                    (default 200)
+  ingress_livez_status  HTTP status of /livez through the ingress (default 404: an in-cluster
+                    probe the ingress does not route)
   ingress_issuer    the issuer the discovery document reports through the ingress (default: the
                     requested one)
   ingress_mcp_status  HTTP status of /mcp/ without a bearer token through the ingress (default 401)
@@ -326,8 +329,12 @@ def _ingress_route(state: dict[str, Any], url: str) -> tuple[int, Any, str]:
     path = split.path
     if path in state.get("ingress_open_paths", []):
         return HTTP_OK, {"detail": "reachable"}, ""
-    if path == "/health":
-        return state.get("ingress_health_status", HTTP_OK), {"status": "ok"}, ""
+    if path == "/status":
+        status = state.get("ingress_status_endpoint_status", HTTP_OK)
+        return status, {"status": "ready", "version": "0.0.0"}, ""
+    if path == "/livez":
+        status = state.get("ingress_livez_status", HTTP_NOT_FOUND)
+        return status, {"detail": "fake curl: no ingress route for /livez"}, ""
     if path == "/mcp/":
         return state.get("ingress_mcp_status", HTTP_UNAUTHORIZED), {"detail": "unauthorized"}, ""
     if path.endswith("/.well-known/openid-configuration"):

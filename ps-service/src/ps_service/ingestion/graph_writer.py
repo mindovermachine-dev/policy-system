@@ -84,7 +84,7 @@ def _read_query(
 ) -> GraphQueryResult:
     """Run one read query, recording FalkorDB health and wrapping driver errors.
 
-    A `redis.exceptions.RedisError` marks FalkorDB unhealthy (the `/ready` signal) and is raised
+    A `redis.exceptions.RedisError` marks FalkorDB unhealthy (the `/readyz` signal) and is raised
     as `IngestionPersistenceError`; the next successful call marks it healthy again.
     """
     try:

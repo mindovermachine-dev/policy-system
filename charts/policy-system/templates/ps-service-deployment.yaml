@@ -124,21 +124,21 @@ spec:
               memory: {{ .Values.psService.resources.limits.memory | quote }}
           startupProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             timeoutSeconds: {{ .Values.psService.probes.startup.timeoutSeconds }}
             periodSeconds: {{ .Values.psService.probes.startup.periodSeconds }}
             failureThreshold: {{ div (add (add (int64 .Values.psService.auth.discoveryRetryBudgetSeconds) 90) (sub (int64 .Values.psService.probes.startup.periodSeconds) 1)) (int64 .Values.psService.probes.startup.periodSeconds) }}
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /readyz
               port: http
             timeoutSeconds: {{ .Values.psService.probes.readiness.timeoutSeconds }}
             periodSeconds: {{ .Values.psService.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.psService.probes.readiness.failureThreshold }}
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             timeoutSeconds: {{ .Values.psService.probes.liveness.timeoutSeconds }}
             periodSeconds: {{ .Values.psService.probes.liveness.periodSeconds }}

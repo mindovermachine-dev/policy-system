@@ -33,6 +33,7 @@ from ps_service.api.dependencies import (
     provide_restore_from_catalog_dependencies,
     provide_run_id,
     provide_system_audit_recorder,
+    public_route,
     require_access_role,
 )
 from ps_service.api.errors import (
@@ -62,6 +63,7 @@ from ps_service.api.models import (
     ResolveReviewResponse,
     RestorationAcceptedResponse,
     RestorationRequest,
+    ServiceStatusResponse,
     StageOutcome,
 )
 from ps_service.api.near_miss_review_orchestration import (
@@ -76,6 +78,7 @@ from ps_service.api.restore_orchestration import (
     run_restoration_from_catalog_source,
 )
 from ps_service.api.run_status import get_stage
+from ps_service.api.service_status import build_service_status_handler
 from ps_service.audit import (
     AuditContext,  # noqa: TC001 -- FastAPI resolves the route annotation at runtime
 )
@@ -655,17 +658,34 @@ def build_api_router() -> APIRouter:
     """Build the REST ``APIRouter`` that serves the PS Service API.
 
     A fresh router is returned on every call, so each application instance owns its own routes.
-    Routes: ``GET /catalog``, ``POST /ingestions``, ``GET /ingestions/{run_id}``, ``POST
-    /restorations``, ``POST /restorations/from-catalog``, ``POST /exports``, ``POST
-    /change-checks``, ``GET /near-misses`` and ``POST /near-misses/{review_id}/resolve``. The
+    Routes: ``GET /status``, ``GET /catalog``, ``POST /ingestions``, ``GET
+    /ingestions/{run_id}``, ``POST /restorations``, ``POST /restorations/from-catalog``, ``POST
+    /exports``, ``POST /change-checks``, ``GET /near-misses`` and ``POST
+    /near-misses/{review_id}/resolve``. The
     ingestion (either source), restore, export
     and change-check routes require the ``ComplianceOfficer`` access role through a route-level
-    dependency.
+    dependency. ``GET /status`` is on ``RestAuthMiddleware``'s open list and is declared a public
+    route: it needs no token, and its handler checks an optional bearer token itself.
 
     Returns:
         An ``APIRouter`` holding all of the routes above, ready for ``include_router``.
     """
     router = APIRouter()
+    router.add_api_route(
+        "/status",
+        build_service_status_handler(),
+        methods=["GET"],
+        response_model=ServiceStatusResponse,
+        response_model_exclude_none=True,
+        dependencies=[
+            Depends(
+                public_route(
+                    "the client status endpoint answers every caller; its handler gates the"
+                    " detail on an optional verified token"
+                )
+            )
+        ],
+    )
     router.add_api_route(
         "/catalog",
         list_curated_catalog,

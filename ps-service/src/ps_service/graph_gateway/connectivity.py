@@ -52,7 +52,7 @@ def _unreachable(host: str, port: int, cause: Exception) -> GraphConnectivityErr
 def check_connectivity(db: ConnectivityProbe, host: str, port: int) -> None:
     """Fail loud before real work: `db` must list its graphs (the cheapest real round-trip).
 
-    Records the outcome in `dependency_health` either way, so the `/ready` probe and the write
+    Records the outcome in `dependency_health` either way, so the `/readyz` probe and the write
     paths' own exception handling feed one signal.
 
     Args:

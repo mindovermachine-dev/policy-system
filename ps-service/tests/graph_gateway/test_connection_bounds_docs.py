@@ -94,7 +94,7 @@ def test_the_operations_guide_section_explains_the_symptoms() -> None:
 
     for needle in (
         "unhealthy_dependencies",
-        "/ready",
+        "/readyz",
         "503",
         "GraphUnavailableError",
         "falkordb",

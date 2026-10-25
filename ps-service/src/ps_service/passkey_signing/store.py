@@ -311,7 +311,7 @@ def check_connectivity_from_config(config: ServiceConfig) -> None:
     The instance is optional: when `config.passkey_signing_postgres_host` is unset the function
     does nothing, recording neither healthy nor unhealthy. A dependency with no recorded call is
     treated as healthy, so an environment that never configures passkey signing does not show a
-    permanent false alarm in the readiness endpoint's unhealthy dependencies.
+    permanent false alarm in the unhealthy dependencies `/status` reports.
 
     Args:
         config: Service configuration holding the `passkey_signing_postgres_*` settings.

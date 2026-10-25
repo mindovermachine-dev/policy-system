@@ -27,7 +27,7 @@ health-recording `_read_query` wrapper that `ps_service.company_merge.graph_writ
 also vendor independently: components share no internal package, so the near-duplicate is
 deliberate.
 
-A FalkorDB failure on a read is recorded in `dependency_health` (the live signal behind `/ready`)
+A FalkorDB failure on a read is recorded in `dependency_health` (the live signal behind `/readyz`)
 and re-raised as the original `redis.exceptions.RedisError`, unwrapped. A failed write surfaces as
 `PolicyLifecycleGraphUnavailableError` with the `FalkorDB write failed: ` prefix.
 """
@@ -151,7 +151,7 @@ class GraphHandle(Protocol):
 def _read_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """Run one read statement and record FalkorDB health for `/ready`.
+    """Run one read statement and record FalkorDB health for `/readyz`.
 
     A `RedisError` marks the FalkorDB dependency unhealthy and is re-raised unchanged; the next
     successful call marks it healthy again.
@@ -535,7 +535,7 @@ class StandardDraft:
 def find_existing_policy(graph: GraphHandle, policy_id: str) -> tuple[str, str] | None:
     """Check whether a Policy with `policy_id` already exists.
 
-    A pure read, so a title-collision check still counts towards `/ready`'s FalkorDB connectivity
+    A pure read, so a title-collision check still counts towards `/readyz`'s FalkorDB connectivity
     signal.
 
     Args:

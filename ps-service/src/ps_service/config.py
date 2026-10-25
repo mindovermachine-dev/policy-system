@@ -114,16 +114,17 @@ class ServiceConfig:
         max_request_body_bytes: Largest accepted request body, checked against the
             `Content-Length` header before any body is read
             (`PS_SERVICE_MAX_REQUEST_BODY_BYTES`); positive, default 100 MiB.
-        ready_reprobe_min_interval_seconds: Shortest time between the starts of two `/ready`
+        ready_reprobe_min_interval_seconds: Shortest time between the starts of two `/readyz`
             re-probes of the same dependency, in seconds
             (`PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS`); finite and not negative, default 5.
-            Zero turns the rate limit off. `/ready` is anonymous, so this caps how often a caller
-            can make the service probe a dependency.
-        ready_reprobe_deadline_seconds: Longest one `/ready` poll waits for the re-probe of an
+            Zero turns the rate limit off. `/readyz` is anonymous and polled in-cluster, so this
+            caps how often a caller can make the service probe a dependency.
+        ready_reprobe_deadline_seconds: Longest one `/readyz` poll waits for the re-probe of an
             unhealthy gating dependency, in seconds (`PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS`);
             positive and finite, default 3. Keep it below the readiness probe's
             `timeoutSeconds`, so a hung dependency still gets an answer rather than a client-side
-            probe timeout.
+            probe timeout. It also bounds the token check of one `/status` call: a token not
+            verified by then is treated as absent.
         query_timeout_ms: Server-side time limit for one Cypher query in milliseconds
             (`PS_QUERY_TIMEOUT_MS`); positive, default 5000.
         query_row_cap: Maximum rows one Cypher query returns (`PS_QUERY_ROW_CAP`); positive,
@@ -273,7 +274,7 @@ class ServiceConfig:
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company Merge) cannot run
 # without, but that `load_config()` itself leaves optional (see `ServiceConfig`). Named once
 # here so both the request-time guard (`ingestion_orchestration._require_ingestion_config`)
-# and the `/ready` startup check stay in lockstep on exactly which four fields that is.
+# and the `/readyz` startup check stay in lockstep on exactly which four fields that is.
 INGESTION_REQUIRED_CONFIG_FIELDS = (
     "llm_interface_model",
     "llm_interface_embed_model",

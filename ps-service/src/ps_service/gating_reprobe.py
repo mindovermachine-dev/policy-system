@@ -1,8 +1,8 @@
-"""Re-probe of the gating dependencies that `/ready` currently reports unhealthy.
+"""Re-probe of the gating dependencies that `/readyz` currently reports unhealthy.
 
 Real calls are what normally flip a dependency back to healthy in `ps_service.dependency_health`,
 but a pod that reports not ready receives no traffic, so nothing would. `GatingReprobe` lets each
-`/ready` poll run the dependency's own connectivity probe instead. Every real probe records its
+`/readyz` poll run the dependency's own connectivity probe instead. Every real probe records its
 own outcome in the registry; this harness never writes the registry, it only calls the probe and
 reads the registry afterwards.
 

@@ -1,4 +1,4 @@
-"""The drift detector adds no REST route, no MCP tool and no `/ready` field.
+"""The drift detector adds no REST route, no MCP tool and no status field.
 
 Drift detection is internal. The structure of the OpenAPI document (every path,
 parameter, request and response schema) and of the MCP tool list (names and input schemas) is
@@ -71,3 +71,13 @@ def test_nothing_in_the_public_surface_is_named_after_drift() -> None:
     surface = json.dumps(_current_surface()).lower()
 
     assert "drift" not in surface
+
+
+def test_the_snapshot_lists_the_status_and_probe_paths_only() -> None:
+    snapshot = json.loads(_SNAPSHOT.read_text(encoding="utf-8"))
+    paths = cast("dict[str, object]", snapshot["openapi"]["paths"])
+
+    for path in ("/status", "/livez", "/readyz"):
+        assert path in paths, path
+    for retired in (f"/{name}" for name in ("health", "ready")):
+        assert retired not in paths, retired

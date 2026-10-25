@@ -581,3 +581,28 @@ class ProtectedResourceMetadata(BaseModel):
     authorization_servers: list[str]
     scopes_supported: list[str]
     ps_cli_client_id: str | None = None
+
+
+class ServiceStatusResponse(BaseModel):
+    """Body of ``GET /status``: the version and readiness, plus detail for a verified caller.
+
+    The route omits the two detail keys entirely, rather than rendering ``null``, for a caller
+    without a verified bearer token; for a verified caller both are lists, empty when there is
+    nothing to name.
+
+    Attributes:
+        status: ``"ready"`` or ``"not_ready"``, as the readiness probe reports for the same
+            recorded state.
+        version: The installed ``ps-service`` distribution version; non-empty.
+        unhealthy_dependencies: Names of the tracked dependencies recorded unhealthy, gating or
+            not; ``None`` for an anonymous caller.
+        gated_graphs: Names of the graphs that refuse writes until an operator acts; ``None``
+            for an anonymous caller.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["ready", "not_ready"]
+    version: str = Field(min_length=1)
+    unhealthy_dependencies: list[str] | None = None
+    gated_graphs: list[str] | None = None

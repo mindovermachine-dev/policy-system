@@ -45,9 +45,9 @@ def test_metrics_middleware_is_outermost_ahead_of_the_replay_gate() -> None:
 def test_a_real_route_is_recorded_under_its_template() -> None:
     client = _client()
 
-    client.get("/health")
+    client.get("/livez")
 
-    assert _series_by_route(client)[("GET", "/health", "200")] == 1.0
+    assert _series_by_route(client)[("GET", "/livez", "200")] == 1.0
 
 
 def test_thousand_distinct_unmatched_paths_share_one_route_value() -> None:
@@ -68,12 +68,12 @@ def test_thousand_distinct_unmatched_paths_share_one_route_value() -> None:
 
 def test_thousand_distinct_nonstandard_methods_share_the_other_method_value() -> None:
     client = _client()
-    client.request("FOO0000", "/health")
+    client.request("FOO0000", "/livez")
     _scrape(client)
     series_before = len(_series_by_route(client))
 
     for index in range(1, _UNMATCHED_COUNT + 1):
-        client.request(f"FOO{index:04d}", "/health")
+        client.request(f"FOO{index:04d}", "/livez")
 
     body = _scrape(client)
     assert len(_series_by_route(client)) == series_before

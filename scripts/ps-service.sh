@@ -5,9 +5,9 @@
 # this script only manages the PS Service process itself.
 #
 # Usage:
-#   scripts/ps-service.sh start   # start in the background, wait for /health
+#   scripts/ps-service.sh start   # start in the background, wait for /livez
 #   scripts/ps-service.sh stop    # SIGTERM, wait for graceful shutdown
-#   scripts/ps-service.sh status  # report running/not-running + /health, /ready
+#   scripts/ps-service.sh status  # report running/not-running + /livez, /readyz
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,7 +71,7 @@ cmd_start() {
   )
 
   local waited=0
-  until curl -sf -m 2 "http://${HOST}:${PORT}/health" >/dev/null 2>&1; do
+  until curl -sf -m 2 "http://${HOST}:${PORT}/livez" >/dev/null 2>&1; do
     if ! pid_is_alive "$(cat "${PID_FILE}")"; then
       echo "PS Service exited during startup — see ${STDOUT_LOG}" >&2
       rm -f "${PID_FILE}"
@@ -87,7 +87,7 @@ cmd_start() {
 
   echo "PS Service is alive (pid $(cat "${PID_FILE}"))."
   local ready_status
-  ready_status="$(curl -sf -m 2 "http://${HOST}:${PORT}/ready" 2>/dev/null | grep -o '"status":"[^"]*"' || echo 'unreachable')"
+  ready_status="$(curl -sf -m 2 "http://${HOST}:${PORT}/readyz" 2>/dev/null | grep -o '"status":"[^"]*"' || echo 'unreachable')"
   echo "Readiness: ${ready_status} (check ${STDOUT_LOG} or logs/ps-service.jsonl if not ready)"
 }
 
@@ -125,12 +125,12 @@ cmd_status() {
     exit 1
   fi
   echo "PS Service is running (pid ${pid})."
-  curl -sf -m 2 "http://${HOST}:${PORT}/health" >/dev/null 2>&1 \
-    && echo "/health: alive" \
-    || echo "/health: unreachable"
+  curl -sf -m 2 "http://${HOST}:${PORT}/livez" >/dev/null 2>&1 \
+    && echo "/livez: alive" \
+    || echo "/livez: unreachable"
   local ready_status
-  ready_status="$(curl -sf -m 2 "http://${HOST}:${PORT}/ready" 2>/dev/null | grep -o '"status":"[^"]*"' || echo 'unreachable')"
-  echo "/ready: ${ready_status}"
+  ready_status="$(curl -sf -m 2 "http://${HOST}:${PORT}/readyz" 2>/dev/null | grep -o '"status":"[^"]*"' || echo 'unreachable')"
+  echo "/readyz: ${ready_status}"
 }
 
 case "${1:-}" in

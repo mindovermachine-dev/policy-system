@@ -20,11 +20,12 @@
   - [Rotating the Azure LLM API key](#rotating-the-azure-llm-api-key)
 - [Production operations](#production-operations)
   - [Updating to the latest version](#updating-to-the-latest-version-1)
+  - [Upgrading to the client status endpoint](#upgrading-to-the-client-status-endpoint)
   - [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log)
   - [Audit log integrity](#audit-log-integrity)
   - [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph)
   - [FalkorDB graph name](#falkordb-graph-name)
-  - [What `/ready` reveals](#what-ready-reveals)
+  - [What `/status` reveals](#what-status-reveals)
   - [Metrics](#metrics)
   - [Request body limit and startup discovery retry](#request-body-limit-and-startup-discovery-retry)
   - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
@@ -191,6 +192,8 @@ created earlier exposes:
   `https://<hostname>:30443`, also on the evaluator machine.
 - Signing credentials that were enrolled on the relying party `localhost` do not work on the new
   origin. Enrol them again after the upgrade.
+- The image, the chart and ps-cli move together when the status endpoint changes; see
+  [Upgrading to the client status endpoint](#upgrading-to-the-client-status-endpoint).
 
 ### Moving an existing evaluator off a .local hostname
 
@@ -376,8 +379,8 @@ table is the current status.
   - An existing evaluator on the former name (chart 5.2.4) was moved to `ps.test` with
     `scripts/deploy-ps-eval.sh` and the checkout chart. The script detected the former name, built
     the name-constrained CA and printed the hosts and trust commands, which were run by hand.
-  - Through `https://ps.test:30443` with the CA trusted: `/health` returned 200, an unauthenticated
-    `/ready` returned only the status, `/mcp/` and a REST path returned 401 without a token,
+  - Through `https://ps.test:30443` with the CA trusted: the liveness probe returned 200, an
+    unauthenticated readiness call returned only the status, `/mcp/` and a REST path returned 401 without a token,
     `/auth/application/o/ps-cli/.well-known/openid-configuration` returned 200, and
     `/auth/if/admin/` and `/auth/api/v3/core/users/` returned 403. TLS 1.1 failed to connect.
     Plain HTTP to port 8000 on the LAN address returned nothing.
@@ -613,6 +616,42 @@ kubectl get pods -l app.kubernetes.io/component=ps-service \
 The upgrade also runs a provisioning Job for the graph mutation log. See
 [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log).
 
+<!-- upgrade-note:probe-rename:start -->
+
+### Upgrading to the client status endpoint
+
+**Applies to:** every upgrade from a release whose PS Service served `/health` and `/ready`, for
+the evaluator and production profiles alike.
+
+What changes:
+
+- `/health` is now `/livez`, and the liveness body no longer carries `version`: it is
+  `{"status": "alive"}`.
+- `/ready` is now `/readyz`, and the readiness body no longer carries the dependency detail: it is
+  `{"status": "ready"}` or `{"status": "not_ready"}` for every caller, and the probe ignores any
+  `Authorization` header.
+- `GET /status` is the client status endpoint. It answers `200` with `status` and `version`, and
+  adds `unhealthy_dependencies` and `gated_graphs` for a caller with a valid access token (see
+  [What `/status` reveals](#what-status-reveals)).
+- `/livez` and `/readyz` are no longer reachable through the Ingress. The chart Ingress routes
+  `/status` and none of the probe paths; the kubelet polls the probes on the pod port.
+
+What to do:
+
+1. The PS Service image, chart and ps-cli must be upgraded together. Install the chart of this
+   release with its own image: a chart from before this release probes paths the new image no
+   longer serves, so its pods fail their probes and never become ready. An older ps-cli asks for
+   the same retired paths, so its `get health`, `--version` and `ingest document` pre-flight fail
+   until you install the matching ps-cli.
+2. Your external monitors and hand reads of the dependency detail move to `/status`. An uptime check
+   watches the `status` field of `/status`, which answers `200` whenever PS Service serves, not
+   the HTTP status. Read the detail with
+   `curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://<hostname>/status`.
+3. If you run your own Ingress or proxy in front of PS Service, route `/status` and do not route
+   `/livez` or `/readyz`.
+
+<!-- upgrade-note:probe-rename:end -->
+
 ### Upgrading to the graph mutation log
 
 **Applies to:** every `helm upgrade` of a release installed before the graph mutation log
@@ -694,7 +733,7 @@ kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state 
 Every table is owned by `ps_state_graph_owner`, not by `ps_state`.
 
 **If it has not run** (for example `psPostgres.provisioning.enabled=false`, or the Job failed):
-PS Service fails closed at startup and exits, and `/ready` reports `not_ready`. The log names the
+PS Service fails closed at startup and exits, and `/readyz` reports `not_ready`. The log names the
 missing migration and gives the remedy; the message reads `privileged migration
 graph_gateway/0001_graph_mutation_log.sql is not in place (<reason>); run
 python -m ps_service.graph_gateway.provision with the admin credential`. PS Service never
@@ -811,10 +850,11 @@ for this. The log entries carry the action `startup_replay` (`replayed`, `resume
 
 What you see while it runs:
 
-- `/health` stays `200`. `/ready` answers `503` `not_ready`, so the pod is out of the Service
-  rotation; a caller with a valid access token also sees `graph_replay` in
-  `unhealthy_dependencies` (see [What `/ready` reveals](#what-ready-reveals)). Any other path
-  except `/.well-known/` answers `503` with the status-only body `{"status": "not_ready"}` and
+- `/livez` stays `200`. `/readyz` answers `503` `not_ready`, so the pod is out of the Service
+  rotation, and `/status` answers `200` with `"status": "not_ready"`; a caller with a valid access
+  token also sees `graph_replay` in `unhealthy_dependencies` (see
+  [What `/status` reveals](#what-status-reveals)). Any other path except `/metrics` and
+  `/.well-known/` answers `503` with the status-only body `{"status": "not_ready"}` and
   `Retry-After: 5`, so no caller reads a graph that is empty or half rebuilt. A rebuild of a graph the size of CRA times ten (about
   160,000 log entries) took 45 seconds on a laptop; do not restart the pod just because it takes
   a minute.
@@ -822,18 +862,18 @@ What you see while it runs:
   `startup_replay_max_backoff_seconds`, until it can finish; the entries `startup_replay` /
   `retry` show the attempt and the error class.
 
-**A gated graph.** `/ready` lists `gated_graphs` for a caller with a valid access token (an
-anonymous call sees the status only, see [What `/ready` reveals](#what-ready-reveals)). A graph appears there when its rebuild
+**A gated graph.** `/status` lists `gated_graphs` for a caller with a valid access token (an
+anonymous call sees the status and version only, see [What `/status` reveals](#what-status-reveals)). A graph appears there when its rebuild
 failed (the rebuilt graph did not match its recorded digest, the log has a gap or an entry that
 does not decode, or the rebuild went past its checkpoint without being compared) or when
-FalkorDB refuses one of its logged entries. The other graphs are served and `/ready` can be `200`
+FalkorDB refuses one of its logged entries. The other graphs are served and the status can be `ready`
 while one is gated; writes to the gated graph are refused with an error naming the graph and the
 log position. Nothing repairs it silently. After you have understood the cause (the log entries
 name the graph, the position and the error class, never content), rebuild it from the log:
 
 ```bash
 POD=$(kubectl get pod -l app.kubernetes.io/component=falkordb -o jsonpath='{.items[0].metadata.name}')
-kubectl exec "$POD" -c falkordb -- redis-cli DEL <graph>      # the name from gated_graphs (authenticated /ready)
+kubectl exec "$POD" -c falkordb -- redis-cli DEL <graph>      # the name from gated_graphs (authenticated /status)
 kubectl rollout restart deploy/<ps-service deployment>        # the empty graph is rebuilt at start
 ```
 
@@ -856,8 +896,8 @@ start with a `ServiceConfigurationError` that names the variable.
 | `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` | 30000 | One statement on a request-path state Postgres connection (not startup migrations) | Positive integer number of milliseconds |
 | `PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS` | 5 | Establishing a connection to the passkey signing Postgres (`ps_signing`) | Positive number of seconds; libpq enforces a 2 second minimum |
 | `PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS` | 30000 | One statement on a request-path passkey signing Postgres connection | Positive integer number of milliseconds |
-| `PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` | 5 | Shortest time between the starts of two `/ready` re-probes of the same dependency | Finite number of seconds, 0 or more (0 removes the limit) |
-| `PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS` | 3 | How long one `/ready` poll waits for re-probes and for the caller's token check | Finite number of seconds, above 0 |
+| `PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` | 5 | Shortest time between the starts of two `/readyz` re-probes of the same dependency | Finite number of seconds, 0 or more (0 removes the limit) |
+| `PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS` | 3 | How long one `/readyz` poll waits for re-probes, and how long `/status` waits for the caller's token check | Finite number of seconds, above 0 |
 
 The Helm chart does not expose these variables yet, so a deployment that needs a value other than
 the default sets it through the pod environment. The metrics scrape keeps its own fixed bounds
@@ -867,10 +907,10 @@ What an operator sees when a bound is hit:
 
 | Dependency | What happens | Where to look |
 | --- | --- | --- |
-| FalkorDB does not answer | The call fails after the bound, the gateway retries (4 attempts), then the caller gets `GraphUnavailableError`, or the group is reported as committed but not yet applied if it was already logged | `falkordb` in `unhealthy_dependencies`, `/ready` answers `503`; the next `/ready` poll re-probes FalkorDB, so it answers `200` again on its own once FalkorDB answers |
+| FalkorDB does not answer | The call fails after the bound, the gateway retries (4 attempts), then the caller gets `GraphUnavailableError`, or the group is reported as committed but not yet applied if it was already logged | `falkordb` in `unhealthy_dependencies`, `/readyz` answers `503`; the next `/readyz` poll re-probes FalkorDB, so it answers `200` again on its own once FalkorDB answers |
 | State Postgres does not answer at startup | The state migration step fails within the connect timeout, which is fatal: the pod exits and restarts | Pod logs and restarts |
-| State Postgres does not answer on a request | The store raises its fixed unavailable error within the connect timeout | `state_postgres` in `unhealthy_dependencies`, `/ready` answers `503`; the next `/ready` poll re-probes it, so it answers `200` again on its own once the database answers |
-| A state Postgres statement runs past the limit | The server cancels it and the store raises its fixed error, which carries no SQL, host or driver text | `state_postgres` goes unhealthy and heals through the `/ready` re-probe or the next successful Postgres call (see the note below) |
+| State Postgres does not answer on a request | The store raises its fixed unavailable error within the connect timeout | `state_postgres` in `unhealthy_dependencies`, `/readyz` answers `503`; the next `/readyz` poll re-probes it, so it answers `200` again on its own once the database answers |
+| A state Postgres statement runs past the limit | The server cancels it and the store raises its fixed error, which carries no SQL, host or driver text | `state_postgres` goes unhealthy and heals through the `/readyz` re-probe or the next successful Postgres call (see the note below) |
 | Passkey signing Postgres does not answer | Startup logs a warning and continues; approvals fail with the stores' fixed errors | `passkey_signing_postgres` in `unhealthy_dependencies` |
 
 **Tuning.** Keep `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` above `PS_QUERY_TIMEOUT_MS`: raise both
@@ -883,7 +923,7 @@ Raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` if the audit chain check (`verify
 `verify-audit-log` tool) or another large scan is cancelled on a large audit table; one bound
 covers all request-path statements, so there is no per-call override.
 
-**Readiness re-probe.** While FalkorDB or the state Postgres reads unhealthy, each `/ready` poll
+**Readiness re-probe.** While FalkorDB or the state Postgres reads unhealthy, each `/readyz` poll
 runs that dependency's connectivity check, at most once per
 `PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` and off the event loop, and waits at most
 `PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS` for it. The default interval is below the chart's
@@ -895,8 +935,8 @@ and the exception class name when an outage starts, and one with outcome `succee
 
 **A cancelled statement marks the dependency unhealthy.** Dependency health records whether the
 most recent call succeeded. A statement cancelled by the statement timeout therefore turns
-`state_postgres` unhealthy and `/ready` to `503` until a successful call to the database clears it.
-The `/ready` re-probe is such a call, so a pod that has left rotation recovers on its own once the
+`state_postgres` unhealthy and `/readyz` to `503` until a successful call to the database clears it.
+The `/readyz` re-probe is such a call, so a pod that has left rotation recovers on its own once the
 database answers; no restart is needed.
 
 ### FalkorDB graph name
@@ -908,22 +948,30 @@ A value that is set but empty or whitespace-only makes the service refuse to sta
 `ServiceConfigurationError` that names `PS_FALKORDB_GRAPH`. The per-instrument
 `{short}_baseline` and `{short}_native` graphs are not affected by this setting.
 
-### What `/ready` reveals
+### What `/status` reveals
 
-`/ready` needs no token, so a probe never has to log in, and the HTTP status (`200` ready, `503`
-not ready) is the whole answer for the probe. An anonymous call, a call whose token does not
-verify, and every call while the local-test bypass is active receive only
-`{"status": "ready"}` or `{"status": "not_ready"}`. A bad token is not an error here; it is
-treated as no token. A call with a valid `Authorization: Bearer <access token>` (any verified
-user, no role needed) also receives `unhealthy_dependencies` and `gated_graphs`. The
-replay-gate `503` on every other path carries the status only. `ps-cli get health` sends your
-login automatically. A `/ready` poll can start a bounded re-probe of an unhealthy FalkorDB or
-state Postgres (see Readiness re-probe under the dependency timeouts); the answer reveals nothing
-beyond the fields above. To read the detail by hand:
+`GET /status` is the client status endpoint, the one external monitors, `ps-cli` and operators
+read through the Ingress. It answers `200` while PS Service serves, so the status is in the body:
+`status` is `ready` or `not_ready`, the value the readiness probe reports for the same state, and
+`version` is the installed PS Service version. An anonymous call, a call whose token does not
+verify (or is not verified within `PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS`), and every call
+while the local-test bypass is active receive only those two fields. A bad token is not an error
+here; it is treated as no token, and `/status` never answers `401`. A call with a valid
+`Authorization: Bearer <access token>` (any verified user, no role needed) also receives
+`unhealthy_dependencies` and `gated_graphs`. `ps-cli get health` sends your login automatically.
+`/status` never probes a dependency; it reports what the service has recorded. To read the detail
+by hand:
 
 ```bash
-curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://ps.test:30443/ready
+curl -s -H "Authorization: Bearer $ACCESS_TOKEN" https://ps.test:30443/status
 ```
+
+The probes `/livez` and `/readyz` are for the kubelet: they are in-cluster only, the chart Ingress
+has no route for them, and they ignore any `Authorization` header. `/readyz` answers `200`
+`{"status": "ready"}` or `503` `{"status": "not_ready"}`, and the HTTP status is the whole answer
+for the probe. A `/readyz` poll can start a bounded re-probe of an unhealthy FalkorDB or state
+Postgres (see Readiness re-probe under the dependency timeouts); the answer reveals nothing beyond
+the status. The replay-gate `503` on every other path carries the status only.
 
 The local-test bypass has no verifier, so it never returns the detail; read the startup log
 entries instead.
@@ -941,7 +989,7 @@ degraded dependency or a stuck ingestion needs no log scraping.
 **Exposure rules**
 
 - `/metrics` is anonymous: it is exempt from authentication and from the startup replay gate,
-  like `/health` and `/ready`, so it answers `200` while a graph replay runs.
+  like `/livez`, `/readyz` and `/status`, so it answers `200` while a graph replay runs.
 - It is in-cluster only. Any pod that can reach the service port can read it. The chart-owned PS Service
   Ingress renders only an allowlist of paths without `/metrics`, so the chart ingress has no route
   for it and the controller answers `404`.
@@ -949,10 +997,10 @@ degraded dependency or a stuck ingestion needs no log scraping.
   do not expose the service with NodePort or LoadBalancer, because either one publishes an
   anonymous endpoint. The chart's default service type is `ClusterIP`, and `ingress.enabled=true`
   fails the render for any other type.
-- It exposes nothing that anonymous `/ready` withholds: no dependency names, no graph names, no
-  error text and no user, document or run identifiers. Labels are fixed values, and route labels
-  are route templates, never raw paths. Per-dependency and per-graph detail stays behind
-  authenticated `/ready`.
+- It exposes nothing that an anonymous `/status` withholds: no dependency names, no graph names,
+  no error text and no user, document or run identifiers. Labels are fixed values, and route
+  labels are route templates, never raw paths. Per-dependency and per-graph detail stays behind
+  authenticated `/status`.
 - A scrape adds no probes. It reads state the service already keeps, and a metric whose data
   source fails or times out is left out of that scrape while the others are still served.
 
@@ -961,10 +1009,10 @@ degraded dependency or a stuck ingestion needs no log scraping.
 | OpenTelemetry name | Prometheus name | Type | Labels | Meaning |
 | ------------------ | --------------- | ---- | ------ | ------- |
 | `http.server.request.duration` | `http_server_request_duration_seconds` (`_bucket`, `_count`, `_sum`) | Histogram, seconds | `http.request.method` (as `http_request_method`), `http.route` (as `http_route`), `http.response.status_code` (as `http_response_status_code`) | Request count and latency per route. The route is the route template, such as `/ingestions/{run_id}`, or `__unmatched__` when no route matches; a method outside the standard set is `_OTHER`. Requests answered by the replay gate (503) or by authentication (401) are counted too. |
-| `ps_service.dependencies.unhealthy` | `ps_service_dependencies_unhealthy` | Gauge, dependencies | `gating` (`true` or `false`) | Aggregate count of unhealthy dependencies, always two series: `gating="true"` for the dependencies that gate `/ready` (FalkorDB, PS state Postgres, graph replay) and `gating="false"` for the others (LLM Interface, Cellar/ELI, Passkey Signing Postgres). Each is `0` when healthy. It reads the dependency-health registry that `/ready` reads, with no probe, and carries no dependency name; the names stay behind authenticated `/ready`. |
+| `ps_service.dependencies.unhealthy` | `ps_service_dependencies_unhealthy` | Gauge, dependencies | `gating` (`true` or `false`) | Aggregate count of unhealthy dependencies, always two series: `gating="true"` for the dependencies that gate `/readyz` (FalkorDB, PS state Postgres, graph replay) and `gating="false"` for the others (LLM Interface, Cellar/ELI, Passkey Signing Postgres). Each is `0` when healthy. It reads the dependency-health registry that `/readyz` and `/status` read, with no probe, and carries no dependency name; the names stay behind authenticated `/status`. |
 | `ps_service.ingestion.runs` | `ps_service_ingestion_runs_total` | Counter, runs | `outcome` (`succeeded` or `failed`) | Ingestion runs that reached a terminal state, counted once per run by the call that wrote the terminal row. A run completed by a status poll because its worker was gone (interrupted) counts as `failed`; a run whose terminal write failed or lost the race to another writer counts nothing. The label never carries a run id or instrument id. Counts restart at zero when the service restarts. |
 | `ps_service.ingestion.run.duration` | `ps_service_ingestion_run_duration_seconds` (`_bucket`, `_count`, `_sum`) | Histogram, seconds | `outcome` (`succeeded` or `failed`) | Run duration for the same runs as the counter above: from the start of the background worker to its terminal write, or, for an interrupted run, from submission to the status poll that completed it. Buckets run from 1 second to 1 hour. |
-| `ps_service.graph_log.pending_entries` | `ps_service_graph_log_pending_entries` | Gauge, entries | none | One total of graph mutation log entries that are written but not yet applied, summed over all graphs; no graph name is exposed (per-graph detail stays behind authenticated `/ready`). It is read from PS state Postgres with a read-only query on its own short-lived connection, never through the graph log store, so a scrape does not change the Postgres health `/ready` reports. The value is cached for 15 seconds, and a failure is cached too, so a scrape loop does not load a degraded Postgres. The series is omitted while Postgres is unreachable, unconfigured, or slower than the 5 second deadline; the other metrics are still served. |
+| `ps_service.graph_log.pending_entries` | `ps_service_graph_log_pending_entries` | Gauge, entries | none | One total of graph mutation log entries that are written but not yet applied, summed over all graphs; no graph name is exposed (per-graph detail stays behind authenticated `/status`). It is read from PS state Postgres with a read-only query on its own short-lived connection, never through the graph log store, so a scrape does not change the Postgres health `/readyz` and `/status` report. The value is cached for 15 seconds, and a failure is cached too, so a scrape loop does not load a degraded Postgres. The series is omitted while Postgres is unreachable, unconfigured, or slower than the 5 second deadline; the other metrics are still served. |
 
 **Example scrape configuration**
 
@@ -1001,7 +1049,7 @@ PS Service writes its graphs only through the Graph Write Gateway. After the las
 graph, a short hash of everything in it. Once an hour (`PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`,
 Helm `psService.graphGateway.driftCheckIntervalSeconds`; `0` turns the check off) it compares each
 graph with the digest at the head of its log. The check exposes nothing of its own: it has no
-endpoint, no tool, no `/ready` field and no metric, and a failing check never changes readiness.
+endpoint, no tool, no `/status` field and no metric, and a failing check never changes readiness.
 
 A graph that changed behind the gateway's back (someone wrote to FalkorDB directly) shows up as
 one log entry per graph per hour, and it is also written to the container's stderr so
@@ -1227,7 +1275,7 @@ PS Service reads its connection settings from `PS_STATE_POSTGRES_*` and
 `PS_PASSKEYSIGNING_POSTGRES_*`, which the chart wires into the pod. Each role can connect only
 to its own database.
 
-The PS state Postgres is a hard dependency: PS Service does not start, and `/ready` reports
+The PS state Postgres is a hard dependency: PS Service does not start, and `/readyz` reports
 `not_ready`, while it is unreachable. Reads of the catalog-source override fail closed — while
 the database cannot be read, `GET /catalog`, curated-instrument restores and `get-catalog-source`
 return an error rather than serving the env-var/default source. `set-catalog-source` and
@@ -1528,7 +1576,7 @@ keep the version the release runs. The final line logs the row count of every ta
    ```
 
    FalkorDB is emptied because a FalkorDB that keeps data newer than the restored log is not
-   repaired: PS Service starts, `/ready` answers `200`, and the extra data stays in the graph.
+   repaired: PS Service starts, `/readyz` answers `200`, and the extra data stays in the graph.
 3. Start PS Postgres, then FalkorDB, and wait for each:
 
    ```bash
@@ -1562,16 +1610,17 @@ keep the version the release runs. The final line logs the row count of every ta
    ```
 
    `scripts/verify-backup-restore.sh verify-provision` runs both checks.
-6. Start PS Service and wait for `/ready`:
+6. Start PS Service and wait for it to report ready:
 
    ```bash
    kubectl scale deploy/policy-system-ps-service --replicas=1
    scripts/verify-backup-restore.sh wait-ready
    ```
 
-   While PS Service rebuilds the graphs from the log, `/ready` can answer `503` (an authenticated
-   call names `graph_replay` in `unhealthy_dependencies`). The restore is done when it answers
-   `200`; an authenticated call must also show an empty `gated_graphs`. The script runs
+   While PS Service rebuilds the graphs from the log, `/readyz` answers `503` and `/status`
+   reports `"status": "not_ready"` (an authenticated call names `graph_replay` in
+   `unhealthy_dependencies`). The restore is done when `/status` reports `"status": "ready"`; an
+   authenticated call must also show an empty `gated_graphs`. The script reads `/status`
    in-pod over loopback without a login: set `PS_READY_TOKEN` to a valid access token to make
    `wait-ready` (and the `restore` and `e2e` steps that wait for readiness) also require an empty
    `gated_graphs`; without it the script waits for `200` and `"status": "ready"` only, logs
@@ -1691,24 +1740,24 @@ decision and not part of this procedure.
 | Symptom | Check |
 | --- | --- |
 | `ps-cli` reports "Could not reach PS Service" | Is the target URL right (`ps-cli config get-contexts` / `echo $PS_CLI_SERVICE_URL`)? Is PS Service actually running there? |
-| A command fails right after connecting | `ps-cli get health` reports the process state and readiness and, when you are logged in (`ps-cli auth login`), names every unhealthy dependency (`unhealthy_dependencies`: `falkordb`, `state_postgres`, `graph_replay`, `llm_interface`, `cellar_eli`, `passkey_signing_postgres`). Readiness (`/ready`, HTTP 200 or 503) depends only on `falkordb`, `state_postgres` and `graph_replay`, and on the ingestion configuration being complete: `health: alive` with `ready: not_ready` means one of these is down, the startup graph replay has not finished, or required ingestion config is incomplete. `llm_interface`, `cellar_eli` and `passkey_signing_postgres` are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. Without a login the report shows the readiness status only and suggests logging in to see the dependencies. |
+| A command fails right after connecting | `ps-cli get health` reports the process state and readiness and, when you are logged in (`ps-cli auth login`), names every unhealthy dependency (`unhealthy_dependencies`: `falkordb`, `state_postgres`, `graph_replay`, `llm_interface`, `cellar_eli`, `passkey_signing_postgres`). Readiness (`/readyz` HTTP 200 or 503, and the `status` field of `/status`) depends only on `falkordb`, `state_postgres` and `graph_replay`, and on the ingestion configuration being complete: `health: alive` with `ready: not_ready` means one of these is down, the startup graph replay has not finished, or required ingestion config is incomplete. `llm_interface`, `cellar_eli` and `passkey_signing_postgres` are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. Without a login the report shows the readiness status only and suggests logging in to see the dependencies. |
 | `ingest document`, or an `ingest-regulation` / `start-ingestion` tool call, fails immediately with a config-related error | PS Service's ingestion-required config (`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_CAPABILITY_MERGE_THRESHOLD`, `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD`, `PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD`) is likely missing — this is a PS Service operator/deployer concern, see [Helm Chart Values Reference](./helm-chart-values-reference.md#core-values). |
 | `ingest document` (or an `ingest-regulation` / `start-ingestion` tool call) fails with HTTP 503 "graph writes are unavailable: the graph write gateway is not running" | Ingestion, the Domain Mapper (extraction and derivation), Company Merge (the merge stage and near-miss resolution) Policy Lifecycle (every tool that creates, edits, adds to or transitions a Policy, and `get-policy` when a legacy Policy needs its `status`/`version` backfilled) Graph Cleanup (the edit that runs when a passkey approval is signed) and Restore (`POST /restorations`, `POST /restorations/from-catalog` and the `restore-instrument` MCP tool: a restore is one gateway group), including a re-ingest that resumes at any of those stages, write the graph only through the Graph Write Gateway, which needs the PS state database (the graph mutation log). The state database is not configured, or the gateway could not be built at startup; configure it (see [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log)) and restart. Ingestion never writes to FalkorDB directly as a fallback, and neither does the Domain Mapper, Company Merge, Policy Lifecycle, Graph Cleanup or Restore, and nothing was written. A restore answers the same 503 before it reads any graph; it needs the PS state database as well as FalkorDB, and the `restore-instrument` MCP tool answers `error: ...` with the same text. The Policy Lifecycle MCP tools do not answer HTTP 503: without a gateway they answer `error: ...` with the same text, record no audit row and write nothing. The same applies to resolving a near-miss and to signing a near-miss merge approval: without the gateway the request is answered 503 and the approval stays pending, so it can be signed again after the restart. Graph Cleanup answers no 503 either: the signed approval is executed, but without a gateway the edit is not made, the audit trail holds an `applied` row followed by a `failed` row for the approval, and the Compliance Officer is told the edit could not be completed; read the outcome with `check-cleanup-approval`, and preview again after the restart. An approval signed while the graph is behind its log is settled only once the graph has caught up (the check answers with no outcome until then). The same 503 answers the Regulatory Change Monitor's amendment check (the `check-regulations` tool and `POST /change-checks`, including a `finalize` or link-only re-ingest that runs no pipeline stage but still writes the succession; the sweep looks for the gateway first, before any graph is opened, and the MCP tool answers `error: ...`) and Export (`POST /exports`): the Regulatory Change Monitor records the instrument succession and Export its embedding backfill only through the Graph Write Gateway, with no direct-write fallback. Export therefore also needs the PS state database, and so does the maintainer CLI shim `tools/curated-export/export_instrument.py` (`curated-export`), which builds its own gateway. A link-only or `finalize` re-ingest now leaves an `ingestion_run.submit` / `ingestion_run.complete` audit pair, and every Export run one `export.instrument` system audit row. A 503 from the audit trail instead means the run's audit row could not be recorded; nothing was written either, and the request can be retried. |
 | `ps-cli export instrument`, or `POST /exports`, fails with HTTP 409 `export_unresolved_near_misses`, or `tools/curated-export/export_instrument.py` exits 1 and prints the same message to stderr | The instrument still has unresolved near-miss reviews: the message gives the count and the review ids. Review decisions live in the `policy_system` graph, which an export never serializes, so exporting now would publish Capabilities or Roles that were never reviewed. Nothing was done: no `export.instrument` audit row, no embedding backfill and no file or `catalog.json` was written. Resolve the reviews (the `list-near-misses` and `resolve-near-miss` tools, or the `ps-near-miss-review` skill) and export again; there is no override. A stored review whose kind has no review spec refuses the export too, with HTTP 409 `review_kind_unsupported` naming the kind; listing and resolving refuse it the same way. If `policy_system` cannot be read the export fails closed with the usual graph error (HTTP 500 from the route, exit 1 from the shim) and writes nothing. The check reads the graph named by `PS_FALKORDB_GRAPH` (default `policy_system`, see [FalkorDB graph name](#falkordb-graph-name)). |
 | The near-miss review list is flooded with obviously unrelated pairs, or a known duplicate never appears in it | A review is raised only for a pair whose best similarity score is at or above `PS_COMPANYMERGE_CAPABILITY_REVIEW_THRESHOLD` (chart `psService.companyMerge.capabilityReviewThreshold`) and below the merge threshold; it must not exceed the merge threshold or startup fails. Raise it to cut noise, lower it to surface more candidates. A pair that scored below it recorded nothing, so lowering the value later does not bring it back. Reviews already stored are not removed when you raise it. Role reviews (two Roles of one instrument) use `PS_COMPANYMERGE_ROLE_REVIEW_THRESHOLD` (chart `psService.companyMerge.roleReviewThreshold`, default 0.80, provisional until calibrated on a live CRA run) and follow the same rules; a Role review is never merged automatically. The shipped default, 0.43, sits at or below the lowest labelled true duplicate (0.4359; the labelled set has only 10 true pairs, so lower it if a real duplicate is missing); choose the value with `tools/company-merge/company_merge_similarity_sweep.py` and its `--floor` check. |
 | A restore is reported as committed but not yet applied (`committed_apply_pending` in the audit trail, `RestoreApplyPendingError`), or writes to `policy_system` or to the instrument's `_native`/`_baseline` graph are refused as blocked | The restore is recorded in the graph log, but the swap that makes it visible did not finish (FalkorDB was unreachable, or refused the swap). Until it finishes nothing of the instrument is visible, and the three graphs of the restore refuse further writes with nothing logged. Restore FalkorDB, then restart `ps-service`: startup recovery retries the swap, and finishes all three graphs together as one unit. Restoring the same instrument again is not needed. Last resort, only if the FalkorDB engine cannot perform the swap: rebuild each of the three graphs from its log in ascending graph-name order (the gateway's `replay_graph`); while they are rebuilt one by one a reader can see the three graphs in different states, so do it in a quiet window. The block lifts once every graph is at the head of its log. |
-| `/ready` answers 503 after FalkorDB or PS Postgres failed while the pod was running | Each `/ready` poll re-probes a failed FalkorDB or state Postgres, so the pod returns to `200` on its own within about `PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` of the dependency answering again; no restart is needed. If it stays `503`, the dependency is still unreachable: read `unhealthy_dependencies` (see [What `/ready` reveals](#what-ready-reveals)), the `ready_reprobe` entries in the pod log (exception class only) and the dependency itself. |
+| `/readyz` answers 503 after FalkorDB or PS Postgres failed while the pod was running | Each `/readyz` poll re-probes a failed FalkorDB or state Postgres, so the pod returns to `200` on its own within about `PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS` of the dependency answering again; no restart is needed. If it stays `503`, the dependency is still unreachable: read `unhealthy_dependencies` (see [What `/status` reveals](#what-status-reveals)), the `ready_reprobe` entries in the pod log (exception class only) and the dependency itself. |
 | The pod was restarted (or received SIGTERM) while an ingestion started with `start-ingestion` was running, and `get-ingestion-status` still shows `running` | The run record stays `running` until the next `get-ingestion-status` call for it, which marks it `failed` with the message that the run was interrupted before it finished and its outcome is unknown. Start the ingestion again. |
-| Calls fail with `GraphUnavailableError`, or `falkordb` stays in `unhealthy_dependencies` and `/ready` answers 503, while FalkorDB accepts connections but does not answer | A FalkorDB that hangs fails each call after `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` (30 s by default) and the gateway makes four attempts before it reports the graph unavailable. Check the FalkorDB pod (`kubectl logs`, CPU, memory). A graph that is simply large needs a longer socket timeout, which must stay above `PS_QUERY_TIMEOUT_MS`. The service refuses to start if it is not, naming both variables. See [Dependency connection and socket timeouts](#dependency-connection-and-socket-timeouts). |
+| Calls fail with `GraphUnavailableError`, or `falkordb` stays in `unhealthy_dependencies` and `/readyz` answers 503, while FalkorDB accepts connections but does not answer | A FalkorDB that hangs fails each call after `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` (30 s by default) and the gateway makes four attempts before it reports the graph unavailable. Check the FalkorDB pod (`kubectl logs`, CPU, memory). A graph that is simply large needs a longer socket timeout, which must stay above `PS_QUERY_TIMEOUT_MS`. The service refuses to start if it is not, naming both variables. See [Dependency connection and socket timeouts](#dependency-connection-and-socket-timeouts). |
 | The `ps-service` pod fails to start and restarts, and its logs show the state migration step failing | The state Postgres did not accept a connection within `PS_STATE_POSTGRES_CONNECT_TIMEOUT_SECONDS` (5 s by default, 2 s minimum). Startup state migration is fatal by design. Check the `ps-postgres` pod and the Service and NetworkPolicy in front of it. |
-| A request fails with a store's fixed "unavailable" error and `state_postgres` is in `unhealthy_dependencies` | The state Postgres did not answer within the connect timeout, or a statement ran past `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` (30 s by default) and was cancelled. The error text carries no SQL or host by design; the pod log has the error class. A cancelled statement heals through the `/ready` re-probe or the next successful call. If a legitimate long statement is cancelled, for example `verify-audit-log` on a large audit table, raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS`. |
+| A request fails with a store's fixed "unavailable" error and `state_postgres` is in `unhealthy_dependencies` | The state Postgres did not answer within the connect timeout, or a statement ran past `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` (30 s by default) and was cancelled. The error text carries no SQL or host by design; the pod log has the error class. A cancelled statement heals through the `/readyz` re-probe or the next successful call. If a legitimate long statement is cancelled, for example `verify-audit-log` on a large audit table, raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS`. |
 | Passkey approvals fail and `passkey_signing_postgres` is in `unhealthy_dependencies`, with only a warning at startup | The passkey signing Postgres did not answer within `PS_PASSKEYSIGNING_POSTGRES_CONNECT_TIMEOUT_SECONDS` (5 s by default), or a statement ran past `PS_PASSKEYSIGNING_POSTGRES_STATEMENT_TIMEOUT_MS`. Startup continues by design. Check the `ps_signing` database. |
 | The service refuses to start with an error naming `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` and `PS_QUERY_TIMEOUT_MS` | The socket timeout must be greater than the query timeout (in seconds), or a healthy slow query would be cut off on the socket. Raise the socket timeout or lower `PS_QUERY_TIMEOUT_MS`. |
 | Approving a graph cleanup edit (a near-miss merge batch included) fails or never completes (passkey signing) | Passkey signing uses its own database (`ps_signing`). When it is unreachable the signing ceremony cannot run, `passkey_signing_postgres` appears in `unhealthy_dependencies`, readiness is unaffected, and the rest of the system keeps working. Restore the database and request a new approval. |
 | Every request returns 401 although the token is fresh | The identity provider or its key set (JWKS) is unreachable from PS Service, or the token's issuer or audience does not match `PS_AUTH_ISSUER` / `PS_AUTH_AUDIENCE`. Readiness is unaffected. Check `kubectl logs` for the unauthenticated entries and their reason category. |
 | Ingestion fails at the first stage with a Cellar/ELI error | The EU publication service is unreachable or returned an unparseable document. `cellar_eli` can appear in `unhealthy_dependencies`; readiness is unaffected. Retry later. |
 | A pod restarts repeatedly with `OOMKilled` (`ps-service`, FalkorDB, PS Postgres, authentik Postgres) or the `ps-state-provision` Job fails with it | The container exceeded its memory limit. Raise the limit of the affected workload in the chart values: `psService.resources`, `falkordb.resources`, `psPostgres.resources`, `authentik.postgres.resources`, or `psPostgres.provisioning.resources` for the Job (see [Helm Chart Values Reference](./helm-chart-values-reference.md)). A FalkorDB restart loses no data: the graph is rebuilt from the mutation log in PS Postgres, but a large graph needs a higher `falkordb.resources` memory limit. |
-| `ingest document`, or an `ingest-regulation` / `start-ingestion` / `check-regulations` tool call, fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint with a valid access token (`ps-cli get health` while logged in) and its LLM provider configuration. |
+| `ingest document`, or an `ingest-regulation` / `start-ingestion` / `check-regulations` tool call, fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/status` endpoint with a valid access token (`ps-cli get health` while logged in) and its LLM provider configuration. |
 | `ps-cli auth login` against the evaluator reports "Could not verify the TLS certificate of ..." | The issuer is HTTPS with a locally issued certificate and the CA is not in the OS trust store, which `ps-cli` verifies against. Trust the CA there (`scripts/deploy-ps-eval.sh --apply-host-setup` does this on the evaluator's own machine). A plain "Could not reach ..." means the host is unreachable instead. See [Evaluator Installation Guide, Part 2](./evaluator-installation-guide.md#part-2-install-the-client). |
 | A browser shows a certificate warning, or passkey registration is refused, on the evaluator | The browser does not trust the local CA, or the hostname is not mapped in `/etc/hosts` on that machine. Passkeys need a trusted HTTPS origin. Trust `ca.pem` and map the hostname (see [Evaluator Installation Guide, Part 2](./evaluator-installation-guide.md#part-2-install-the-client)). |
 | The deploy script stops with "Authentik rejected the shared API token" | Authentik's bootstrap token never rotates and the Secret no longer matches it. See [Installation Guide: Upgrading an existing install](./installation-guide.md#upgrading-an-existing-install). |

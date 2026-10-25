@@ -687,7 +687,7 @@ model-*availability* failure).
 - **No live-Azure re-verification of the full TLS chain by this script's own test
   suite** — the unauthenticated-401 half is proven by PS Service's existing OIDC test suite
 , and the Ingress/TLS manifest shape is proven locally, but the live "a real
-  certificate is issued and `/health` returns 200" claim is evidenced only by a one-time
+  certificate is issued and the liveness probe answered 200 through it" claim is evidenced only by a one-time
   empirical run during this script's development, not re-exercised automatically on every change.
 - **The production Ingress allowlist and owner flow were verified on `kind`, not on AKS**: the real script and `values-prod.yaml` ran against `ingress-nginx` with a stand-in `az` and
   the cert-manager/Let's Encrypt steps skipped, proving the eight-path allowlist, the blocked admin

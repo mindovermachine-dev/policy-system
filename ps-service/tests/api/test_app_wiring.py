@@ -50,15 +50,27 @@ def test_create_app_registers_post_ingestions_and_not_regulations() -> None:
     assert client.get("/regulations").status_code == 404
 
 
-def test_create_app_still_serves_health_and_ready() -> None:
-    """Regression: mounting the REST router leaves `/health` and `/ready` intact.
+def test_create_app_still_serves_the_probes_and_status() -> None:
+    """Mounting the REST router leaves `/livez`, `/readyz` and `/status` intact.
 
-    `/ready` is queried via a bare (never-entered) `TestClient`, so `lifespan`
+    `/readyz` is queried via a bare (never-entered) `TestClient`, so `lifespan`
     startup never runs and `app.state.ready` stays its `False` default —
-    a not-ready `/ready` returns 503, not 200 (see
-    `ps_service.main.ready`'s docstring).
+    a not-ready `/readyz` returns 503, not 200, while `/status` still answers 200.
     """
     client = TestClient(_make_app())
 
-    assert client.get("/health").status_code == 200
-    assert client.get("/ready").status_code == 503
+    assert client.get("/livez").status_code == 200
+    assert client.get("/readyz").status_code == 503
+    assert client.get("/status").status_code == 200
+
+
+def test_create_app_serves_status_through_the_api_router() -> None:
+    """`GET /status` is part of the REST API router's documented surface and answers 200."""
+    app = _make_app()
+    client = TestClient(app)
+    schema = app.openapi()
+
+    assert "get" in schema["paths"]["/status"]
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert set(response.json()) == {"status", "version"}

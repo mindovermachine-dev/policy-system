@@ -25,7 +25,7 @@ from ps_service.dependency_health import (
 )
 from ps_service.main import (
     _GATING_DEPENDENCIES,  # pyright: ignore[reportPrivateUsage]  # the split the gauge must follow
-    _READY_DEPENDENCIES,  # pyright: ignore[reportPrivateUsage]  # the list /ready reports and the gauge counts
+    _READY_DEPENDENCIES,  # pyright: ignore[reportPrivateUsage]  # the list /status reports and the gauge counts
     create_app,
 )
 from ps_service.metrics import build_metrics
@@ -56,7 +56,7 @@ def _accept_the_gauge_token(  # pyright: ignore[reportUnusedFunction]  # pytest 
         return AccessToken(token=token, client_id="reader", scopes=[]) if token == _TOKEN else None
 
     # detroit-exception: the verifier's cryptographic path needs a real IdP signing key; the
-    # `/ready` detail gate only depends on its accept/reject answer
+    # `/status` detail gate only depends on its accept/reject answer
     monkeypatch.setattr(PsTokenVerifier, "verify_token", verify_token)
 
 
@@ -64,22 +64,22 @@ def _gauge_values(client: TestClient) -> dict[str, float]:
     return {s.labels["gating"]: s.value for s in samples(client.get("/metrics").content, _GAUGE)}
 
 
-def _ready_split(client: TestClient) -> dict[str, float]:
-    response = client.get("/ready", headers={"Authorization": f"Bearer {_TOKEN}"})
+def _status_split(client: TestClient) -> dict[str, float]:
+    response = client.get("/status", headers={"Authorization": f"Bearer {_TOKEN}"})
     names: list[str] = response.json()["unhealthy_dependencies"]
     gating = sum(1 for name in names if name in _GATING_DEPENDENCIES)
     return {"true": float(gating), "false": float(len(names) - gating)}
 
 
 @pytest.mark.parametrize("unhealthy", _MIXES)
-def test_gauge_equals_the_authenticated_ready_split_for_each_mix(
+def test_gauge_equals_the_authenticated_status_split_for_each_mix(
     unhealthy: tuple[str, ...],
 ) -> None:
     client = TestClient(create_app(auth_enabled_config()))
     for name in unhealthy:
         mark_unhealthy(name, error=RuntimeError("down"))
 
-    assert _gauge_values(client) == _ready_split(client)
+    assert _gauge_values(client) == _status_split(client)
 
 
 def test_both_series_are_present_and_zero_when_everything_is_healthy() -> None:

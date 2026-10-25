@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, cast
 
 from ps_cli.errors import assert_contract
 from ps_cli.intake_validation import validate_local_seed_file
+from ps_cli.models import StatusDetail
 
 if TYPE_CHECKING:
     import argparse
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 
     from ps_cli.http_client import PsServiceClientProtocol
 
-# The dependency name PS Service's `/ready` reports when its LLM provider is unreachable.
+# The dependency name PS Service's `/status` reports when its LLM provider is unreachable.
 # Only this dependency's presence in `unhealthy_dependencies` blocks the ingestion
 # pre-flight check -- `cellar_eli` alone never does.
 _LLM_INTERFACE_DEPENDENCY_NAME = "llm_interface"
@@ -38,16 +39,16 @@ _LOGIN_FOR_DETAIL_HINT = "log in to see dependency detail"
 def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
     """Fail fast with a `PsCliError` when PS Service reports its LLM Interface as unreachable.
 
-    Uses the service's readiness check with the dependency names required (the call is
+    Uses the service's status check with the dependency names required (the call is
     authenticated, and a reply without names is an error rather than a pass). Only
     `llm_interface` appearing in `unhealthy_dependencies` blocks the command; `cellar_eli`
     alone never does, since it is only needed conditionally for the non-curated CELEX fallback. The
     error message names the dependency only, never the raw recorded error string.
-    An unreachable PS Service is reported by `check_readiness()` itself with distinct
+    An unreachable PS Service is reported by `get_status()` itself with distinct
     wording ("Could not reach PS Service...").
 
     Args:
-        client: The PS Service client used to query readiness.
+        client: The PS Service client used to query the service status.
 
     Returns:
         None when the LLM Interface is not reported unhealthy.
@@ -55,32 +56,32 @@ def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
     Raises:
         PsCliError: The LLM Interface is reported unhealthy, the dependency names are
             unavailable (not logged in, or a reply without names), or PS Service is
-            unreachable or returns an unexpected readiness response.
+            unreachable or returns an unexpected status response.
 
     Side Effects:
-        Makes one readiness request to PS Service.
+        Makes one status request to PS Service.
     """
-    readiness = client.check_readiness(require_detail=True)
-    unhealthy = readiness.unhealthy_dependencies
+    status = client.get_status(detail=StatusDetail.REQUIRED)
+    unhealthy = status.unhealthy_dependencies
     assert_contract(
         contract=unhealthy is not None,
-        msg="readiness detail unavailable.",
+        msg="status detail unavailable.",
         hint="run `ps-cli auth login` and retry",
     )
     assert_contract(
         contract=_LLM_INTERFACE_DEPENDENCY_NAME not in (unhealthy or ()),
         msg="LLM Interface is unavailable.",
-        hint="check PS Service's /ready endpoint and its LLM provider configuration",
+        hint="check `ps-cli get health` and PS Service's LLM provider configuration",
     )
 
 
 def handle_ingest_document(document_path: Path, client: PsServiceClientProtocol) -> None:
     """Ingest an internal document, read locally from `document_path`, via PS Service.
 
-    The file is validated locally first, then a readiness pre-flight runs, and only
+    The file is validated locally first, then a status pre-flight runs, and only
     then is the already-parsed document sent in the request body (the file is never
     read or parsed twice). Local validation runs before the pre-flight because it is
-    the cheaper check and would reject the request regardless of readiness. Either
+    the cheaper check and would reject the request regardless of the service status. Either
     failure means the ingestion request is never sent.
 
     On success it prints the run id, the regulatory instrument id, and each pipeline
@@ -105,7 +106,7 @@ def handle_ingest_document(document_path: Path, client: PsServiceClientProtocol)
             the request. Propagated uncaught to `ps_cli.cli.run()`.
 
     Side Effects:
-        Reads `document_path`, makes readiness and ingestion requests to PS Service,
+        Reads `document_path`, makes status and ingestion requests to PS Service,
         and prints the result to stdout.
     """
     document = validate_local_seed_file(document_path)
@@ -194,12 +195,13 @@ def handle_export_instrument(
 
 
 def handle_get_health(client: PsServiceClientProtocol) -> None:
-    """Report PS Service's reachability, health (`/health`), and readiness (`/ready`).
+    """Report PS Service's reachability, health and readiness from one `GET /status`.
 
-    The three summary lines print only once both checks have succeeded, so nothing
-    is printed before a call that might still fail. "Reachable but not ready" is
+    The summary lines print only once the status request has succeeded, so nothing
+    is printed before a call that might still fail. A 200 reply means the process
+    answered, so the health line reports `alive`. "Reachable but not ready" is
     reported as a `PsCliError` whose hint lists the unhealthy dependencies, if any
-    are named (a not-ready state is not always attributable to one). The readiness
+    are named (a not-ready state is not always attributable to one). The status
     request carries the login when there is one; without a login PS Service answers
     the status only and the report points to `ps-cli auth login` for the detail.
 
@@ -212,16 +214,15 @@ def handle_get_health(client: PsServiceClientProtocol) -> None:
 
     Raises:
         PsCliError: PS Service is unreachable or returns an unexpected response
-            (raised by the client's health and readiness checks), or it is
-            reachable but its health is not `alive` or its readiness is not
-            `ready`.
+            (raised by the client's status check), or it is reachable but its
+            readiness is not `ready`.
 
     Side Effects:
-        Makes health and readiness requests to PS Service and prints to stdout.
+        Makes one status request to PS Service and prints to stdout.
     """
-    health_status = client.check_health()
-    readiness = client.check_readiness()
-    names = readiness.unhealthy_dependencies
+    status = client.get_status()
+    health_status = "alive"
+    names = status.unhealthy_dependencies
     if names is None:
         hint: str | None = _LOGIN_FOR_DETAIL_HINT
     elif names:
@@ -229,16 +230,16 @@ def handle_get_health(client: PsServiceClientProtocol) -> None:
     else:
         hint = None
     assert_contract(
-        contract=health_status == "alive" and readiness.status == "ready",
+        contract=status.status == "ready",
         msg=(
             f"PS Service is reachable but not ready "
-            f"(health={health_status!r}, ready={readiness.status!r})."
+            f"(health={health_status!r}, ready={status.status!r})."
         ),
         hint=hint,
     )
     print("reachable: yes")
     print(f"health: {health_status}")
-    print(f"ready: {readiness.status}")
+    print(f"ready: {status.status}")
     if names is None:
         print(f"💡 {_LOGIN_FOR_DETAIL_HINT}")
 

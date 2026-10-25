@@ -36,12 +36,12 @@ from graph_gateway.silent_peer import silent_peer
 from mcp.server.auth.provider import AccessToken
 from metrics._scrape import samples
 from persistence.provisioned_postgres import Provisioned, provision_graph_log
-from starlette.requests import Request
 
 import ps_service.main as main_module
 from ps_service import dependency_health
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.config import ServiceConfig, load_config
+from ps_service.dependency_health import registry
 from ps_service.graph_gateway.connection import connect as connect_falkordb
 from ps_service.graph_gateway.connection import select_graph
 from ps_service.graph_gateway.digest import canonical_digest
@@ -185,9 +185,34 @@ def _accept_the_detail_token(  # pyright: ignore[reportUnusedFunction]  # pytest
     monkeypatch.setattr(PsTokenVerifier, "verify_token", verify_token)
 
 
-def _ready_detail(client: TestClient) -> httpx.Response:
-    """GET /ready presenting the token the fake verifier accepts."""
-    return client.get("/ready", headers=_DETAIL_HEADERS)  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
+@dataclasses.dataclass(frozen=True)
+class _ProbedDetail:
+    """The readiness probe's answer and the verified `/status` detail for one recorded state.
+
+    `status_code` is the probe's; `body` is the verified `/status` body without `version`.
+    """
+
+    status_code: int
+    body: dict[str, Any]
+    text: str
+
+    def json(self) -> dict[str, Any]:
+        """The verified status detail."""
+        return self.body
+
+
+def _readiness_detail(client: TestClient) -> _ProbedDetail:
+    """Poll `/readyz` (re-probe and latch), then read the verified detail from `/status`.
+
+    The probe's status and the detail's status must agree, since both read the same recorded
+    readiness.
+    """
+    probe = client.get("/readyz")
+    detail = client.get("/status", headers=_DETAIL_HEADERS)
+    body = cast("dict[str, Any]", detail.json())
+    assert body.pop("version") == installed_version("ps-service")
+    assert body["status"] == probe.json()["status"]
+    return _ProbedDetail(status_code=probe.status_code, body=body, text=detail.text)
 
 
 def _fake_fetch_discovery_document(issuer: str, **_kwargs: object) -> dict[str, Any]:
@@ -233,7 +258,7 @@ def _stub_auth_discovery(  # pyright: ignore[reportUnusedFunction]  # pytest aut
 def _complete_config(**overrides: object) -> ServiceConfig:
     """A `ServiceConfig` with every `INGESTION_REQUIRED_CONFIG_FIELDS` value set.
 
-    The baseline for `app` below and any other fixture that needs `/ready`'s
+    The baseline for `app` below and any other fixture that needs `/readyz`'s
     startup gate to be reachable — the readiness-gated-on-config-completeness
     tests further down build their own incomplete configs directly instead of
     using this helper. `auth_issuer`/`auth_audience` default to a fake
@@ -294,52 +319,26 @@ def app() -> FastAPI:
     return create_app(_complete_config())
 
 
-def test_health_returns_200_and_alive_status_before_lifespan_runs(app: FastAPI) -> None:
-    """GET /health via a bare (never-entered) TestClient returns 200 and 'alive'."""
-    response = TestClient(app).get("/health")
+def test_livez_returns_200_and_alive_before_lifespan_runs(app: FastAPI) -> None:
+    """GET /livez via a bare (never-entered) TestClient returns 200 and 'alive' alone."""
+    response = TestClient(app).get("/livez")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "alive"
+    assert response.json() == {"status": "alive"}
 
 
-def test_health_returns_version_field_from_installed_metadata(app: FastAPI) -> None:
-    """`/health`'s `version` field comes from `installed_version("ps-service")`.
+def test_livez_body_has_no_version_key(app: FastAPI) -> None:
+    """The liveness probe carries no version; the client-facing version is served by `/status`."""
+    with TestClient(app) as client:
+        response = client.get("/livez")
 
-    Calls the real `importlib.metadata.version("ps-service")` directly and compares --
-    safe to run for real (no mocking needed): the very next test,
-    `test_health_version_matches_ps_service_pyproject_toml_version`, already proves this same
-    real call's value is not a coincidental hardcoded literal, since it independently tracks
-    `pyproject.toml`'s own declared version.
-    """
-    response = TestClient(app).get("/health")
-
-    assert response.json() == {
-        "status": "alive",
-        "version": installed_version("ps-service"),
-    }
-
-
-def test_health_version_matches_ps_service_pyproject_toml_version(app: FastAPI) -> None:
-    """Dev-tree-real half: `/health`'s reported version matches
-    `ps-service/pyproject.toml`'s own declared `[project] version`.
-
-    No monkeypatching -- reads `pyproject.toml` directly via `tomllib.load(...)`, proving the
-    real, currently-installed distribution metadata (`importlib.metadata.version("ps-service")`)
-    agrees with the source tree's own declared version.
-    """
-    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    with pyproject_path.open("rb") as pyproject_file:
-        pyproject_data = tomllib.load(pyproject_file)
-    expected_version = pyproject_data["project"]["version"]
-
-    response = TestClient(app).get("/health")
-
-    assert response.json()["version"] == expected_version
+    assert response.status_code == 200
+    assert "version" not in response.json()
 
 
 def test_ready_returns_503_and_not_ready_status_before_lifespan_runs(app: FastAPI) -> None:
-    """GET /ready via a bare (never-entered) TestClient returns 503 and 'not_ready'."""
-    response = _ready_detail(TestClient(app))
+    """GET /readyz via a bare (never-entered) TestClient returns 503 and 'not_ready'."""
+    response = _readiness_detail(TestClient(app))
 
     assert response.status_code == 503
     assert response.json() == {
@@ -351,36 +350,36 @@ def test_ready_returns_503_and_not_ready_status_before_lifespan_runs(app: FastAP
 
 def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> None:
     """Entering TestClient as a context manager runs `lifespan` startup, flipping
-    /ready to 'ready'.
+    /readyz to 'ready'.
     """
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
 
-def test_ready_without_credentials_returns_status_only_when_not_ready(app: FastAPI) -> None:
-    """A probe with no token gets the status and nothing about dependencies or graphs."""
-    response = TestClient(app).get("/ready")
+def test_readyz_body_is_status_only_when_not_ready(app: FastAPI) -> None:
+    """A not-ready probe answers 503 with the status and nothing about dependencies or graphs."""
+    response = TestClient(app).get("/readyz")
 
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready"}
 
 
-def test_ready_without_credentials_returns_status_only_when_ready(app: FastAPI) -> None:
-    """A ready service still answers a tokenless probe with 200 and the status alone."""
+def test_readyz_body_is_status_only_when_ready(app: FastAPI) -> None:
+    """A ready service answers the probe with 200 and the status alone."""
     with TestClient(app) as client:
-        response = client.get("/ready")
+        response = client.get("/readyz")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
 
 
-def test_ready_without_credentials_hides_a_named_unhealthy_dependency(
+def test_readyz_never_names_an_unhealthy_dependency_that_status_names_to_a_verified_caller(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """A failing gating dependency flips the code to 503 but is not named to an anonymous caller."""
+    """A failing gating dependency flips the probe to 503; only `/status` names it."""
 
     def failing_probe(config: ServiceConfig) -> None:
         error = IngestionConfigurationError("FalkorDB connection failed")
@@ -390,56 +389,88 @@ def test_ready_without_credentials_hides_a_named_unhealthy_dependency(
     monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_probe)
 
     with TestClient(app) as client:
-        anonymous = client.get("/ready")
-        authenticated = _ready_detail(client)
+        probe = client.get("/readyz", headers=_DETAIL_HEADERS)
+        detail = _status_detail(client)
 
-    assert anonymous.status_code == 503
-    assert anonymous.json() == {"status": "not_ready"}
-    assert authenticated.json()["unhealthy_dependencies"] == ["falkordb"]
-
-
-def test_ready_with_a_valid_token_returns_detail(app: FastAPI) -> None:
-    """A verified caller gets the status, the unhealthy dependency names and the gated graphs."""
-    with TestClient(app) as client:
-        response = _ready_detail(client)
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
+    assert probe.status_code == 503
+    assert probe.json() == {"status": "not_ready"}
+    assert detail.json()["unhealthy_dependencies"] == ["falkordb"]
 
 
-def test_ready_with_an_invalid_token_is_status_only_and_not_a_401(app: FastAPI) -> None:
-    """A token the verifier rejects never breaks the probe and never unlocks the detail."""
-    with TestClient(app) as client:
-        response = client.get("/ready", headers={"Authorization": "Bearer not-the-token"})
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "ready"}
-
-
-@pytest.mark.parametrize("header", ["Basic abc", "Bearer", "Bearer   ", _DETAIL_TOKEN])
-def test_ready_with_a_malformed_authorization_header_is_status_only(
-    header: str, app: FastAPI
+@pytest.mark.parametrize("path", ["/livez", "/readyz"])
+@pytest.mark.parametrize(
+    "header",
+    [f"Bearer {_DETAIL_TOKEN}", "Bearer not-the-token", "Basic abc", None],
+    ids=["valid-token", "rejected-token", "basic", "none"],
+)
+def test_probe_body_ignores_the_authorization_header(
+    path: str, header: str | None, monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    """Only a `Bearer <token>` header is considered; anything else is an anonymous call."""
+    """The probes never read `Authorization`: the body is the anonymous one, no token is checked."""
+    calls: list[str] = []
+
+    async def counting_verify_token(self: PsTokenVerifier, token: str) -> AccessToken | None:
+        calls.append(token)
+        return AccessToken(token=token, client_id="detail-reader", scopes=[])
+
+    # detroit-exception: the verifier's cryptographic path needs a real IdP signing key; the
+    # behaviour under test is that the probes never reach the verifier at all
+    monkeypatch.setattr(PsTokenVerifier, "verify_token", counting_verify_token)
+    headers = {} if header is None else {"Authorization": header}
+
     with TestClient(app) as client:
-        response = client.get("/ready", headers={"Authorization": header})
+        anonymous = client.get(path)
+        response = client.get(path, headers=headers)
 
-    assert response.json() == {"status": "ready"}
+    assert response.status_code == anonymous.status_code
+    assert response.json() == anonymous.json()
+    assert calls == []
 
 
-def test_ready_with_bypass_unauthenticated_is_status_only() -> None:
-    """With the local-test bypass there is no verifier, so there is no detail path at all."""
+def test_readyz_under_the_bypass_is_status_only() -> None:
+    """With the local-test bypass there is no verifier, and the probe body is the status alone."""
     config = _complete_config(
         is_local_test_bypass_active=True, auth_issuer=None, auth_audience=None
     )
     app = create_app(config)
 
     with TestClient(app) as client:
-        plain = client.get("/ready")
-        with_bearer = _ready_detail(client)
+        plain = client.get("/readyz")
+        with_bearer = client.get("/readyz", headers=_DETAIL_HEADERS)
 
     assert plain.json() == {"status": "ready"}
     assert with_bearer.json() == {"status": "ready"}
+
+
+_RETIRED_PROBE_PATHS = tuple(f"/{name}" for name in ("health", "ready"))
+
+
+@pytest.mark.parametrize("caller", ["anonymous", "verified-token", "replay-running"])
+@pytest.mark.parametrize("retired", _RETIRED_PROBE_PATHS)
+def test_retired_probe_paths_answer_like_a_path_that_never_existed(
+    caller: str, retired: str
+) -> None:
+    """A retired probe path gets exactly the answer of a path the app never had."""
+    app = create_app(_complete_config())
+    if caller == "replay-running":
+        _hold_replay()
+    headers = _DETAIL_HEADERS if caller == "verified-token" else {}
+
+    with TestClient(app) as client:
+        old = client.get(retired, headers=headers)
+        unknown = client.get("/no-such-path", headers=headers)
+
+    assert old.status_code == unknown.status_code
+    assert old.content == unknown.content
+    assert old.headers.get("content-type") == unknown.headers.get("content-type")
+
+
+def test_retired_probe_paths_are_on_no_exempt_list() -> None:
+    from ps_service.auth import middleware
+
+    for retired in _RETIRED_PROBE_PATHS:
+        assert retired not in middleware._EXEMPT_PATHS  # pyright: ignore[reportPrivateUsage]  # the exempt list itself is under test
+        assert retired not in main_module._REPLAY_GATE_EXEMPT_PATHS  # pyright: ignore[reportPrivateUsage]  # the exempt list itself is under test
 
 
 def test_lifespan_calls_configure_before_emit_log_entry(tmp_path: Path, app: FastAPI) -> None:
@@ -490,12 +521,12 @@ def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, ap
     assert len(startup_success_entries) == 1
 
 
-@pytest.mark.parametrize("path", ["/health", "/ready"])
+@pytest.mark.parametrize("path", ["/livez", "/readyz", "/status"])
 @pytest.mark.parametrize("method", ["post", "put", "delete"])
-def test_non_get_request_to_health_or_ready_returns_405(
+def test_non_get_request_to_a_probe_or_status_returns_405(
     path: str, method: str, app: FastAPI
 ) -> None:
-    """POST/PUT/DELETE to `/health` or `/ready` are rejected with 405.
+    """POST/PUT/DELETE to `/livez`, `/readyz` or `/status` are rejected with 405.
 
     Likely passes with zero extra code (FastAPI/Starlette auto-405s a path
     registered only for GET) — written anyway as a locked-in regression guard.
@@ -505,7 +536,7 @@ def test_non_get_request_to_health_or_ready_returns_405(
     assert response.status_code == 405
 
 
-@pytest.mark.parametrize("path", ["/health", "/ready"])
+@pytest.mark.parametrize("path", ["/livez", "/readyz", "/status"])
 @pytest.mark.parametrize("method", ["post", "put", "delete"])
 def test_405_response_body_does_not_leak_path_config_env_or_traceback(
     path: str, method: str, app: FastAPI
@@ -521,29 +552,29 @@ def test_405_response_body_does_not_leak_path_config_env_or_traceback(
     assert response.json().keys().isdisjoint(_LEAK_SHAPED_KEYS)
 
 
-def _get_bare_health(app: FastAPI) -> httpx.Response:
-    """Helper: bare (never-entered) `TestClient` GET /health — lifespan never runs."""
-    return TestClient(app).get("/health")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
+def _get_bare_livez(app: FastAPI) -> httpx.Response:
+    """Helper: bare (never-entered) `TestClient` GET /livez — lifespan never runs."""
+    return TestClient(app).get("/livez")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
 
 
-def _get_bare_ready(app: FastAPI) -> httpx.Response:
-    """Helper: bare (never-entered) `TestClient` GET /ready — lifespan never runs."""
-    return TestClient(app).get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
+def _get_bare_readyz(app: FastAPI) -> httpx.Response:
+    """Helper: bare (never-entered) `TestClient` GET /readyz — lifespan never runs."""
+    return TestClient(app).get("/readyz")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
 
 
-def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
-    """Helper: GET /ready with `lifespan` startup run to completion."""
+def _get_readyz_after_lifespan_startup(app: FastAPI) -> httpx.Response:
+    """Helper: GET /readyz with `lifespan` startup run to completion."""
     with TestClient(app) as client:
-        return client.get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
+        return client.get("/readyz")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
 
 
 @pytest.mark.parametrize(
     ("make_response", "expected_status", "expected_keys"),
     [
-        (_get_bare_health, 200, {"status", "version"}),
-        (_get_bare_ready, 503, {"status"}),
+        (_get_bare_livez, 200, {"status"}),
+        (_get_bare_readyz, 503, {"status"}),
         (
-            _get_ready_after_lifespan_startup,
+            _get_readyz_after_lifespan_startup,
             200,
             {"status"},
         ),
@@ -557,10 +588,10 @@ def test_response_body_contains_only_a_status_key(
 ) -> None:
     """Every response body's key set is exactly the documented shape.
 
-    Covers every state the health/ready tests reach: bare `/health`
-    (200, `{"status"}`), bare `/ready` before `lifespan` runs (503, not
-    ready), and `/ready` after `lifespan` startup completes (200, ready) —
-    both anonymous `/ready` states carry `{"status"}` alone — no undocumented key
+    Covers every state the probe tests reach: bare `/livez`
+    (200, `{"status"}`), bare `/readyz` before `lifespan` runs (503, not
+    ready), and `/readyz` after `lifespan` startup completes (200, ready) —
+    both `/readyz` states carry `{"status"}` alone — no undocumented key
     ever leaks into any of these responses.
     """
     response = make_response(app)
@@ -569,9 +600,9 @@ def test_response_body_contains_only_a_status_key(
     assert response.json().keys() == expected_keys
 
 
-@pytest.mark.parametrize("path", ["/health", "/ready"])
+@pytest.mark.parametrize("path", ["/livez", "/readyz", "/status"])
 def test_unauthenticated_get_never_returns_401_or_403(path: str, app: FastAPI) -> None:
-    """Unauthenticated GET to /health or /ready
+    """Unauthenticated GET to /livez, /readyz or /status
     never returns 401/403.
 
     Explicit, dedicated test that
@@ -594,7 +625,7 @@ def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_co
     `ps_service.ingestion`/`ps_service.llm_interface` were dropped from
     `_FORBIDDEN_IMPORT_PREFIXES`: `main.py` imports each
     component's `check_connectivity` (`ingestion.falkordb_client.
-    check_connectivity_from_config` for FalkorDB) as `/ready`'s startup
+    check_connectivity_from_config` for FalkorDB) as `/readyz`'s startup
     dependency probes — a
     deliberate, narrow exception to the original decoupling, not a
     reopening of it. `ps_service.api` is dropped for the same reason:
@@ -1337,7 +1368,7 @@ def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
     monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
 
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     # `check_connectivity_from_config` wraps both the connect step and the
     # `list_graphs()` probe in one `dependency_health`-recording try/except, so
@@ -1412,7 +1443,7 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
 
 def test_passkey_signing_postgres_is_ready_but_not_gating_dependency() -> None:
     """An outage of this optional, pilot-scope Postgres instance must never
-    block `/ready` for the rest of the system -- it is
+    block `/readyz` for the rest of the system -- it is
     tracked (`_READY_DEPENDENCIES`) but never gates (`_GATING_DEPENDENCIES`),
     unlike FalkorDB.
 
@@ -1439,7 +1470,7 @@ def test_ready_stays_ready_when_only_passkey_signing_postgres_check_fails(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
     """A failed connection is reflected as unhealthy without ever raising out
-    of `/ready`/crashing startup: `_check_dependencies_at_startup`
+    of `/readyz`/crashing startup: `_check_dependencies_at_startup`
     catches the probe's own exception, records it via `dependency_health`, and
     `status` stays `"ready"` since this dependency is deliberately excluded
     from `_GATING_DEPENDENCIES` -- unlike an equivalent FalkorDB failure,
@@ -1459,7 +1490,7 @@ def test_ready_stays_ready_when_only_passkey_signing_postgres_check_fails(
     )
 
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -1533,7 +1564,7 @@ def test_migration_runner_runs_at_startup_when_postgres_is_configured() -> None:
 def test_state_postgres_is_ready_and_gating_dependency() -> None:
     """Unlike Passkey Signing Postgres, PS state Postgres backs privileged state (roles, audit,
     runtime config, the catalog override): without it the service cannot serve, so it gates
-    `/ready` -- a first `helm install` must not report ready with no usable store.
+    `/readyz` -- a first `helm install` must not report ready with no usable store.
     """
     ready_dependencies = cast(
         "tuple[str, ...]",
@@ -1549,7 +1580,7 @@ def test_state_postgres_is_ready_and_gating_dependency() -> None:
 
 
 def test_graph_replay_is_a_gating_and_ready_dependency() -> None:
-    """The startup replay of the graph log holds `/ready`: until it ends
+    """The startup replay of the graph log holds `/readyz`: until it ends
     the pod must not enter Service rotation, so `graph_replay` is a gating dependency like
     FalkorDB and PS state Postgres, and is named in `unhealthy_dependencies` while it runs.
     """
@@ -1580,7 +1611,7 @@ def test_ready_is_not_ready_when_state_postgres_check_fails(
     )
 
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.status_code == 503
     assert response.json() == {
@@ -1611,7 +1642,7 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
     """Host unset: no connection is even attempted at startup and the process stays up, but
-    `/ready` is `not_ready` via the (real) connectivity probe, which raises when unconfigured.
+    `/readyz` is `not_ready` via the (real) connectivity probe, which raises when unconfigured.
     """
 
     def fail_if_called(config: ServiceConfig) -> object:
@@ -1626,7 +1657,7 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
     )
 
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.status_code == 503
     assert response.json() == {
@@ -1689,7 +1720,7 @@ def test_startup_against_a_passkey_signing_postgres_that_never_answers_warns_and
         started = time.monotonic()
         with TestClient(create_app(config)) as client:
             ready_after = time.monotonic() - started
-            assert client.get("/health").status_code == 200
+            assert client.get("/livez").status_code == 200
     reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
 
     warnings = [
@@ -1825,10 +1856,10 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
     """The live gate (`dependency_health`'s registry, read via `is_healthy`),
     not just the one-time startup gate: a call site elsewhere (e.g.
     `graph_writer`'s write path) marking FalkorDB unhealthy mid-run must be
-    reflected on the next `/ready` poll, without needing a restart.
+    reflected on the next `/readyz` poll, without needing a restart.
     """
     with TestClient(app) as client:
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1836,7 +1867,7 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
 
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
 
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
             "gated_graphs": [],
@@ -1844,19 +1875,19 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
 
 
 def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: FastAPI) -> None:
-    """A fully healthy `/ready` response names zero unhealthy dependencies."""
+    """A fully healthy `/readyz` response names zero unhealthy dependencies."""
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
 
 def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: FastAPI) -> None:
-    """An unhealthy dependency's name appears in `/ready`'s response."""
+    """An unhealthy dependency's name appears in `/readyz`'s response."""
     with TestClient(app) as client:
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
 
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "not_ready",
@@ -1866,7 +1897,7 @@ def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: Fas
 
 
 def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: FastAPI) -> None:
-    """`mark_unhealthy`'s raw error string never leaks into `/ready`'s
+    """`mark_unhealthy`'s raw error string never leaks into `/readyz`'s
     response — only the dependency's name does.
     """
     with TestClient(app) as client:
@@ -1875,19 +1906,19 @@ def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: 
             error=RuntimeError("super-secret-connection-string-should-never-leak"),
         )
 
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert "super-secret-connection-string-should-never-leak" not in response.text
     assert response.json()["unhealthy_dependencies"] == ["falkordb"]
 
 
 def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: FastAPI) -> None:
-    """Live half: only FalkorDB health determines `/ready`'s
+    """Live half: only FalkorDB health determines `/readyz`'s
     status — an LLM Interface outage recorded on the live registry still names
     it in `unhealthy_dependencies` but must not flip `status` to `not_ready`.
     """
     with TestClient(app) as client:
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1897,7 +1928,7 @@ def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: Fast
             dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
         )
 
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["llm_interface"],
             "gated_graphs": [],
@@ -1910,7 +1941,7 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
     `status` to `not_ready`.
     """
     with TestClient(app) as client:
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1920,7 +1951,7 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
             dependency_health.CELLAR_ELI, error=ConnectionError("boom")
         )
 
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["cellar_eli"],
             "gated_graphs": [],
@@ -1931,7 +1962,7 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
     app: FastAPI,
 ) -> None:
     """Through LLM Interface: once a real call marks LLM Interface healthy again, its name
-    drops from `unhealthy_dependencies` on the next poll, without a restart. `/ready` never
+    drops from `unhealthy_dependencies` on the next poll, without a restart. `/readyz` never
     probes it (the probe costs quota), so the recovery has to come from a real call, which this
     test stands in for with `mark_healthy`. `status` stays `ready` throughout, since LLM
     Interface never gates it.
@@ -1940,7 +1971,7 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
         dependency_health.mark_unhealthy(
             dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
         )
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["llm_interface"],
             "gated_graphs": [],
@@ -1948,7 +1979,7 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
 
         dependency_health.mark_healthy(dependency_health.LLM_INTERFACE)
 
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1959,7 +1990,7 @@ def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_re
     app: FastAPI,
 ) -> None:
     """Through Cellar/ELI: once a real call marks Cellar/ELI healthy again, its name drops from
-    `unhealthy_dependencies` on the next poll, without a restart. `/ready` never probes it, so the
+    `unhealthy_dependencies` on the next poll, without a restart. `/readyz` never probes it, so the
     recovery has to come from a real call, which this test stands in for with `mark_healthy`.
     `status` stays `ready` throughout, since Cellar/ELI never gates it.
     """
@@ -1967,7 +1998,7 @@ def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_re
         dependency_health.mark_unhealthy(
             dependency_health.CELLAR_ELI, error=ConnectionError("boom")
         )
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": ["cellar_eli"],
             "gated_graphs": [],
@@ -1975,7 +2006,7 @@ def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_re
 
         dependency_health.mark_healthy(dependency_health.CELLAR_ELI)
 
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -1998,7 +2029,7 @@ def test_ready_lists_both_llm_interface_and_cellar_eli_when_both_unhealthy_but_s
             dependency_health.CELLAR_ELI, error=ConnectionError("boom")
         )
 
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -2012,7 +2043,7 @@ def test_ready_is_ready_when_llm_interface_startup_probe_fails_but_falkordb_succ
 ) -> None:
     """Startup half: an LLM Interface probe failure at
     startup must not wedge `app.state.ready` -- only a FalkorDB startup
-    failure does. Once `lifespan` completes, `/ready` reports ready, still
+    failure does. Once `lifespan` completes, `/readyz` reports ready, still
     naming LLM Interface as unhealthy.
     """
 
@@ -2024,7 +2055,7 @@ def test_ready_is_ready_when_llm_interface_startup_probe_fails_but_falkordb_succ
     monkeypatch.setattr(main_module, "check_llm_interface_connectivity", failing_llm_check)
 
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -2038,7 +2069,7 @@ def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeed
 ) -> None:
     """Startup half: a Cellar/ELI probe failure at
     startup must not wedge `app.state.ready` -- only a FalkorDB startup
-    failure does. Once `lifespan` completes, `/ready` reports ready, still
+    failure does. Once `lifespan` completes, `/readyz` reports ready, still
     naming Cellar/ELI as unhealthy.
     """
 
@@ -2050,7 +2081,7 @@ def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeed
     monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", failing_cellar_check)
 
     with TestClient(app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "ready",
@@ -2090,7 +2121,7 @@ def test_startup_cellar_eli_failure_emits_a_warning_log_entry_naming_the_depende
     assert any(entry.get("dependency") == "cellar_eli" for entry in warning_entries)
 
 
-# --- /ready retries a still-latched gating dependency instead of restarting ---
+# --- /readyz retries a still-latched gating dependency instead of restarting ---
 
 
 def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_probe(
@@ -2099,7 +2130,7 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
     """The exact race of FalkorDB being
     unreachable at ps-service startup, then reachable seconds later.
     `app.state.ready` must not latch `False` forever once the
-    startup probe failed; the next `/ready` poll after recovery reports
+    startup probe failed; the next `/readyz` poll after recovery reports
     `ready`, with no process restart.
     """
     app = create_app(_complete_config(ready_reprobe_min_interval_seconds=0))
@@ -2116,7 +2147,7 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
     monkeypatch.setattr(main_module, "check_falkordb_connectivity", flaky_falkordb_check)
 
     with TestClient(app) as client:
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
             "gated_graphs": [],
@@ -2124,7 +2155,7 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
 
         falkordb_reachable = True
 
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -2135,7 +2166,7 @@ def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
     """A retried gating-dependency probe failing again must not
-    raise out of the request handler -- polling `/ready` repeatedly while
+    raise out of the request handler -- polling `/readyz` repeatedly while
     FalkorDB is still down keeps answering `503 not_ready`, poll after poll.
     """
 
@@ -2148,7 +2179,7 @@ def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_
 
     with TestClient(app) as client:
         for _ in range(3):
-            response = _ready_detail(client)
+            response = _readiness_detail(client)
             assert response.status_code == 503
             assert response.json() == {
                 "status": "not_ready",
@@ -2213,12 +2244,12 @@ def _gating_gauge(client: TestClient) -> float:
 def test_ready_recovers_through_the_real_probe_after_a_mid_run_outage(
     dependency: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The real connectivity probe, over a fake driver, is what turns `/ready` green again."""
+    """The real connectivity probe, over a fake driver, is what turns `/readyz` green again."""
     state = {"down": False}
     app = create_app(_complete_config(ready_reprobe_min_interval_seconds=0))
 
     with TestClient(app) as client:
-        assert client.get("/ready").status_code == 200
+        assert client.get("/readyz").status_code == 200
 
         state["down"] = True
         if dependency == dependency_health.FALKORDB:
@@ -2243,14 +2274,14 @@ def test_ready_recovers_through_the_real_probe_after_a_mid_run_outage(
             )
         dependency_health.mark_unhealthy(dependency, error=RuntimeError("a real call failed"))
 
-        outage = _ready_detail(client)
+        outage = _readiness_detail(client)
         assert outage.status_code == 503
         assert outage.json()["unhealthy_dependencies"] == [dependency]
         assert _gating_gauge(client) == 1
 
         state["down"] = False
 
-        recovered = _ready_detail(client)
+        recovered = _readiness_detail(client)
         assert recovered.status_code == 200
         assert recovered.json() == {
             "status": "ready",
@@ -2275,8 +2306,8 @@ def test_ready_stays_not_ready_and_names_the_dependency_while_the_probe_still_fa
             dependency_health.FALKORDB, error=ConnectionError("secret-host-1234 refused")
         )
 
-        anonymous = client.get("/ready")
-        authenticated = _ready_detail(client)
+        anonymous = client.get("/readyz")
+        authenticated = _readiness_detail(client)
 
     assert anonymous.status_code == 503
     assert anonymous.json() == {"status": "not_ready"}
@@ -2320,7 +2351,7 @@ def test_ready_makes_zero_probe_calls_while_every_gating_dependency_is_healthy(
         dependency_health.mark_unhealthy(
             dependency_health.LLM_INTERFACE, error=RuntimeError("quota")
         )
-        statuses = [client.get("/ready").status_code for _ in range(5)]
+        statuses = [client.get("/readyz").status_code for _ in range(5)]
 
     assert statuses == [200] * 5
     assert seams.snapshot() == after_startup
@@ -2338,7 +2369,7 @@ def test_ready_does_not_probe_llm_interface_or_cellar_eli_while_unhealthy_and_re
         after_startup = seams.snapshot()
         for name in (dependency_health.LLM_INTERFACE, dependency_health.CELLAR_ELI):
             dependency_health.mark_unhealthy(name, error=RuntimeError("down"))
-        statuses = [client.get("/ready").status_code for _ in range(5)]
+        statuses = [client.get("/readyz").status_code for _ in range(5)]
         blocked.release.set()
         _await_ready(client)
 
@@ -2363,7 +2394,7 @@ def test_rapid_ready_polls_reuse_the_last_result_within_the_default_interval(
         monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("down"))
 
-        statuses = [client.get("/ready").status_code for _ in range(10)]
+        statuses = [client.get("/readyz").status_code for _ in range(10)]
 
     assert statuses == [503] * 10
     assert probes == 1
@@ -2372,7 +2403,7 @@ def test_rapid_ready_polls_reuse_the_last_result_within_the_default_interval(
 def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The `/ready` re-probe is written against `_GATING_DEPENDENCIES`, not hardcoded to
+    """The `/readyz` re-probe is written against `_GATING_DEPENDENCIES`, not hardcoded to
     FalkorDB by name -- proven here by widening the
     *real* `_GATING_DEPENDENCIES` set to also cover LLM Interface: an already-real dependency
     `_all_dependency_probes` already probes for, not a fabricated identity standing in for a
@@ -2415,15 +2446,15 @@ def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succ
     )
 
     with TestClient(app) as client:
-        assert client.get("/ready").json()["status"] == "not_ready"
+        assert client.get("/readyz").json()["status"] == "not_ready"
 
         falkordb_reachable = True
 
-        assert client.get("/ready").json()["status"] == "not_ready"
+        assert client.get("/readyz").json()["status"] == "not_ready"
 
         llm_interface_reachable = True
 
-        assert client.get("/ready").json()["status"] == "ready"
+        assert client.get("/readyz").json()["status"] == "ready"
 
 
 def test_concurrent_ready_polls_run_exactly_one_probe_per_unhealthy_dependency_and_agree(
@@ -2445,12 +2476,11 @@ def test_concurrent_ready_polls_run_exactly_one_probe_per_unhealthy_dependency_a
         return probe
 
     ready_route = cast(
-        "APIRoute", next(route for route in app.routes if getattr(route, "path", None) == "/ready")
+        "APIRoute", next(route for route in app.routes if getattr(route, "path", None) == "/readyz")
     )
 
     async def poll() -> JSONResponse:
-        anonymous_request = Request({"type": "http", "headers": []})
-        return cast("JSONResponse", await ready_route.endpoint(anonymous_request))
+        return cast("JSONResponse", await ready_route.endpoint())
 
     async def poll_many() -> list[JSONResponse]:
         polls = [asyncio.ensure_future(poll()) for _ in range(20)]
@@ -2522,7 +2552,7 @@ def test_ready_answers_503_within_one_deadline_when_both_dependencies_hang(
         _mark_both_gating_dependencies_unhealthy()
         try:
             started = time.monotonic()
-            response = client.get("/ready")
+            response = client.get("/readyz")
             elapsed = time.monotonic() - started
         finally:
             probes.release.set()
@@ -2533,20 +2563,20 @@ def test_ready_answers_503_within_one_deadline_when_both_dependencies_hang(
     assert probes.calls == {"falkordb": 1, "state_postgres": 1}
 
 
-def test_a_hung_probe_never_stalls_health(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_hung_probe_never_stalls_livez(monkeypatch: pytest.MonkeyPatch) -> None:
     app = create_app(_complete_config(ready_reprobe_deadline_seconds=1.0))
     with TestClient(app) as client:
         probes = _HangingProbes(monkeypatch)
         _mark_both_gating_dependencies_unhealthy()
         ready_answers: list[int] = []
         poller = threading.Thread(
-            target=lambda: ready_answers.append(client.get("/ready").status_code)
+            target=lambda: ready_answers.append(client.get("/readyz").status_code)
         )
         poller.start()
         try:
             assert _probes_are_blocked(probes)
             started = time.monotonic()
-            health = client.get("/health")
+            health = client.get("/livez")
             health_elapsed = time.monotonic() - started
             assert ready_answers == []
         finally:
@@ -2566,8 +2596,8 @@ def test_ready_answers_503_not_a_5xx_when_a_probe_raises(
         probes.release.set()
         _mark_both_gating_dependencies_unhealthy()
 
-        anonymous = client.get("/ready")
-        authenticated = _ready_detail(client)
+        anonymous = client.get("/readyz")
+        authenticated = _readiness_detail(client)
 
     assert (anonymous.status_code, authenticated.status_code) == (503, 503)
     assert anonymous.json() == {"status": "not_ready"}
@@ -2583,7 +2613,11 @@ def test_ready_reprobe_log_entries_and_body_never_contain_the_probe_error_text(
         probes.release.set()
         _mark_both_gating_dependencies_unhealthy()
 
-        bodies = [client.get("/ready").text, _ready_detail(client).text, client.get("/ready").text]
+        bodies = [
+            client.get("/readyz").text,
+            _readiness_detail(client).text,
+            client.get("/readyz").text,
+        ]
     reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
 
     lines = read_lines(tmp_path / "ps-service.jsonl")
@@ -2605,7 +2639,7 @@ def test_a_hung_probe_keeps_its_slot_so_later_polls_start_no_second_probe(
         probes = _HangingProbes(monkeypatch)
         _mark_both_gating_dependencies_unhealthy()
         try:
-            statuses = [client.get("/ready").status_code for _ in range(4)]
+            statuses = [client.get("/readyz").status_code for _ in range(4)]
         finally:
             probes.release.set()
 
@@ -2627,7 +2661,7 @@ def test_ready_authenticated_poll_with_a_slow_verifier_answers_within_the_deadli
 
     with TestClient(app) as client:
         started = time.monotonic()
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
         elapsed = time.monotonic() - started
 
     assert response.status_code == 200
@@ -2643,7 +2677,7 @@ def test_ready_authenticated_poll_still_gets_the_detail_while_a_probe_hangs_with
         probes = _HangingProbes(monkeypatch)
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=RuntimeError("down"))
         try:
-            response = _ready_detail(client)
+            response = _readiness_detail(client)
         finally:
             probes.release.set()
 
@@ -2655,7 +2689,7 @@ def test_ready_authenticated_poll_still_gets_the_detail_while_a_probe_hangs_with
 
 
 def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete() -> None:
-    """A missing `INGESTION_REQUIRED_CONFIG_FIELDS` value keeps `/ready` at
+    """A missing `INGESTION_REQUIRED_CONFIG_FIELDS` value keeps `/readyz` at
     `not_ready` even though every dependency probe succeeds — the same
     outcome a caller would otherwise only discover by getting a 503 from
     `POST /ingestions`.
@@ -2663,7 +2697,7 @@ def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete
     incomplete_app = create_app(_complete_config(company_merge_capability_merge_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "not_ready",
@@ -2673,13 +2707,13 @@ def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete
 
 
 def test_ready_stays_not_ready_when_only_the_review_threshold_is_unset() -> None:
-    """The Capability review threshold is an ingestion-required field: unset keeps `/ready` at
+    """The Capability review threshold is an ingestion-required field: unset keeps `/readyz` at
     `not_ready` and the startup warning names it.
     """
     incomplete_app = create_app(_complete_config(company_merge_capability_review_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "not_ready",
@@ -2689,13 +2723,13 @@ def test_ready_stays_not_ready_when_only_the_review_threshold_is_unset() -> None
 
 
 def test_ready_stays_not_ready_when_only_the_role_review_threshold_is_unset() -> None:
-    """The Role review threshold is an ingestion-required field: unset keeps `/ready` at
+    """The Role review threshold is an ingestion-required field: unset keeps `/readyz` at
     `not_ready`.
     """
     incomplete_app = create_app(_complete_config(company_merge_role_review_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {
         "status": "not_ready",
@@ -2712,7 +2746,7 @@ def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
     complete_app = create_app(_complete_config())
 
     with TestClient(complete_app) as client:
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
@@ -2764,12 +2798,12 @@ def test_ready_never_self_heals_missing_config_without_a_restart(app: FastAPI) -
     incomplete_app = create_app(_complete_config(company_merge_capability_merge_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
         }
-        assert _ready_detail(client).json() == {
+        assert _readiness_detail(client).json() == {
             "status": "not_ready",
             "unhealthy_dependencies": [],
             "gated_graphs": [],
@@ -2865,7 +2899,7 @@ def _initialize_mcp_session(client: TestClient) -> str:
 def test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path() -> None:
     """`create_app` mounts MCP Interface's Streamable HTTP transport
     at `MCP_HTTP_MOUNT_PATH`, reachable through the same `app`/`TestClient` that
-    already serves `/health` in this file.
+    already serves `/livez` in this file.
 
     A real JSON-RPC `initialize` request over the ASGI transport (real HTTP
     verbs/headers/JSON-RPC, not an in-process function call) succeeding proves
@@ -3249,13 +3283,13 @@ def _app_replaying(monkeypatch: pytest.MonkeyPatch, blocked: _BlockedReplay) -> 
 
 
 def _await_ready(client: TestClient) -> int:
-    """Poll `/ready` until it answers 200 (the replay ended) or give up after a few seconds."""
-    code = client.get("/ready").status_code
+    """Poll `/readyz` until it answers 200 (the replay ended) or give up after a few seconds."""
+    code = client.get("/readyz").status_code
     for _ in range(100):
         if code == 200:
             break
         time.sleep(0.05)
-        code = client.get("/ready").status_code
+        code = client.get("/readyz").status_code
     return code
 
 
@@ -3267,10 +3301,10 @@ def test_ready_reports_not_ready_while_startup_replay_runs_then_ready_when_it_en
 
     with TestClient(app) as client:
         assert blocked.reached.wait(timeout=5), "the startup replay never started"
-        during = _ready_detail(client)
+        during = _readiness_detail(client)
         blocked.release.set()
         status_after = _await_ready(client)
-        after = _ready_detail(client)
+        after = _readiness_detail(client)
 
     assert during.status_code == 503
     assert during.json()["status"] == "not_ready"
@@ -3283,17 +3317,41 @@ def test_ready_reports_not_ready_while_startup_replay_runs_then_ready_when_it_en
 def test_ready_does_not_self_heal_to_ready_while_replay_is_running(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # FalkorDB and PS state Postgres probe healthy (autouse stubs): only the replay holds `/ready`.
+    # FalkorDB and PS state Postgres probe healthy (autouse stubs): only the replay holds `/readyz`.
     blocked = _BlockedReplay()
     app = _app_replaying(monkeypatch, blocked)
 
     with TestClient(app) as client:
         assert blocked.reached.wait(timeout=5)
-        statuses = [client.get("/ready").status_code for _ in range(5)]
+        statuses = [client.get("/readyz").status_code for _ in range(5)]
         blocked.release.set()
         _await_ready(client)
 
     assert statuses == [503] * 5
+
+
+def test_readyz_is_answered_by_its_own_handler_not_the_replay_gate_while_replay_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """While the replay runs, `/readyz` gives its own 503, which has no `Retry-After`.
+
+    Only the replay gate sets `Retry-After`, so a gated path carries it and `/readyz` must not.
+    """
+    blocked = _BlockedReplay()
+    app = _app_replaying(monkeypatch, blocked)
+
+    with TestClient(app) as client:
+        assert blocked.reached.wait(timeout=5), "the startup replay never started"
+        readyz = client.get("/readyz")
+        gated = client.get("/no-such-path")
+        blocked.release.set()
+        _await_ready(client)
+
+    assert gated.status_code == 503
+    assert gated.headers.get("retry-after") is not None
+    assert readyz.status_code == 503
+    assert readyz.json() == {"status": "not_ready"}
+    assert readyz.headers.get("retry-after") is None
 
 
 def test_lifespan_does_not_block_startup_on_replay(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3303,7 +3361,7 @@ def test_lifespan_does_not_block_startup_on_replay(monkeypatch: pytest.MonkeyPat
     with TestClient(app) as client:  # entering returned although the replay is still blocked
         assert blocked.reached.wait(timeout=5)
         assert not blocked.release.is_set()
-        assert client.get("/health").status_code == 200  # liveness never waits for the replay
+        assert client.get("/livez").status_code == 200  # liveness never waits for the replay
         blocked.release.set()
 
 
@@ -3408,7 +3466,7 @@ def test_no_graph_accepts_writes_before_its_replay_completes(
         gateway.submit_group(replay.group(first, "cap-2"))  # the first graph is open now
         with pytest.raises(GraphReplayGatedError):
             gateway.submit_group(replay.group(second, "cap-2"))  # the second is still closed
-        during = client.get("/ready").status_code
+        during = client.get("/readyz").status_code
         replay.release(1)
         status_after = _await_ready(client)
 
@@ -3460,7 +3518,7 @@ def test_infrastructure_error_during_startup_replay_holds_not_ready_and_retries(
         deadline = time.monotonic() + 5
         while not _retry_entries(read_lines) and time.monotonic() < deadline:
             time.sleep(0.01)
-        during = [_ready_detail(client) for _ in range(3)]
+        during = [_readiness_detail(client) for _ in range(3)]
         graph.heal()
         status_after = _await_ready(client)
 
@@ -3523,7 +3581,7 @@ def test_ready_lists_a_graph_that_failed_verification_in_gated_graphs_with_statu
 
     with TestClient(app) as client:
         _await_ready(client)
-        response = _ready_detail(client)
+        response = _readiness_detail(client)
 
     assert response.status_code == 200
     assert response.json() == {
@@ -3542,7 +3600,7 @@ def test_ready_gated_graphs_is_empty_when_all_graphs_are_healthy(
 
     with TestClient(app) as client:
         _await_ready(client)
-        body = _ready_detail(client).json()
+        body = _readiness_detail(client).json()
 
     assert body["gated_graphs"] == []
 
@@ -3555,7 +3613,7 @@ def test_ready_gated_graphs_is_present_while_replay_is_running_and_empty(
 
     with TestClient(app) as client:
         assert replay.reached(0)
-        body = _ready_detail(client).json()
+        body = _readiness_detail(client).json()
         replay.release_all()
         _await_ready(client)
 
@@ -3566,7 +3624,7 @@ def test_ready_gated_graphs_is_empty_without_a_graph_gateway() -> None:
     app = create_app(_complete_config())
 
     with TestClient(app) as client:
-        body = _ready_detail(client).json()
+        body = _readiness_detail(client).json()
 
     assert body["gated_graphs"] == []
 
@@ -3606,18 +3664,21 @@ def test_mcp_path_returns_503_while_graph_replay_is_unhealthy() -> None:
     assert response.json() == _REPLAY_GATE_BODY
 
 
-def test_health_ready_and_well_known_are_not_gated() -> None:
+def test_livez_readyz_status_and_well_known_are_not_gated() -> None:
     app = create_app(_complete_config())
     _hold_replay()
 
     with TestClient(app) as client:
+        livez = client.get("/livez")
         statuses = {
             path: client.get(path).status_code
-            for path in ("/health", "/ready", "/.well-known/oauth-protected-resource")
+            for path in ("/readyz", "/status", "/.well-known/oauth-protected-resource")
         }
 
-    assert statuses["/health"] == 200
-    assert statuses["/ready"] == 503  # /ready's own answer, with its own body
+    assert livez.status_code == 200
+    assert livez.json() == {"status": "alive"}
+    assert statuses["/readyz"] == 503  # /readyz's own answer, with its own body
+    assert statuses["/status"] == 200
     assert statuses["/.well-known/oauth-protected-resource"] != 503
 
 
@@ -3650,7 +3711,7 @@ def test_gate_does_not_touch_non_http_scopes() -> None:
     _hold_replay()
 
     with TestClient(app) as client:
-        assert client.get("/health").status_code == 200
+        assert client.get("/livez").status_code == 200
 
 
 class _BlockingGraph:
@@ -3674,12 +3735,12 @@ class _BlockingGraph:
 def test_service_ready_flow_against_real_stores(
     monkeypatch: pytest.MonkeyPatch, provisioned: Provisioned
 ) -> None:
-    """A wiped FalkorDB is rebuilt from the real log while `/ready` and the routes say not ready.
+    """A wiped FalkorDB is rebuilt from the real log while `/readyz` and the routes say not ready.
 
     The log is the real `PsycopgGraphLogStore` (provisioned `ps_state` role), the graph a real
     FalkorDB graph. The group is logged with a checkpoint, the graph is deleted, and the service
-    starts: its startup replay (held on its first graph query) keeps `/ready` and every route
-    other than `/health` at 503 until it ends; the rebuilt graph then matches the checkpoint.
+    starts: its startup replay (held on its first graph query) keeps `/readyz` and every route
+    other than `/livez` at 503 until it ends; the rebuilt graph then matches the checkpoint.
     """
     provision_graph_log(provisioned)
     config = _config_for_cluster(provisioned)
@@ -3720,12 +3781,12 @@ def test_service_ready_flow_against_real_stores(
     try:
         with TestClient(create_app(config)) as client:
             assert reached.wait(timeout=30), "the startup replay never queried the graph"
-            during = _ready_detail(client)
+            during = _readiness_detail(client)
             gated_route = client.get("/catalog")
-            alive = client.get("/health")
+            alive = client.get("/livez")
             release.set()
             status_after = _await_ready(client)
-            after = _ready_detail(client)
+            after = _readiness_detail(client)
         rebuilt = canonical_digest(select_graph(db, name))
     finally:
         release.set()
@@ -4156,7 +4217,7 @@ def test_ready_and_app_state_are_identical_with_the_drift_monitor_on_and_off(
         app = _app_with_gateway(monkeypatch, gateway)
         with TestClient(app) as client:
             assert _await_ready(client) == 200
-            body = cast("dict[str, object]", _ready_detail(client).json())
+            body = cast("dict[str, object]", _readiness_detail(client).json())
             return body, set(app.state._state)  # pyright: ignore[reportPrivateUsage]
 
     without_monitor = observe(_FakeStartupGateway())
@@ -4197,7 +4258,378 @@ def test_a_drift_check_that_cannot_reach_falkordb_leaves_ready_untouched(
     with TestClient(app) as client:
         assert _await_ready(client) == 200
         result = gateway.check_drift("compliance")  # a checkpoint exists, so the digest is read
-        body = _ready_detail(client).json()
+        body = _readiness_detail(client).json()
 
     assert result.status == "failed"
     assert body == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
+
+
+# --- The client status endpoint -------------
+# `/status` reads the recorded readiness and never probes; it always answers 200 and adds the
+# dependency detail only for a caller whose bearer token verifies.
+
+
+def _status_detail(client: TestClient) -> httpx.Response:
+    """GET /status presenting the token the fake verifier accepts."""
+    return client.get("/status", headers=_DETAIL_HEADERS)  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree: httpx2._models.Response vs httpx._models.Response
+
+
+def test_status_without_a_token_returns_status_and_version_only(app: FastAPI) -> None:
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {"status": "ready", "version": installed_version("ps-service")}
+
+
+def test_status_version_matches_the_installed_distribution(app: FastAPI) -> None:
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject_path.open("rb") as handle:
+        declared = tomllib.load(handle)["project"]["version"]
+
+    response = TestClient(app).get("/status")
+
+    assert response.json()["version"] == installed_version("ps-service") == declared
+
+
+def test_status_with_a_rejected_token_is_anonymous_and_not_a_401(app: FastAPI) -> None:
+    with TestClient(app) as client:
+        response = client.get("/status", headers={"Authorization": "Bearer not-the-token"})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "version": installed_version("ps-service")}
+
+
+@pytest.mark.parametrize("header", ["Basic abc", "Bearer", "Bearer   ", _DETAIL_TOKEN])
+def test_status_with_a_malformed_authorization_header_is_anonymous(
+    header: str, app: FastAPI
+) -> None:
+    with TestClient(app) as client:
+        response = client.get("/status", headers={"Authorization": header})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "version": installed_version("ps-service")}
+
+
+def test_status_under_the_local_test_bypass_is_anonymous() -> None:
+    config = _complete_config(
+        is_local_test_bypass_active=True, auth_issuer=None, auth_audience=None
+    )
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        plain = client.get("/status")
+        with_bearer = _status_detail(client)
+
+    anonymous = {"status": "ready", "version": installed_version("ps-service")}
+    assert (plain.status_code, with_bearer.status_code) == (200, 200)
+    assert plain.json() == anonymous
+    assert with_bearer.json() == anonymous
+
+
+def test_status_with_a_verified_token_adds_unhealthy_dependencies_and_gated_graphs(
+    app: FastAPI,
+) -> None:
+    with TestClient(app) as client:
+        response = _status_detail(client)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "version": installed_version("ps-service"),
+        "unhealthy_dependencies": [],
+        "gated_graphs": [],
+    }
+
+
+def test_status_detail_lists_every_unhealthy_ready_dependency_gating_or_not(
+    app: FastAPI,
+) -> None:
+    with TestClient(app) as client:
+        for name in (
+            dependency_health.GRAPH_REPLAY,
+            dependency_health.LLM_INTERFACE,
+            dependency_health.FALKORDB,
+            dependency_health.CELLAR_ELI,
+            dependency_health.PASSKEY_SIGNING_POSTGRES,
+            dependency_health.STATE_POSTGRES,
+        ):
+            dependency_health.mark_unhealthy(name, error=RuntimeError("secret-host-1234 down"))
+        response = _status_detail(client)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "not_ready"
+    assert body["unhealthy_dependencies"] == [
+        dependency_health.FALKORDB,
+        dependency_health.LLM_INTERFACE,
+        dependency_health.CELLAR_ELI,
+        dependency_health.PASSKEY_SIGNING_POSTGRES,
+        dependency_health.STATE_POSTGRES,
+        dependency_health.GRAPH_REPLAY,
+    ]
+    assert "secret-host-1234" not in response.text
+
+
+def test_status_detail_never_contains_the_raw_mark_unhealthy_error_string(
+    app: FastAPI,
+) -> None:
+    with TestClient(app) as client:
+        dependency_health.mark_unhealthy(
+            dependency_health.LLM_INTERFACE, error=RuntimeError("secret-host-1234 quota")
+        )
+        anonymous = client.get("/status")
+        verified = _status_detail(client)
+
+    assert verified.json()["unhealthy_dependencies"] == [dependency_health.LLM_INTERFACE]
+    assert verified.json()["status"] == "ready"
+    assert "secret-host-1234" not in anonymous.text + verified.text
+
+
+def test_status_detail_lists_a_graph_that_failed_verification_in_gated_graphs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = _GatedGraphsReplay(mismatched_checkpoint_of=_GatedGraphsReplay.GRAPHS[1])
+    replay.release_all()
+    app = _app_replaying_graphs(monkeypatch, replay)
+
+    with TestClient(app) as client:
+        _await_ready(client)
+        anonymous = client.get("/status")
+        verified = _status_detail(client)
+
+    assert anonymous.json() == {"status": "ready", "version": installed_version("ps-service")}
+    assert verified.status_code == 200
+    assert verified.json()["gated_graphs"] == [_GatedGraphsReplay.GRAPHS[1]]
+
+
+def test_status_detail_gated_graphs_is_empty_without_a_graph_gateway(app: FastAPI) -> None:
+    with TestClient(app) as client:
+        body = _status_detail(client).json()
+
+    assert body["gated_graphs"] == []
+
+
+def test_status_answers_200_while_the_graph_replay_runs(app: FastAPI) -> None:
+    with TestClient(app) as client:
+        _hold_replay()
+        anonymous = client.get("/status")
+        verified = _status_detail(client)
+
+    assert (anonymous.status_code, verified.status_code) == (200, 200)
+    assert anonymous.json()["status"] == "not_ready"
+    assert verified.json()["unhealthy_dependencies"] == [dependency_health.GRAPH_REPLAY]
+
+
+def test_status_never_answers_401_without_a_token_under_rest_auth(app: FastAPI) -> None:
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    assert "www-authenticate" not in response.headers
+
+
+def _arrange_recorded_state(case: str, app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put the running app into the recorded readiness state `case` names."""
+    if case == "gating_dependency_unhealthy":
+        probes = _HangingProbes(monkeypatch)
+        probes.release.set()  # every re-probe fails at once, so the outage persists
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=RuntimeError("down"))
+    elif case == "only_llm_interface_unhealthy":
+        dependency_health.mark_unhealthy(dependency_health.LLM_INTERFACE, error=RuntimeError("q"))
+    elif case == "only_cellar_eli_unhealthy":
+        dependency_health.mark_unhealthy(dependency_health.CELLAR_ELI, error=RuntimeError("down"))
+    elif case == "startup_latch_pending":
+        app.state.ready = False
+    elif case == "graph_replay_running":
+        _hold_replay()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "ready",
+        "gating_dependency_unhealthy",
+        "only_llm_interface_unhealthy",
+        "only_cellar_eli_unhealthy",
+        "ingestion_config_incomplete",
+        "startup_latch_pending",
+        "graph_replay_running",
+    ],
+)
+def test_status_reports_the_same_status_as_the_readiness_probe_for_the_same_recorded_state(
+    case: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    overrides: dict[str, object] = (
+        {"company_merge_capability_merge_threshold": None}
+        if case == "ingestion_config_incomplete"
+        else {}
+    )
+    app = create_app(_complete_config(**overrides))
+
+    with TestClient(app) as client:
+        _arrange_recorded_state(case, app, monkeypatch)
+        status_response = client.get("/status")
+        readiness_response = client.get("/readyz")
+
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == readiness_response.json()["status"]
+
+
+def test_status_reports_the_same_status_as_the_readiness_probe_before_lifespan_runs(
+    app: FastAPI,
+) -> None:
+    client = TestClient(app)
+
+    status_response = client.get("/status")
+    readiness_response = client.get("/readyz")
+
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == readiness_response.json()["status"] == "not_ready"
+
+
+def test_status_runs_no_probe_and_leaves_the_registry_unchanged_while_a_gating_dependency_is_unhealthy(  # noqa: E501 -- the name states the whole behaviour
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    with TestClient(app) as client:
+        seams = _SeamCalls(monkeypatch)
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=RuntimeError("down"))
+        before = dict(registry._unhealthy)  # pyright: ignore[reportPrivateUsage]  # the whole recorded state, names and error text
+        ready_before = app.state.ready
+        bodies = [
+            client.get("/status").json(),
+            _status_detail(client).json(),
+            client.get("/status").json(),
+        ]
+
+        assert dict(registry._unhealthy) == before  # pyright: ignore[reportPrivateUsage]  # the whole recorded state, names and error text
+        assert app.state.ready == ready_before
+
+    assert seams.counts == {}
+    assert [body["status"] for body in bodies] == ["not_ready"] * 3
+
+
+def test_status_answers_immediately_while_a_probe_hangs(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(_complete_config(ready_reprobe_deadline_seconds=1.0))
+    with TestClient(app) as client:
+        probes = _HangingProbes(monkeypatch)
+        _mark_both_gating_dependencies_unhealthy()
+        ready_answers: list[int] = []
+        poller = threading.Thread(
+            target=lambda: ready_answers.append(client.get("/readyz").status_code)
+        )
+        poller.start()
+        try:
+            assert _probes_are_blocked(probes)
+            started = time.monotonic()
+            response = _status_detail(client)
+            elapsed = time.monotonic() - started
+        finally:
+            probes.release.set()
+            poller.join(timeout=10)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "not_ready"
+    assert elapsed < 0.5
+
+
+def _install_slow_verifier(monkeypatch: pytest.MonkeyPatch, slow: dict[str, bool]) -> None:
+    """Make the verifier accept `_DETAIL_TOKEN`, far past any deadline while `slow["on"]`."""
+
+    async def verify_token(self: PsTokenVerifier, token: str) -> AccessToken | None:
+        if slow["on"]:
+            await asyncio.sleep(10)
+        if token != _DETAIL_TOKEN:
+            return None
+        return AccessToken(token=token, client_id="detail-reader", scopes=[])
+
+    # detroit-exception: the verifier's cryptographic path needs a real IdP signing key; only its
+    # (possibly very late) answer matters to the deadline under test
+    monkeypatch.setattr(PsTokenVerifier, "verify_token", verify_token)
+
+
+def test_status_with_a_slow_verifier_answers_within_the_deadline_anonymously(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_slow_verifier(monkeypatch, {"on": True})
+    app = create_app(_complete_config(ready_reprobe_deadline_seconds=0.2))
+
+    with TestClient(app) as client:
+        started = time.monotonic()
+        response = _status_detail(client)
+        elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "version": installed_version("ps-service")}
+    assert elapsed < 1.0
+
+
+def _status_token_check_entries(read_lines: ReadLines, tmp_path: Path) -> list[dict[str, object]]:
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+    lines = read_lines(tmp_path / "ps-service.jsonl")
+    return [line for line in lines if line.get("action") == "status_token_check"]
+
+
+def test_status_logs_one_failed_entry_for_consecutive_token_deadline_overruns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    _install_slow_verifier(monkeypatch, {"on": True})
+    app = create_app(_complete_config(logging_dir=tmp_path, ready_reprobe_deadline_seconds=0.1))
+
+    with TestClient(app) as client:
+        statuses = [_status_detail(client).status_code for _ in range(3)]
+
+    entries = _status_token_check_entries(read_lines, tmp_path)
+    assert statuses == [200] * 3
+    assert [(e["component"], e["outcome"], e["reason"]) for e in entries] == [
+        ("entrypoint", "failed", "deadline_exceeded")
+    ]
+    assert _DETAIL_TOKEN not in json.dumps(entries)
+
+
+def test_status_logs_one_succeeded_entry_when_the_token_check_meets_the_deadline_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    slow = {"on": True}
+    _install_slow_verifier(monkeypatch, slow)
+    app = create_app(_complete_config(logging_dir=tmp_path, ready_reprobe_deadline_seconds=0.1))
+
+    with TestClient(app) as client:
+        _status_detail(client)
+        _status_detail(client)
+        slow["on"] = False
+        recovered = _status_detail(client)
+        _status_detail(client)
+
+    entries = _status_token_check_entries(read_lines, tmp_path)
+    assert "unhealthy_dependencies" in recovered.json()
+    assert [(e["outcome"], e["reason"]) for e in entries] == [
+        ("failed", "deadline_exceeded"),
+        ("succeeded", "deadline_met"),
+    ]
+
+
+def test_status_without_a_token_writes_no_status_token_check_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    _install_slow_verifier(monkeypatch, {"on": True})
+    app = create_app(_complete_config(logging_dir=tmp_path, ready_reprobe_deadline_seconds=0.1))
+
+    with TestClient(app) as client:
+        for _ in range(3):
+            client.get("/status")
+        client.get("/status", headers={"Authorization": "Basic abc"})
+
+    assert _status_token_check_entries(read_lines, tmp_path) == []
+
+
+def test_status_is_not_gated_while_the_graph_replay_runs() -> None:
+    app = create_app(_complete_config())
+    _hold_replay()
+
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "not_ready", "version": installed_version("ps-service")}

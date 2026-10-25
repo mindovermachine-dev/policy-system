@@ -104,10 +104,11 @@ readonly INGRESS_CLASS_NAME="nginx"
 # Authentik serves every page under this path (the chart's AUTHENTIK_WEB__PATH), so the issuer,
 # the API base, the enrolment link and the admin UI all sit below it.
 readonly AUTHENTIK_WEB_PATH="/auth"
-# Paths the ingress must not route: the metrics endpoint, the Authentik admin UI and admin APIs,
-# and encoded forms that try to reach them through an allowlisted prefix.
+# Paths the ingress must not route: the metrics endpoint and the readiness probe, the Authentik
+# admin UI and admin APIs, and encoded forms that try to reach them through an allowlisted prefix.
 readonly INGRESS_DENIED_PATHS=(
   /metrics
+  /readyz
   "${AUTHENTIK_WEB_PATH}/if/admin/"
   "${AUTHENTIK_WEB_PATH}/api/v3/core/users/"
   "${AUTHENTIK_WEB_PATH}/static/%2e%2e/if/admin/"
@@ -791,13 +792,14 @@ ingress_expect_denied() {
 }
 
 # probe_ingress_from_host <host> <issuer>: the closing end-to-end check, through the published
-# ingress port with the evaluator CA verifying the certificate: PS Service answers /health, the
+# ingress port with the evaluator CA verifying the certificate: PS Service answers /status, the
 # issuer discovery document reports exactly the issuer the release was given, PS Service refuses a
 # request that carries no bearer token with 401, a redirect from Authentik keeps the port, and
-# the metrics endpoint and the Authentik admin paths (plain and encoded) are not routed.
+# the metrics endpoint and the Authentik admin paths (plain and encoded) are not routed, and the
+# liveness probe `/livez` answers 404.
 probe_ingress_from_host() {
   local host="$1" issuer="$2" reported path expected
-  ingress_expect "$host" "$(ps_service_url "$host")/health" 200 "/health" || return 1
+  ingress_expect "$host" "$(ps_service_url "$host")/status" 200 "/status" || return 1
   ingress_expect "$host" "${issuer}.well-known/openid-configuration" 200 "The issuer discovery document" \
     || return 1
   reported="$(jq -r '.issuer // empty' <<<"$ingress_body" 2>/dev/null || true)"
@@ -817,6 +819,7 @@ probe_ingress_from_host() {
   for path in "${INGRESS_DENIED_PATHS[@]}"; do
     ingress_expect_denied "$host" "$path" || return 1
   done
+  ingress_expect "$host" "$(ps_service_url "$host")/livez" 404 "/livez (an in-cluster probe)" || return 1
 }
 
 # warn_stale_tls_keypair: an earlier version of this script registered the local certificate in

@@ -1,9 +1,11 @@
 """Structural guard: every MCP tool and REST route declares how its access is controlled.
 
-A tool registered without a `ToolGate`, or a REST route added without a role gate, a body-gate
-marker or an authenticated-only marker, fails this file, so a new ungated surface cannot be added
-by accident. The meta-tests feed the same finders a deliberately undeclared tool and route to prove
-they report them. Emission correctness per tool lives in the denial matrix; this file only checks
+A tool registered without a `ToolGate`, or a REST route added without a role gate, an
+authenticated-only marker or a public-route marker, fails this file, so a new ungated surface
+cannot be added by accident. A public-route marker is only valid on a path the bearer-token
+middleware leaves open, and every open path the REST router serves must carry one. The
+meta-tests feed the same finders a deliberately undeclared tool and route to prove they report
+them. Emission correctness per tool lives in the denial matrix; this file only checks
 that a declaration exists and is well formed. It also covers REST routes (precedent:
 `test_audit_parity_matrix.py`), which is why it sits beside the MCP declarations.
 """
@@ -17,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.routing import APIRoute
 from mcp.server import MCPServer
 
@@ -27,10 +29,13 @@ from mcp_interface.test_access_gate_denial_matrix import (
 )
 from ps_service.api.dependencies import (
     AuthenticatedOnlyMarker,
+    PublicRouteMarker,
     RoleGateDependency,
     authenticated_only,
+    public_route,
 )
 from ps_service.api.routes import build_api_router
+from ps_service.auth import middleware
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.mcp_server import TOOL_GATES
 from ps_service.mcp_interface.tool_gates import GateKind
@@ -63,11 +68,24 @@ def find_undeclared_routes(router: APIRouter) -> list[str]:
         declared = [
             depends.dependency
             for depends in route.dependencies
-            if isinstance(depends.dependency, RoleGateDependency | AuthenticatedOnlyMarker)
+            if isinstance(
+                depends.dependency,
+                RoleGateDependency | AuthenticatedOnlyMarker | PublicRouteMarker,
+            )
         ]
         if not declared:
             undeclared.append(f"{','.join(sorted(route.methods or ()))} {route.path}")
     return undeclared
+
+
+def _public_route_paths(router: APIRouter) -> set[str]:
+    """Paths of the routes on `router` that carry a public-route marker."""
+    paths: set[str] = set()
+    for route in router.routes:
+        assert isinstance(route, APIRoute)
+        if any(isinstance(depends.dependency, PublicRouteMarker) for depends in route.dependencies):
+            paths.add(route.path)
+    return paths
 
 
 def _gate_operations(router: APIRouter) -> list[tuple[str, str]]:
@@ -156,6 +174,40 @@ def test_a_route_added_without_a_declaration_is_reported() -> None:
 def test_an_authenticated_only_route_must_state_a_reason() -> None:
     with pytest.raises(ValueError, match="reason"):
         authenticated_only("")
+
+
+def test_a_public_route_must_state_a_reason() -> None:
+    with pytest.raises(ValueError, match="reason"):
+        public_route("")
+
+
+def test_every_public_route_is_on_the_bearer_middleware_open_list() -> None:
+    open_paths = middleware._EXEMPT_PATHS  # pyright: ignore[reportPrivateUsage]  # the open list itself is under test
+    public_paths = _public_route_paths(build_api_router())
+
+    assert public_paths
+    assert public_paths - open_paths == set()
+
+
+def test_every_open_list_path_the_api_router_serves_is_declared_public() -> None:
+    router = build_api_router()
+    open_paths = middleware._EXEMPT_PATHS  # pyright: ignore[reportPrivateUsage]  # the open list itself is under test
+    served = {route.path for route in router.routes if isinstance(route, APIRoute)}
+
+    assert (served & open_paths) - _public_route_paths(router) == set()
+
+
+def test_a_public_route_marker_declares_the_route() -> None:
+    router = APIRouter()
+
+    def _open() -> None:
+        return None
+
+    router.add_api_route(
+        "/open", _open, methods=["GET"], dependencies=[Depends(public_route("open by design"))]
+    )
+    assert find_undeclared_routes(router) == []
+    assert _public_route_paths(router) == {"/open"}
 
 
 def _gated_tool_functions(directory: Path | None = None) -> dict[str, ast.FunctionDef]:

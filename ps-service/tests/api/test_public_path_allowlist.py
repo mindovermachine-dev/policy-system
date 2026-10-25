@@ -21,15 +21,26 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ALLOWLIST_FILE = REPO_ROOT / "charts" / "policy-system" / "files" / "ps-service-public-paths.txt"
 
-# Routes that must never be reachable through the public Ingress: the anonymous metrics endpoint and
-# the interactive API documentation, which no client needs on the public origin.
+# Routes that must never be reachable through the public Ingress: the orchestrator's liveness and
+# readiness probes and the anonymous metrics endpoint, all in-cluster only, and the interactive API
+# documentation, which no client needs on the public origin.
 INTERNAL_ONLY_PATHS = (
+    "/livez",
+    "/readyz",
     "/metrics",
     "/docs",
     "/docs/oauth2-redirect",
     "/openapi.json",
     "/redoc",
 )
+
+
+_RETIRED_PROBE_PATHS = tuple(f"/{name}" for name in ("health", "ready"))
+
+
+def _allowlist_header() -> str:
+    lines = ALLOWLIST_FILE.read_text(encoding="utf-8").splitlines()
+    return "\n".join(line for line in lines if line.startswith("#"))
 
 
 def _built_app_route_paths() -> list[str]:
@@ -133,3 +144,19 @@ def test_an_unlisted_new_route_is_reported() -> None:
     unlisted = _unlisted_routes(routes, _read_allowlist(), INTERNAL_ONLY_PATHS)
 
     assert unlisted == ["/brand-new-route"]
+
+
+def test_the_allowlist_lists_status_and_no_probe_path() -> None:
+    entries = _read_allowlist()
+
+    assert "/status" in entries
+    for probe in ("/livez", "/readyz", *_RETIRED_PROBE_PATHS):
+        assert probe not in entries, probe
+
+
+def test_the_allowlist_header_names_status_and_not_the_probes() -> None:
+    header = _allowlist_header()
+
+    assert "/status" in header
+    for probe in ("/livez", "/readyz", *_RETIRED_PROBE_PATHS):
+        assert probe not in header, probe

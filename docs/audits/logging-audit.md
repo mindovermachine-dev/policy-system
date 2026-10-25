@@ -133,5 +133,5 @@ Enforced rules fail automatically, in the pre-commit hook on the files they watc
 | Exception text in log entries | review-only | tracked in #293 |
 | User identifiers do not appear in log entries | enforced | `pytest` (log-leakage canary test) |
 | Server request logs in the structured format | review-only | tracked in #296 |
-| Audit records for role-gate denials, passkey enrolment and `cypher` use | enforced | `pytest` (gate-declaration structural test: every registered tool and route declares a role gate or is marked authenticated-only; each declared gate is covered by the denial matrix) |
+| Audit records for role-gate denials, passkey enrolment and `cypher` use | enforced | `pytest` (gate-declaration structural test: every registered tool and route declares a role gate or is marked authenticated-only, or for a REST route on the bearer-token open list, public-route; each declared gate is covered by the denial matrix) |
 | Audit records for other security-relevant actions (failed authentication, unauthenticated denials, passkey rejections, other read tools, audit retention) | review-only | still open under LOG-12 |

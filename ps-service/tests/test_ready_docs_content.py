@@ -1,9 +1,11 @@
-"""Content lint: the architecture and operations docs describe the `/ready` re-probe.
+"""Content lint: the architecture and operations docs describe the probes and `/status`.
 
-`/ready` re-probes a gating dependency that reads unhealthy, so a mid-run outage ends on its own.
-These tests pin the facts a reader needs (recovery without a restart, the two settings) and that
-the wording and symbols of the earlier behaviour are gone from the code and both docs. Anchors are
-headings and quoted text, never line numbers.
+`/readyz` re-probes a gating dependency that reads unhealthy, so a mid-run outage ends on its own.
+These tests pin the facts a reader needs (recovery without a restart, the two settings), that
+the wording and symbols of the earlier behaviour are gone from the code and both docs, that the
+three architecture docs name `/status` as the only client status surface and the probes as
+in-cluster only, and that the operations guide's upgrade note says what moves together. Anchors
+are headings, quoted text and HTML comment markers, never line numbers.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 _ARCH = _REPO / "docs" / "architecture" / "ps-service-container-architecture.md"
+_SOLUTION = _REPO / "docs" / "architecture" / "ps-solution-architecture.md"
+_CLI_ARCH = _REPO / "docs" / "architecture" / "ps-cli-container-architecture.md"
 _OPS = _REPO / "docs" / "artifacts" / "operations-guide.md"
 _VALREF = _REPO / "docs" / "artifacts" / "helm-chart-values-reference.md"
 _MAIN = _REPO / "ps-service" / "src" / "ps_service" / "main.py"
@@ -22,6 +26,9 @@ _SETTINGS = (
     "PS_SERVICE_READY_REPROBE_MIN_INTERVAL_SECONDS",
     "PS_SERVICE_READY_REPROBE_DEADLINE_SECONDS",
 )
+_RETIRED_PATHS = tuple(f"/{name}" for name in ("health", "ready"))
+_UPGRADE_NOTE_START = "<!-- upgrade-note:probe-rename:start -->"
+_UPGRADE_NOTE_END = "<!-- upgrade-note:probe-rename:end -->"
 _SUPERSEDED = (
     re.compile(r"does not reset it"),
     re.compile(r"app\.state\.ready. is still", re.IGNORECASE),
@@ -33,6 +40,21 @@ _SUPERSEDED = (
 )
 
 
+def _collapsed(text: str) -> str:
+    """Return `text` with every run of whitespace replaced by one space."""
+    return " ".join(text.split())
+
+
+def _upgrade_note(text: str) -> str:
+    """Return the text between the probe-rename upgrade-note markers, each present exactly once."""
+    for marker in (_UPGRADE_NOTE_START, _UPGRADE_NOTE_END):
+        assert text.count(marker) == 1, f"expected {marker!r} exactly once"
+    start = text.index(_UPGRADE_NOTE_START) + len(_UPGRADE_NOTE_START)
+    end = text.index(_UPGRADE_NOTE_END)
+    assert start < end, "the upgrade-note start marker must come before its end marker"
+    return text[start:end]
+
+
 def _bullet_starting(text: str, start: str) -> str:
     """Return the single line of `text` that begins with `start`."""
     matches = [line for line in text.splitlines() if line.startswith(start)]
@@ -42,7 +64,7 @@ def _bullet_starting(text: str, start: str) -> str:
 
 def test_architecture_checkreadiness_states_the_reprobe_and_both_settings() -> None:
     bullet = _bullet_starting(
-        _ARCH.read_text(encoding="utf-8"), "- `CheckReadiness` (`/ready`) answers ready"
+        _ARCH.read_text(encoding="utf-8"), "- `CheckReadiness` (`/readyz`) answers ready"
     )
 
     assert "recovers on its own" in bullet
@@ -53,7 +75,7 @@ def test_architecture_checkreadiness_states_the_reprobe_and_both_settings() -> N
 
 def test_operations_guide_states_ready_recovers_on_its_own_and_lists_both_settings() -> None:
     ops = _OPS.read_text(encoding="utf-8")
-    row = _bullet_starting(ops, "| `/ready` answers 503 after FalkorDB or PS Postgres failed")
+    row = _bullet_starting(ops, "| `/readyz` answers 503 after FalkorDB or PS Postgres failed")
 
     assert "on its own" in row
     assert "no restart is needed" in row
@@ -70,7 +92,7 @@ def test_superseded_wording_is_gone_from_main_and_both_docs() -> None:
             assert pattern.search(text) is None, f"{path.name}: {pattern.pattern}"
     row = _bullet_starting(
         _OPS.read_text(encoding="utf-8"),
-        "| `/ready` answers 503 after FalkorDB or PS Postgres failed",
+        "| `/readyz` answers 503 after FalkorDB or PS Postgres failed",
     )
     assert "Restart the `ps-service` pod" not in row
 
@@ -104,3 +126,41 @@ def test_the_mid_run_recovery_test_never_marks_the_dependency_healthy_itself() -
     }
 
     assert "mark_healthy" not in called
+
+
+def test_architecture_docs_name_status_as_the_only_client_status_surface() -> None:
+    for path in (_ARCH, _SOLUTION, _CLI_ARCH):
+        text = _collapsed(path.read_text(encoding="utf-8"))
+        assert "`/status` is the only client-facing status surface" in text, path.name
+        assert "`/livez` and `/readyz` are orchestrator-only and in-cluster" in text, path.name
+
+
+def test_operations_guide_upgrade_note_says_what_moves_together_and_where_clients_go() -> None:
+    note = _collapsed(_upgrade_note(_OPS.read_text(encoding="utf-8")))
+    old_liveness, old_readiness = _RETIRED_PATHS
+
+    for needle in (
+        "### Upgrading to the client status endpoint",
+        "image, chart and ps-cli must be upgraded together",
+        (
+            "a chart from before this release probes paths the new image no longer serves, "
+            "so its pods fail their probes"
+        ),
+        "external monitors",
+        "hand reads of the dependency detail",
+        "move to `/status`",
+        "`/livez` and `/readyz` are no longer reachable through the Ingress",
+        f"`{old_liveness}` is now `/livez`",
+        f"`{old_readiness}` is now `/readyz`",
+        "the liveness body no longer carries `version`",
+        "the readiness body no longer carries the dependency detail",
+    ):
+        assert needle in note, needle
+
+
+def test_operations_guide_links_the_upgrade_note_outside_the_block() -> None:
+    ops = _OPS.read_text(encoding="utf-8")
+    note = _upgrade_note(ops)
+    outside = ops.replace(note, "")
+
+    assert "(#upgrading-to-the-client-status-endpoint)" in outside

@@ -424,7 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
     get_health_parser = get_subparsers.add_parser(
         "health",
         parents=[verbose_parent_parser],
-        help="Report PS Service's reachability, health (`/health`), and readiness (`/ready`).",
+        help="Report PS Service's reachability, health and readiness (`GET /status`).",
     )
     get_health_parser.set_defaults(command="get_health")
 

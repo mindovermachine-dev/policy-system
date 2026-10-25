@@ -1929,6 +1929,46 @@
           "required": ["stage", "status"],
           "type": "object"
         },
+        "ServiceStatusResponse": {
+          "properties": {
+            "gated_graphs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "enum": ["ready", "not_ready"],
+              "type": "string"
+            },
+            "unhealthy_dependencies": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "version": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": ["status", "version"],
+          "type": "object"
+        },
         "StageOutcome": {
           "properties": {
             "stage": {
@@ -2362,25 +2402,6 @@
           }
         }
       },
-      "/health": {
-        "get": {
-          "operationId": "health_health_get",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "additionalProperties": {
-                      "type": "string"
-                    },
-                    "type": "object"
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
       "/ingestions": {
         "post": {
           "operationId": "create_ingestion_ingestions_post",
@@ -2468,6 +2489,25 @@
           }
         }
       },
+      "/livez": {
+        "get": {
+          "operationId": "livez_livez_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/near-misses": {
         "get": {
           "operationId": "list_near_misses_near_misses_get",
@@ -2532,9 +2572,9 @@
           }
         }
       },
-      "/ready": {
+      "/readyz": {
         "get": {
-          "operationId": "ready_ready_get",
+          "operationId": "readyz_readyz_get",
           "responses": {
             "200": {
               "content": {
@@ -2609,6 +2649,22 @@
                 "application/json": {
                   "schema": {
                     "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/status": {
+        "get": {
+          "operationId": "get_service_status_status_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ServiceStatusResponse"
                   }
                 }
               }

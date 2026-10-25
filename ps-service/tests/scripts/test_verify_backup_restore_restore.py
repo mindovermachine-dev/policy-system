@@ -2,7 +2,7 @@
 
 The script runs for real against fake `kubectl`, `helm` and `jq`-free helpers on PATH (the
 external CLIs are the process boundary). The fake `kubectl` records its argv, copies the stdin of
-the helper-pod `tar` exec to a file, and answers Job, log and `/ready` queries from files the
+the helper-pod `tar` exec to a file, and answers Job, log and `/status` queries from files the
 test controls. The fake `helm` records its argv and answers `get values` and `status`.
 """
 
@@ -23,11 +23,12 @@ SCRIPT = REPO_ROOT / "scripts" / "verify-backup-restore.sh"
 
 SUBPROCESS_TIMEOUT_SECONDS = 60.0
 INIT_LINE = "ps-postgres-init: created roles ps_state, ps_signing"
-READY_STATUS_ONLY = '200 {"status":"ready"}'
+READY_STATUS_ONLY = '200 {"status":"ready","version":"0.0.0"}'
 READY_TOKEN = "ready-token-value-7d1c"
-READY_OK = '200 {"status":"ready","unhealthy_dependencies":[],"gated_graphs":[]}'
+READY_OK = '200 {"status":"ready","version":"0.0.0","unhealthy_dependencies":[],"gated_graphs":[]}'
 READY_REPLAY = (
-    '503 {"status":"not_ready","unhealthy_dependencies":["graph_replay"],"gated_graphs":[]}'
+    '200 {"status":"not_ready","version":"0.0.0",'
+    '"unhealthy_dependencies":["graph_replay"],"gated_graphs":[]}'
 )
 RETAINED_VALUES = {
     "psPostgres": {
@@ -440,19 +441,30 @@ def test_verify_provision_fails_when_the_init_line_is_in_the_logs(tmp_path: Path
     assert "event=provision_failed" in result.stderr
 
 
+def test_wait_ready_reads_status_from_the_status_endpoint(tmp_path: Path) -> None:
+    result = _run(tmp_path, ["wait-ready", "--interval", "0.05", "--timeout", "5"])
+
+    assert result.code == 0, result.stderr
+    program = "\n".join(result.kubectl)
+    assert '"http://127.0.0.1:8000/status"' in program
+    assert "127.0.0.1:8000/ready" not in program
+
+
 def test_wait_ready_reports_replay_then_succeeds_on_200_with_no_gated_graphs(
     tmp_path: Path,
 ) -> None:
     result = _run(tmp_path, ["wait-ready", "--interval", "0.05", "--timeout", "20"])
 
     assert result.code == 0, result.stderr
-    assert "event=ready_poll http=503" in result.stderr
+    assert "event=ready_poll http=200" in result.stderr
     assert "graph_replay" in result.stderr
     assert "event=ready http=200" in result.stderr
 
 
 def test_wait_ready_fails_when_a_graph_is_gated(tmp_path: Path) -> None:
-    gated = '200 {"status":"ready","unhealthy_dependencies":[],"gated_graphs":["g1"]}'
+    gated = (
+        '200 {"status":"ready","version":"0.0.0","unhealthy_dependencies":[],"gated_graphs":["g1"]}'
+    )
 
     result = _run(
         tmp_path,
@@ -484,7 +496,7 @@ def test_wait_ready_without_a_token_does_not_accept_a_not_ready_status(tmp_path:
     result = _run(
         tmp_path,
         ["wait-ready", "--interval", "0.05", "--timeout", "1"],
-        ready_lines=('200 {"status":"not_ready"}',),
+        ready_lines=('200 {"status":"not_ready","version":"0.0.0"}',),
     )
 
     assert result.code == 1
@@ -522,7 +534,8 @@ def test_wait_ready_with_a_token_fails_when_the_reply_carries_no_gated_graphs_fi
 
 
 @pytest.mark.parametrize(
-    "ready_lines", [(READY_OK,), ('200 {"status":"ready","gated_graphs":["g"]}',)]
+    "ready_lines",
+    [(READY_OK,), ('200 {"status":"ready","version":"0.0.0","gated_graphs":["g"]}',)],
 )
 def test_the_ready_token_never_reaches_a_log_line_or_a_kubectl_argument(
     tmp_path: Path, ready_lines: tuple[str, ...]

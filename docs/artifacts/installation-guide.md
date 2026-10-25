@@ -288,8 +288,9 @@ Ingress manifest. An Ingress left by an earlier script run is taken over by the 
 automatically before the upgrade, and its certificate Secret name is unchanged.
 
 The Ingress of PS Service routes only the paths in the chart file `files/ps-service-public-paths.txt`:
-`/health`, `/ready`, `/.well-known/`, and the API and MCP prefixes. It has no catch-all rule, so
-`/metrics` and the interactive API documentation are never routed.
+`/status`, `/.well-known/`, and the API and MCP prefixes. It has no catch-all rule, so the
+in-cluster probes `/livez` and `/readyz`, `/metrics` and the interactive API documentation are
+never routed.
 
 The Ingress of Authentik routes only the eight path prefixes that an end user needs for login
 and enrolment:
@@ -310,8 +311,8 @@ This table shows what is public and what is not:
 | Surface | Public? | Notes |
 | --- | --- | --- |
 | The eight paths above | Yes, to anyone on the internet | Login, enrolment, and recovery run here. Authentik gates each flow itself (an enrolment or recovery link, a passkey). |
-| The PS Service paths in the allowlist above | Yes | Every call needs an Authentik-issued bearer token. `/health` and `/ready` need no token. |
-| PS Service `/metrics` and the interactive API documentation | **No** | Not routed by the chart Ingress. |
+| The PS Service paths in the allowlist above | Yes | Every call needs an Authentik-issued bearer token. `/status` needs no token; a valid one adds the dependency detail. |
+| PS Service `/livez`, `/readyz`, `/metrics` and the interactive API documentation | **No** | Not routed by the chart Ingress; in-cluster only. |
 | The Authentik admin UI (`/auth/if/admin/`), the admin and core APIs, the invitation API, and `/auth/if/user/` | **No** | Not routed. PS Service answers the request, never Authentik. Verified on ingress-nginx, not on AKS. See [Verification status](#verification-status). |
 | The owner enrolment link and the owner-creation API calls | Link: public path. API: **no** | The link opens on the public `/auth/if/flow/` path. The script creates the owner and the link through a cluster-internal `kubectl port-forward`. |
 | PS Service to Authentik (`invite_user`) | No | PS Service calls the Authentik API on its in-cluster address (`http://policy-system-authentik-server/auth`). It builds the invitee's link on the public address only. |

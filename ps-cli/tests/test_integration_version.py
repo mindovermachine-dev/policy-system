@@ -107,7 +107,7 @@ def _terminate(proc: subprocess.Popen[bytes]) -> None:
 
 
 def _wait_until_healthy(health_url: str) -> None:
-    """Poll `GET /health` with a short bounded retry loop until it responds.
+    """Poll `GET /livez` with a short bounded retry loop until it responds.
 
     Bounded, not an infinite loop: raises `TimeoutError` if the deadline is reached
     with no response at all, so a startup failure fails the test promptly instead of
@@ -140,7 +140,7 @@ def running_ps_service(tmp_path: Path) -> Iterator[str]:
     log_dir.mkdir()
     proc = _spawn_ps_service(port, log_dir)
     try:
-        _wait_until_healthy(f"http://{_HOST}:{port}/health")
+        _wait_until_healthy(f"http://{_HOST}:{port}/livez")
         yield f"http://{_HOST}:{port}"
     finally:
         _terminate(proc)

@@ -66,6 +66,8 @@ from ps_service.passkey_signing.store import PendingApprovalStore, PsycopgPendin
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from ps_service.api.service_status import RecordedReadiness
+    from ps_service.auth.verifier import PsTokenVerifier
     from ps_service.authz.models import AccessRole
     from ps_service.ingestion.graph_submission import GroupSubmitter
 
@@ -90,6 +92,36 @@ def get_service_config(request: Request) -> ServiceConfig:
     """
     config: ServiceConfig = request.app.state.config
     return config
+
+
+def provide_recorded_readiness(request: Request) -> RecordedReadiness:
+    """Return the readiness Process Harness recorded on ``app.state``.
+
+    Args:
+        request: The incoming request (FastAPI injects it).
+
+    Returns:
+        The ``RecordedReadiness`` that ``create_app`` stored on ``app.state.recorded_readiness``.
+
+    Raises:
+        AttributeError: ``app.state.recorded_readiness`` was never set, meaning the app was not
+            built by ``create_app``.
+    """
+    readiness: RecordedReadiness = request.app.state.recorded_readiness
+    return readiness
+
+
+def provide_token_verifier(request: Request) -> PsTokenVerifier | None:
+    """Return the process-wide token verifier, or ``None`` under the local-test bypass.
+
+    Args:
+        request: The incoming request (FastAPI injects it).
+
+    Returns:
+        The verifier ``create_app`` stored on ``app.state.token_verifier``, or ``None`` when
+        there is none.
+    """
+    return getattr(request.app.state, "token_verifier", None)
 
 
 def get_principal(request: Request) -> Principal | None:
@@ -275,6 +307,44 @@ def authenticated_only(reason: str) -> AuthenticatedOnlyMarker:
         message = "an authenticated-only route must state a reason"
         raise ValueError(message)
     return AuthenticatedOnlyMarker(reason)
+
+
+class PublicRouteMarker:
+    """A no-op route dependency declaring that a route answers every caller, token or not.
+
+    The bearer-token middleware leaves the route's path open, so the request may carry no
+    verified identity. The dependency does nothing at request time. It exists so the structural
+    test can tell a route that is anonymous by design from a route nobody gated by mistake, and
+    can check that every route declared this way sits on the middleware's open list.
+
+    Attributes:
+        reason: Why the route is open to unauthenticated callers.
+    """
+
+    def __init__(self, reason: str) -> None:
+        """Store the stated reason."""
+        self.reason = reason
+
+    def __call__(self) -> None:
+        """Do nothing: the middleware deliberately let the request through unauthenticated."""
+
+
+def public_route(reason: str) -> PublicRouteMarker:
+    """Declare a route open to every caller, authenticated or not, stating why.
+
+    Args:
+        reason: Why the route needs no authentication; must not be empty.
+
+    Returns:
+        A `PublicRouteMarker` to pass to `Depends`.
+
+    Raises:
+        ValueError: `reason` is empty.
+    """
+    if not reason:
+        message = "a public route must state a reason"
+        raise ValueError(message)
+    return PublicRouteMarker(reason)
 
 
 async def provide_run_id(request: Request) -> AsyncIterator[str]:

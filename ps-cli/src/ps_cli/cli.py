@@ -43,6 +43,7 @@ from ps_cli.config import load_config
 from ps_cli.credentials import build_credential_store
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import PsServiceClient
+from ps_cli.models import StatusDetail
 from ps_cli.modules.auth_handlers import AUTH_DISPATCH
 from ps_cli.modules.config_handlers import CONFIG_DISPATCH
 from ps_cli.modules.handlers import DISPATCH, NO_CLIENT_DISPATCH
@@ -110,7 +111,9 @@ def _report_service_version(
     invocation only, like every other command. Resolving the client and reading the
     service version are the only two steps that can raise `PsCliError`; both are
     caught here so `--version` always exits 0, printing the error's `msg` (not
-    `str(error)`, which adds the decoration used for normal error output). This is
+    `str(error)`, which adds the decoration used for normal error output). The service
+    version comes from `GET /status` without a bearer token, so it never reads the
+    stored login. This is
     the second narrowly scoped `try/except PsCliError` described in the module
     docstring. When the versions differ, a single plain `warning: ...` line goes to
     stderr (not the error shape, since this is not an error); there is no comparison
@@ -132,7 +135,7 @@ def _report_service_version(
     print(f"PS-CLI Client Version: {client_version}")
     try:
         active_client = _resolve_client(args, client)
-        service_version = active_client.get_service_version()
+        service_version = active_client.get_status(detail=StatusDetail.NONE).version
     except PsCliError as error:
         print(f"PS-Service Version: unavailable ({error.msg})")
         return

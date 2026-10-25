@@ -99,7 +99,7 @@ class _Rig:
 
 
 async def _poll(reprobe: GatingReprobe, *, deadline_seconds: float) -> float:
-    """One `/ready`-shaped poll; returns how long it took."""
+    """One `/readyz`-shaped poll; returns how long it took."""
     loop = asyncio.get_running_loop()
     started = loop.time()
     await reprobe.refresh(started + deadline_seconds)

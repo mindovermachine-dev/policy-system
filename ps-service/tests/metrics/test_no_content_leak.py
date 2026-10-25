@@ -64,7 +64,7 @@ def _hostile_requests(client: TestClient) -> None:
         headers=headers,
         content=f'{{"celex_id": "{_LEAK}", "text": "{_LEAK} document text"}}',
     )
-    client.request(f"X{_LEAK}", "/health", headers=headers)
+    client.request(f"X{_LEAK}", "/livez", headers=headers)
     client.get(f"/mcp/{_LEAK}", headers=headers)
 
 

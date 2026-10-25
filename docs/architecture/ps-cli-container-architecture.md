@@ -116,7 +116,7 @@ graph TB
 | Command Interface | ps.cli.commandinterface | Define the command surface (`get health`, `ingest document`, `export instrument`, `config set-context`/`use-context`/`get-contexts`, `auth login`/`status`/`logout`, `--context`, `--verbose`, `--version`); dispatch each command to its handler; print results and render tables; map every failure to a process exit status (0 success, 1 user-facing error, 130 operator interrupt, 2 unexpected error) |
 | Context Configuration | ps.cli.contextconfiguration | Resolve the PS Service base URL for an invocation from, highest first, the `PS_CLI_SERVICE_URL` environment variable, the `--context` flag, the current context in `targets.toml`, a working-directory `ps-cli.toml` override and the packaged default; create, select and list named contexts with optional per-context OIDC overrides; reject an explicit but invalid value instead of falling back |
 | Operator Authentication | ps.cli.operatorauthentication | Discover the authorization server and device-authorization endpoints, run the device-authorization flow, hold one refresh token per context in an operating-system-protected credential store, exchange it for an in-memory access token for the duration of an invocation, and report or clear the stored login. Access tokens are never persisted and there is no plaintext fallback store |
-| Service Client | ps.cli.serviceclient | Call PS Service's REST API (`GET /health`, `GET /ready`, `POST /ingestions`, `POST /exports`), attach the bearer token to the authenticated calls, bound each call by a timeout, verify server certificates against the operating system trust store, and translate transport failures and structured error bodies into operator-facing errors |
+| Service Client | ps.cli.serviceclient | Call PS Service's REST API (`GET /status`, `POST /ingestions`, `POST /exports`), attach the bearer token to the authenticated calls, bound each call by a timeout, verify server certificates against the operating system trust store, and translate transport failures and structured error bodies into operator-facing errors |
 | Intake Validation | ps.cli.intakevalidation | Validate an internal regulation intake document against the packaged intake schema before any request is sent, and report the best-matching schema violation |
 
 ### Domain Concepts to Component Mapping
@@ -165,7 +165,7 @@ None — the component moves documents and artifacts between the operator and PS
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
 | ParseAndDispatch | Turn the command line into one handler call and a process exit status | No | n/a | None | Exit status 0, 1, 130 or 2 | Output to stdout and stderr | None | < 100ms excluding the handler | Yes | A user-facing error exits 1 with its message and optional hint; `--verbose` adds the failure site; any other exception exits 2 |
-| ReportHealth | Report reachability, liveness and readiness of the selected PS Service | No | n/a | A resolvable service URL | Prints `reachable`, `health` and `ready` | None | PS Service | < 40s | Yes | Reachable but not ready exits 1 and lists the unhealthy dependencies when named |
+| ReportHealth | Report reachability, liveness and readiness of the selected PS Service from one `GET /status` | No | n/a | A resolvable service URL | Prints `reachable`, `health` and `ready` | None | PS Service | < 40s | Yes | Reachable but not ready exits 1 and lists the unhealthy dependencies when named |
 | IngestDocument | Submit an internal regulation intake document and report the run id, instrument id and per-stage outcome | Yes when the context has credentials | PS Service ingestion route authorisation | A readable `.json` file that passes Intake Validation; LLM Interface not reported unhealthy | Prints run id, instrument id and each stage's status, with the pending-review count on the merge stage when non-zero | Ingestion run on PS Service | PS Service | Up to 30 minutes | No | No request is sent when validation or the pre-flight fails; a read timeout is reported as PS Service not responding in time |
 | ExportInstrument | Save an ingested instrument's baseline, native and manifest artifacts locally | Yes when the context has credentials | PS Service export route authorisation | An existing writable destination directory | Three files written, overwriting existing ones; paths printed | Local file writes | PS Service | Up to 30 minutes | Yes | The destination is checked before the request is made; a 409 for unresolved near-miss reviews prints the service's message and exits 1 with no files written |
 | ManageContexts | Create or update a context, select the current context, list contexts | No | n/a | A valid `http` or `https` URL for set-context | `targets.toml` updated, or the contexts listed with the current one marked | Writes `targets.toml` | Local file system | < 100ms | Yes | A malformed `targets.toml` fails with the file named |
@@ -261,7 +261,9 @@ None — transport component.
 | Internal component (Python module) | httpx | Python 3.14 | `ps-cli/src/ps_cli/http_client.py` | `ps_cli.http_client` |
 
 **Implementation Guidance:**
-- `GET /health` and `GET /ready` are unauthenticated. `POST /ingestions` and `POST /exports` carry the bearer token when the context has credentials.
+- `/status` is the only client-facing status surface, and the only status path PS-Cli calls. `/livez` and `/readyz` are orchestrator-only and in-cluster: PS Service's Ingress has no route for them, so PS-Cli never calls them.
+- `GET /status` is sent without a token for `--version`, with one when the context is logged in for `get health`, and requires one for the `ingest document` pre-flight, which fails closed before any request without a login. `POST /ingestions` and `POST /exports` carry the bearer token when the context has credentials.
+- Every `GET /status` response other than 200 is an error naming the method, the path and the HTTP status; a 200 whose body is not JSON or not the expected shape is a body-shape error.
 - Default call bounds are connect 5s, read 30s, write 5s, pool 5s; ingestion and export raise the read bound to 30 minutes because they run the full server-side pipeline.
 - A plain-`http` non-loopback service URL produces a warning; certificate verification is never disabled.
 - A structured error body from PS Service is surfaced as the operator-facing message; a 401 directs the operator to `auth login`.
@@ -271,15 +273,14 @@ None — transport component.
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-cli/src/ps_cli/http_client.py` | REST client and response parsing | CheckHealth, CheckReadiness, SubmitIngestion, RequestExport |
+| `ps-cli/src/ps_cli/http_client.py` | REST client and response parsing | ReadStatus, SubmitIngestion, RequestExport |
 | `ps-cli/src/ps_cli/models.py` | Typed results of the REST calls | — |
 
 #### Actions
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| CheckHealth | Read PS Service liveness status and version | No | n/a | None | Status string and version | None | PS Service | < 40s | Yes | Connection, timeout and TLS failures become operator-facing errors with a hint |
-| CheckReadiness | Read PS Service readiness and the unhealthy dependencies | No | n/a | None | Readiness status and dependency names | None | PS Service | < 40s | Yes | As above |
+| ReadStatus | Read PS Service's version and readiness from `GET /status`, plus the unhealthy dependencies and gated graphs when the reply carries them | Optional (a token adds the detail; required for the ingest pre-flight) | n/a | None | Readiness status, version, and the dependency and graph names when present | None | PS Service | < 40s | Yes | Connection, timeout and TLS failures become operator-facing errors with a hint; any status other than 200 and any unexpected body shape raise an operator-facing error |
 | SubmitIngestion | Send an intake document to `POST /ingestions` | Yes when credentials exist | As enforced by PS Service | A validated document | Run id, instrument id and stage outcomes | Ingestion run on PS Service | PS Service | Up to 30 minutes | No | A structured error body (including 403 when the caller lacks `ComplianceOfficer`) or 401 becomes an operator-facing error |
 | RequestExport | Request an instrument's artifact from `POST /exports` | Yes when credentials exist | As enforced by PS Service | An ingested instrument id with no unresolved near-miss reviews | Manifest and base64 blobs | None on PS Service | PS Service | Up to 30 minutes | Yes | As above; HTTP 409 (unresolved near misses) is printed with its message and exits 1 |
 

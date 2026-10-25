@@ -574,14 +574,14 @@ def _fake_sudo(fixture: EvalFixture) -> Path:
     return log
 
 
-def test_final_probe_hits_health_and_issuer_through_the_ingress(
+def test_final_probe_hits_status_and_issuer_through_the_ingress(
     eval_fixture: EvalFixture,
 ) -> None:
     eval_fixture.run("--owner-email", OWNER_EMAIL)
 
     probes = [c for c in eval_fixture.curl_calls() if ":30443/" in c["url"]]
     urls = [c["url"] for c in probes]
-    assert f"https://{HOST}:30443/health" in urls
+    assert f"https://{HOST}:30443/status" in urls
     assert f"{ISSUER}.well-known/openid-configuration" in urls
     for call in probes:
         argv = call["argv"]
@@ -601,14 +601,36 @@ def test_final_probe_fails_when_the_ingress_reports_another_issuer(
     assert "Fix:" in run.stderr
 
 
-def test_final_probe_fails_when_health_does_not_answer(eval_fixture: EvalFixture) -> None:
-    eval_fixture.seed_curl(ingress_health_status=502)
+def test_final_probe_fails_when_status_does_not_answer(eval_fixture: EvalFixture) -> None:
+    eval_fixture.seed_curl(ingress_status_endpoint_status=502)
 
     run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
 
     assert run.returncode == 1
-    assert "/health" in run.stderr
+    assert "/status" in run.stderr
     assert "Fix:" in run.stderr
+
+
+def test_final_probe_requests_livez_through_the_ingress(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    livez = [c for c in eval_fixture.curl_calls() if c["url"] == f"https://{HOST}:30443/livez"]
+    assert livez
+    for call in livez:
+        argv = call["argv"]
+        assert f"{HOST}:30443:127.0.0.1" in argv
+        assert str(eval_fixture.state_dir / "ca.pem") in argv
+
+
+@pytest.mark.parametrize("status", [200, 403, 502])
+def test_final_probe_requires_404_from_livez(eval_fixture: EvalFixture, status: int) -> None:
+    eval_fixture.seed_curl(ingress_livez_status=status)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=None)
+
+    assert run.returncode == 1
+    assert "/livez" in run.stderr
+    assert str(status) in run.stderr
 
 
 def test_final_probe_requires_401_without_a_bearer_token(eval_fixture: EvalFixture) -> None:
@@ -1819,6 +1841,7 @@ def test_no_service_is_deleted_without_an_old_proxy_service(eval_fixture: EvalFi
 
 DENIED_PATHS = (
     "/metrics",
+    "/readyz",
     "/auth/if/admin/",
     "/auth/api/v3/core/users/",
     "/auth/static/%2e%2e/if/admin/",

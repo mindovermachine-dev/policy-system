@@ -56,7 +56,6 @@ import socket
 import subprocess
 import sys
 import time
-from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -110,7 +109,7 @@ def _find_free_port() -> int:
 # independently of TestSharedServer's lifecycle.
 _PORT = _find_free_port()
 _OVERRIDE_PORT = _find_free_port()
-_HEALTH_URL = f"http://{_HOST}:{_PORT}/health"
+_LIVEZ_URL = f"http://{_HOST}:{_PORT}/livez"
 _READY_POLL_TIMEOUT_SECONDS = 5.0
 _READY_POLL_INTERVAL_SECONDS = 0.05
 _GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10  # the default graceful-shutdown timeout, in seconds
@@ -193,13 +192,13 @@ def _terminate(proc: subprocess.Popen[bytes]) -> None:
         proc.wait(timeout=_TERMINATE_WAIT_TIMEOUT_SECONDS)
 
 
-def _try_get_health(url: str = _HEALTH_URL) -> httpx.Response | None:
-    """Attempt a single `GET /health` call, returning `None` if the server isn't
+def _try_get_health(url: str = _LIVEZ_URL) -> httpx.Response | None:
+    """Attempt a single `GET /livez` call, returning `None` if the server isn't
     accepting connections yet.
 
     Factored out of `_wait_until_healthy`'s polling loop so the `try`/`except`
     lives in a single call, not inline inside the loop body (ruff PERF203).
-    `url` defaults to `_HEALTH_URL` (the default, no-env-override port) but
+    `url` defaults to `_LIVEZ_URL` (the default, no-env-override port) but
     accepts an override so tests spawning a subprocess on a non-default
     `PS_SERVICE_PORT` can poll the right address.
     """
@@ -210,13 +209,13 @@ def _try_get_health(url: str = _HEALTH_URL) -> httpx.Response | None:
 
 
 def _wait_until_healthy(
-    deadline_seconds: float = _READY_POLL_TIMEOUT_SECONDS, url: str = _HEALTH_URL
+    deadline_seconds: float = _READY_POLL_TIMEOUT_SECONDS, url: str = _LIVEZ_URL
 ) -> httpx.Response:
-    """Poll `GET /health` with a short bounded retry loop until it responds or the deadline is hit.
+    """Poll `GET /livez` with a short bounded retry loop until it responds or the deadline is hit.
 
     Raises `TimeoutError` if the deadline is reached with no successful
     response, so callers get a clear failure rather than a hang. `url`
-    defaults to `_HEALTH_URL` but accepts an override for subprocesses
+    defaults to `_LIVEZ_URL` but accepts an override for subprocesses
     spawned with a non-default `PS_SERVICE_PORT`.
     """
     deadline = time.monotonic() + deadline_seconds
@@ -266,17 +265,17 @@ class TestSharedServer:
         """The documented `uv run python -m ps_service`
         command starts a live, staying-up process.
 
-        Polls `/health` over real HTTP until it responds, then asserts the
+        Polls `/livez` over real HTTP until it responds, then asserts the
         subprocess is still alive (not a crash-then-somehow-still-200 fluke).
         """
         response = _wait_until_healthy()
 
         assert response.status_code == 200
-        assert response.json() == {"status": "alive", "version": installed_version("ps-service")}
+        assert response.json() == {"status": "alive"}
         assert running_server.poll() is None  # still running, not exited
 
     @pytest.mark.integration
-    def test_process_binds_health_and_ready_to_localhost_only(
+    def test_process_binds_the_probes_to_localhost_only(
         self, running_server: subprocess.Popen[bytes]
     ) -> None:
         """The running process's listening socket is
@@ -332,7 +331,7 @@ def test_sigterm_triggers_clean_bounded_exit(tmp_path: Path) -> None:
 
     Spawns its own dedicated subprocess (separate from `running_server`)
     since this test kills it. Accepted limitation: this proves clean bounded exit on SIGTERM,
-    not full in-flight-request-drain semantics — `/health`/`/ready` return instantly, so there is
+    not full in-flight-request-drain semantics — `/livez`/`/readyz` return instantly, so there is
     nothing to keep in-flight during the shutdown window to actually exercise
     `timeout_graceful_shutdown`'s drain behavior.
 
@@ -417,10 +416,10 @@ def test_ps_service_port_env_override_serves_health_on_overridden_port(tmp_path:
     """
     proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": str(_OVERRIDE_PORT)})
     try:
-        response = _wait_until_healthy(url=f"http://{_HOST}:{_OVERRIDE_PORT}/health")
+        response = _wait_until_healthy(url=f"http://{_HOST}:{_OVERRIDE_PORT}/livez")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "alive", "version": installed_version("ps-service")}
+        assert response.json() == {"status": "alive"}
     finally:
         _terminate(proc)
 
@@ -514,7 +513,7 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
     Spawns the real `ps_service` process the same way
     `test_ps_service_port_env_override_serves_health_on_overridden_port`
     above does (`_spawn_direct`, a real `[sys.executable, "-m", "ps_service"]`
-    subprocess bound to `127.0.0.1:<port>`), polls `/ready` (not `/health`
+    subprocess bound to `127.0.0.1:<port>`), polls `/readyz` (not `/livez`
     -- readiness is what proves the app's `lifespan`, including the
     `async with mcp_asgi_app.router.lifespan_context(...)` block,
     has actually completed and the MCP session manager has started) until
@@ -530,11 +529,11 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
     on a different machine", matching the proxy this file's own
     subprocess tests above already rely on.
     """
-    # Markers: `/ready` 200 needs FalkorDB and the LLM Interface as well as Postgres, so the test
+    # Markers: `/readyz` 200 needs FalkorDB and the LLM Interface as well as Postgres, so the test
     # carries `falkordb_live` and `llm_live` and is NOT `postgres_live` (a `-m postgres_live` run
     # must not go red for services it does not provide). Its Postgres comes from the
     # `provisioned_graph_log` fixture, which needs `PS_TEST_POSTGRES_SUPERUSER_DSN` and `psql`.
-    # `/ready` gates on state Postgres and startup fails closed unless the
+    # `/readyz` gates on state Postgres and startup fails closed unless the
     # privileged graph log tables exist, so the spawned process gets the `ps_state`
     # and `ps_signing` roles of a scratch cluster built by the real init script and provisioned
     # by the real provisioning path (`provisioned_graph_log`), not whatever the environment holds.
@@ -556,7 +555,7 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
     port = _OVERRIDE_PORT
     proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": str(port), **cluster_env})
     try:
-        ready_response = _wait_until_healthy(url=f"http://{_HOST}:{port}/ready")
+        ready_response = _wait_until_healthy(url=f"http://{_HOST}:{port}/readyz")
         assert ready_response.status_code == 200
 
         response = httpx.post(

@@ -1,4 +1,4 @@
-"""A scrape survives every source failing at once, stays bounded and never moves `/ready`."""
+"""A scrape survives every source failing at once, stays bounded and never moves `/readyz`."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def test_every_source_failing_still_serves_the_other_families_without_detail(
     handle = build_metrics(
         unhealthy_counts=_broken_counts, pending_entries=_cached(_broken_pending).get
     )
-    handle.histogram(REQUEST_DURATION).record(0.01, {"http.route": "/health"})
+    handle.histogram(REQUEST_DURATION).record(0.01, {"http.route": "/livez"})
     record_ingestion_run("succeeded", 2.0)
 
     text = handle.render()[0].decode()

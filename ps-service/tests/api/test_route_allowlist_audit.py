@@ -1,14 +1,14 @@
 """Route allow-list default-deny audit.
 
 Any route not in the explicit open-route allow-list
-(``/health``, ``/ready``, ``/.well-known/*``) requires a token; this test
+(``/livez``, ``/readyz``, ``/status``, ``/.well-known/*``) requires a token; this test
 enumerates the app's routes and asserts it.
 
 One more deliberate exemption exists, ``/approvals/*``
 -- the companion-browser signing-ceremony router. It is a bare capability
 URL by design (a plain browser tab carries no ``Authorization`` header), so
-it is excluded from the enumeration below the same way ``/health``/``/ready``/
-``/.well-known/*`` are; `test_approvals_routes_remain_reachable_without_a_token`
+it is excluded from the enumeration below the same way ``/livez``/``/readyz``/
+``/status``/``/.well-known/*`` are; `test_approvals_routes_remain_reachable_without_a_token`
 proves the exemption is real and, separately, that the router's *own*
 per-request ``code`` check still rejects a wrong/missing code -- the same
 "hand-off to a second, still-enforcing gate, not a silent bypass" shape this
@@ -101,7 +101,7 @@ _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 # silently passing) if a future edit to that module's private constants ever drifts
 # from the documented allow-list. `_APPROVALS_PREFIX` is a separate deliberate
 # addition -- see this file's module docstring.
-_EXEMPT_PATHS = frozenset({"/health", "/ready"})
+_EXEMPT_PATHS = frozenset({"/livez", "/readyz", "/status"})
 _EXEMPT_PREFIX = "/.well-known/"
 _APPROVALS_PREFIX = "/approvals/"
 # `/mcp` is a `Mount` the middleware exempts (see this file's module docstring);
@@ -278,14 +278,15 @@ def test_open_allowlist_routes_remain_reachable_without_a_token(
     """The flip side of the audit above: the allow-listed routes are genuinely open.
 
     Proves `RestAuthMiddleware`'s exemption is not accidentally over-broad in
-    the *other* direction either -- these three stay reachable with no
+    the *other* direction either -- these stay reachable with no
     `Authorization` header at all, exactly as the allow-list promises.
     """
     app = create_app(_config(mock_oidc_provider))
     client = TestClient(app)
 
-    assert client.get("/health").status_code != 401
-    assert client.get("/ready").status_code != 401
+    assert client.get("/livez").status_code != 401
+    assert client.get("/readyz").status_code != 401
+    assert client.get("/status").status_code == 200
     assert client.get("/.well-known/oauth-protected-resource").status_code != 401
 
 

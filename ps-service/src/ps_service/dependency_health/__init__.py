@@ -3,8 +3,8 @@
 Purpose: a process-wide live-health registry for the external dependencies PS Service
 relies on (FalkorDB, the LLM Interface, Cellar/ELI, the Passkey Signing Postgres, the PS
 state Postgres and the startup graph replay). Callers record the outcome of calls they
-already make, so the `/ready` endpoint can report current reachability without any extra
-polling cost.
+already make, so the `/readyz` probe and `/status` can report current reachability without any
+extra polling cost.
 
 Exports: the dependency-name constants, `mark_healthy`, `mark_unhealthy`, `is_healthy`,
 `all_healthy` and `reset_for_tests`.

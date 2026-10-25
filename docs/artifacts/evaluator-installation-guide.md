@@ -93,7 +93,7 @@ podman info
 > v1.15.1) in front of PS Service and Authentik. It was measured on its own on 2026-10-24, on a
 > Podman machine with 4 CPUs and 8 GiB (macOS, arm64), with a stub backend behind it and without
 > the rest of the Policy System stack. It used 60 MiB of memory and 4m CPU idle (120 seconds), and
-> 77 MiB and 760m CPU while 8 clients requested `/health` over HTTPS for 60 seconds. The full stack
+> 77 MiB and 760m CPU while 8 clients requested the liveness probe over HTTPS for 60 seconds. The full stack
 > was not run with it, so the minimum above is not re-validated for the full stack; the controller
 > is heavier than the reverse proxy it replaced, and the controller's declared request is 100m CPU
 > and 90Mi memory with no limits. The memory and CPU figures are the controller's cgroup readings.
@@ -914,8 +914,8 @@ Anyone with `kubectl` access to the cluster can read it. The scripts never print
 6. It waits until Authentik, the ingress controller and PS Service are Ready. The script then checks
    from inside the PS Service pod that the issuer's OIDC discovery document can be fetched through
    the ingress.
-   Last, it checks from this machine, through port `30443` and verifying the CA, that `/health`
-   answers, that the discovery document reports exactly the issuer the release was given, and that a
+   Last, it checks from this machine, through port `30443` and verifying the CA, that `/status`
+   answers, that the in-cluster probes are not routed (`/livez` answers `404`), that the discovery document reports exactly the issuer the release was given, and that a
    request to `/mcp/` without a bearer token is refused with `401`.
 7. It creates the owner as an Authentik administrator. The username and email are the address you
    gave. **No password is set, prompted for, or logged.** It prints a single-use, time-limited link

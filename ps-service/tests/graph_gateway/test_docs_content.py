@@ -1755,9 +1755,9 @@ def test_no_old_backup_statements() -> None:
         assert absent not in history, absent
 
 
-def test_operations_guide_states_what_an_unauthenticated_ready_reveals() -> None:
+def test_operations_guide_states_what_an_unauthenticated_status_reveals() -> None:
     ops = _read(_OPS)
-    section = _collapsed(_section(ops, "### What `/ready` reveals"))
+    section = _collapsed(_section(ops, "### What `/status` reveals"))
 
     for needle in (
         '{"status": "ready"}',
@@ -1769,7 +1769,7 @@ def test_operations_guide_states_what_an_unauthenticated_ready_reveals() -> None
         "not an error",
     ):
         assert needle in section, needle
-    assert "(#what-ready-reveals)" in ops
+    assert "(#what-status-reveals)" in ops
 
 
 def test_operations_guide_restore_says_the_gated_check_needs_a_ready_token() -> None:
@@ -1779,20 +1779,20 @@ def test_operations_guide_restore_says_the_gated_check_needs_a_ready_token() -> 
     assert "gated_graphs=unchecked" in restore
 
 
-def test_architecture_documents_state_unauthenticated_ready_is_status_only() -> None:
+def test_architecture_documents_state_the_probe_and_anonymous_status_carry_no_names() -> None:
     ca = _collapsed(_read(_CA))
     sa = _collapsed(_read(_SA))
 
-    assert 'the body is `{"status": "ready" | "not_ready"}` for every unauthenticated' in ca
+    assert 'the `/readyz` body is `{"status": "ready" | "not_ready"}` for every caller' in ca
     assert "never answered `401`" in ca
-    assert "only to a caller with a valid bearer token" in sa
+    assert "only by `/status` to a caller with a valid bearer token" in sa
     assert "reported by name only;" not in sa
 
 
-def test_helm_values_reference_shows_the_anonymous_and_the_authenticated_ready_answer() -> None:
+def test_helm_values_reference_shows_the_anonymous_and_the_authenticated_status_answer() -> None:
     valref = _read(_VALREF)
 
-    assert 'anonymous: {"status":"ready"}' in valref
+    assert 'anonymous: {"status":"ready","version":' in valref
     assert "Authorization: Bearer $ACCESS_TOKEN" in valref
 
 

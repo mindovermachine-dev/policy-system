@@ -11,6 +11,7 @@ command handler consumes.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import NotRequired, TypedDict
 
 
@@ -134,27 +135,43 @@ class ExportResult:
     stages: list[ExportStageOutcome]
 
 
-class HealthResponseBody(TypedDict):
-    """Raw JSON shape of a `GET /health` 200 response body."""
+class StatusDetail(Enum):
+    """How much of `GET /status` a caller asks for, and whether it may send a login.
 
-    status: str
+    `NONE` never sends a bearer token, so it never reads the stored login. `IF_LOGGED_IN`
+    sends one when a token can be obtained and otherwise accepts the status-only reply.
+    `REQUIRED` fails closed without a login, and treats a reply without dependency
+    names as an error.
+    """
+
+    NONE = "none"
+    IF_LOGGED_IN = "if_logged_in"
+    REQUIRED = "required"
 
 
-class ReadyResponseBody(TypedDict):
-    """Raw JSON shape of a `GET /ready` 200 response body."""
+class StatusResponseBody(TypedDict):
+    """Raw JSON shape of a `GET /status` 200 response body.
 
-    status: str
-    unhealthy_dependencies: NotRequired[list[str]]
-
-
-@dataclass(frozen=True)
-class ReadinessResult:
-    """Parsed result of `PsServiceClient.check_readiness()`.
-
-    `unhealthy_dependencies` is `None` when the response carried no dependency names
-    (an unauthenticated reply is status only), which is different from an empty list
-    (the service reported that nothing is unhealthy).
+    The two detail keys are present only for a caller whose bearer token PS Service
+    verified.
     """
 
     status: str
+    version: str
+    unhealthy_dependencies: NotRequired[list[str]]
+    gated_graphs: NotRequired[list[str]]
+
+
+@dataclass(frozen=True)
+class ServiceStatus:
+    """Parsed result of `PsServiceClient.get_status()`.
+
+    `unhealthy_dependencies` and `gated_graphs` are `None` when the reply carried no
+    detail (the status-only reply to an anonymous caller), which is different from an
+    empty list (the service reported that nothing is unhealthy or gated).
+    """
+
+    status: str
+    version: str
     unhealthy_dependencies: list[str] | None
+    gated_graphs: list[str] | None
