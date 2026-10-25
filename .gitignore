@@ -99,6 +99,8 @@ cython_debug/
 .abstra/
 tempCodeRunnerFile.py
 .ruff_cache/
+.grimp_cache/
+.import_linter_cache/
 .pypirc
 marimo/_static/
 marimo/_lsp/

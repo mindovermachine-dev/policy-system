@@ -8,13 +8,20 @@ from __future__ import annotations
 
 import re
 import socket
+import subprocess
+import sys
 import time
+from typing import TYPE_CHECKING
 
+import psycopg
 import pytest
 
 from ps_service.graph_gateway import provision
 from ps_service.graph_gateway.provision import ProvisioningTarget, main
 from ps_service.persistence import StatePostgresProvisioningError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 _ENVIRON = {
     "PS_STATE_POSTGRES_HOST": "db.internal.example",
@@ -131,6 +138,120 @@ def test_main_keeps_retrying_an_unreachable_server_until_the_deadline_then_exits
     assert elapsed >= 2
     assert "did not accept connections within 2 seconds" in captured.err
     assert "s3cret-admin-password" not in captured.out + captured.err
+    assert "127.0.0.1" not in captured.out + captured.err
+
+
+# A stand-in Postgres server: it declines any SSL/GSS encryption request and answers every
+# startup packet with one FATAL ErrorResponse carrying the SQLSTATE given as its argument, the
+# way a real server reports "starting up" (57P03) or a refused login (28P01). It runs in its own
+# process because libpq's blocking calls hold the GIL, which would starve an in-process thread.
+_REFUSING_SERVER_SCRIPT = r"""
+import socket, struct, sys
+
+ssl_or_gss_request = {80877103, 80877104}
+fields = [(b"S", b"FATAL"), (b"V", b"FATAL"), (b"C", sys.argv[1].encode()), (b"M", b"refused")]
+payload = b"".join(key + value + b"\0" for key, value in fields) + b"\0"
+error_response = b"E" + struct.pack("!i", len(payload) + 4) + payload
+listener = socket.socket()
+listener.bind(("127.0.0.1", 0))
+listener.listen(16)
+print(listener.getsockname()[1], flush=True)
+while True:
+    client, _ = listener.accept()
+    with client:
+        while True:
+            header = client.recv(4, socket.MSG_WAITALL)
+            if len(header) < 4:
+                break
+            body = client.recv(struct.unpack("!i", header)[0] - 4, socket.MSG_WAITALL)
+            if struct.unpack("!i", body[:4])[0] in ssl_or_gss_request:
+                client.sendall(b"N")
+                continue
+            client.sendall(error_response)
+            break
+"""
+
+
+@pytest.fixture
+def refusing_server() -> Iterator[Callable[[str], int]]:
+    """Start stand-in servers that refuse every login with a given SQLSTATE; yield a starter."""
+    servers: list[subprocess.Popen[str]] = []
+
+    def start(sqlstate: str) -> int:
+        server = subprocess.Popen(  # noqa: S603 -- fixed interpreter and a literal script
+            [sys.executable, "-c", _REFUSING_SERVER_SCRIPT, sqlstate],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        servers.append(server)
+        assert server.stdout is not None
+        return int(server.stdout.readline())
+
+    yield start
+    for server in servers:
+        server.kill()
+        server.wait()
+
+
+def test_main_exits_one_at_once_when_the_server_refuses_the_login(
+    capsys: pytest.CaptureFixture[str], refusing_server: Callable[[str], int]
+) -> None:
+    environ = {
+        **_ENVIRON,
+        "PS_STATE_POSTGRES_HOST": "127.0.0.1",
+        "PS_STATE_POSTGRES_PORT": str(refusing_server("28P01")),
+        "PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS": "10",
+    }
+
+    started = time.monotonic()
+    exit_code = main([], environ)
+    elapsed = time.monotonic() - started
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert elapsed < 5
+    assert "OperationalError" in captured.err
+    assert "did not accept connections" not in captured.err
+    assert "s3cret-admin-password" not in captured.out + captured.err
+
+
+def test_provision_raises_the_refusal_without_retrying_when_the_server_refuses_the_login(
+    refusing_server: Callable[[str], int],
+) -> None:
+    target = ProvisioningTarget.from_environ(
+        {
+            **_ENVIRON,
+            "PS_STATE_POSTGRES_HOST": "127.0.0.1",
+            "PS_STATE_POSTGRES_PORT": str(refusing_server("28P01")),
+            "PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS": "10",
+        }
+    )
+
+    started = time.monotonic()
+    with pytest.raises(psycopg.OperationalError):
+        provision.provision(target)
+
+    assert time.monotonic() - started < 5
+
+
+def test_main_keeps_retrying_a_server_that_is_starting_up_until_the_deadline_then_exits_one(
+    capsys: pytest.CaptureFixture[str], refusing_server: Callable[[str], int]
+) -> None:
+    environ = {
+        **_ENVIRON,
+        "PS_STATE_POSTGRES_HOST": "127.0.0.1",
+        "PS_STATE_POSTGRES_PORT": str(refusing_server("57P03")),
+        "PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS": "2",
+    }
+
+    started = time.monotonic()
+    exit_code = main([], environ)
+    elapsed = time.monotonic() - started
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert elapsed >= 2
+    assert "did not accept connections within 2 seconds" in captured.err
     assert "127.0.0.1" not in captured.out + captured.err
 
 

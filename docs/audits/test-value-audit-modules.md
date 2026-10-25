@@ -307,7 +307,7 @@
 | `ps-service/tests/domain_schema/test_write_docs.py` | 4 | keep | `write-docs` regenerates the canonical document and its packaged copy. |
 | `ps-service/tests/export/test_catalog_writer_catalog_json.py` | 4 | keep | Tests for `ps_service.export.catalog_writer.write_catalog_json` |
 | `ps-service/tests/export/test_catalog_writer_manifest.py` | 5 | keep | Tests for `ps_service.export.catalog_writer.write_manifest`/`read_manifest` |
-| `ps-service/tests/export/test_dump_restore_known_defect_live.py` | 2 | keep | Regression-documentation proof for a genuine FalkorDB server defect. |
+| `ps-service/tests/export/test_dump_restore_live.py` | 2 | keep | `DUMP`/`RESTORE` and `GRAPH.COPY` keep a graph intact on the pinned FalkorDB image. |
 | `ps-service/tests/export/test_embedding_equivalence.py` | 2 | keep | Export's artifacts through the gateway equal the legacy export's. |
 | `ps-service/tests/export/test_embeddings.py` | 5 | keep | Tests for `ps_service.export.embeddings.backfill_capability_embeddings` |
 | `ps-service/tests/export/test_embeddings_schema_pin.py` | 3 | keep | Embeddings backfill's label/property tables agree with the domain schema. |

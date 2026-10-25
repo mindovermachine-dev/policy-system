@@ -89,6 +89,61 @@ def test_load_config_honors_ps_service_graceful_shutdown_seconds_override(
     assert load_config().graceful_shutdown_seconds == 30
 
 
+def test_load_config_defaults_ps_service_shutdown_stop_budget_seconds_to_15(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset `PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS` gives a 15 second stop budget."""
+    monkeypatch.delenv("PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS", raising=False)
+
+    assert load_config().shutdown_stop_budget_seconds == 15
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("30", 30), ("0", 0)])
+def test_load_config_honors_ps_service_shutdown_stop_budget_seconds_override(
+    raw: str, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stop budget is configurable; `0` is valid (every stop is signalled, none waited for)."""
+    monkeypatch.setenv("PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS", raw)
+
+    assert load_config().shutdown_stop_budget_seconds == expected
+
+
+@pytest.mark.parametrize("invalid_budget", ["not-a-number", "1.5", "-1", ""])
+def test_load_config_raises_for_invalid_ps_service_shutdown_stop_budget_seconds(
+    invalid_budget: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-integer or negative stop budget fails closed, naming the variable."""
+    monkeypatch.setenv("PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS", invalid_budget)
+
+    with pytest.raises(ServiceConfigurationError, match="PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS"):
+        load_config()
+
+
+@pytest.mark.parametrize(
+    "env_var_name",
+    [
+        "PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS",
+        "PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS",
+        "PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS",
+        "PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS",
+    ],
+)
+@pytest.mark.parametrize(
+    ("raw", "message_tail"),
+    [("abc", "must be an integer, got 'abc'"), ("-3", "must not be negative, got -3")],
+)
+def test_non_negative_whole_number_settings_report_the_same_error_shape(
+    env_var_name: str, raw: str, message_tail: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every non-negative whole-number setting names itself and the bad value the same way."""
+    monkeypatch.setenv(env_var_name, raw)
+
+    with pytest.raises(ServiceConfigurationError) as raised:
+        load_config()
+
+    assert str(raised.value) == f"{env_var_name} {message_tail}"
+
+
 @pytest.mark.parametrize(
     "invalid_port",
     ["not-a-number", "0", "-1", "65536", "99999"],

@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import psycopg
+from psycopg import pq
+from psycopg.conninfo import make_conninfo
 
 from ps_service.logging.errors import LoggingLifecycleError
 from ps_service.logging.facade import emit_log_entry
@@ -74,7 +76,6 @@ _CONNECT_TIMEOUT_SECONDS = 30
 _DEFAULT_LOCK_DEADLINE_SECONDS = 60
 _DEFAULT_CONNECT_DEADLINE_SECONDS = 120
 _CONNECT_RETRY_INTERVAL_SECONDS = 1.0
-_SQLSTATE_CANNOT_CONNECT_NOW = "57P03"
 _PARSER_DESCRIPTION = (
     "Bring the ps_state database from any state to ready: apply the pending ordinary component "
     "migrations, the graph_gateway migration and the audit_integrity migration in one idempotent "
@@ -181,13 +182,33 @@ class ProvisionResult:
     audit_integrity_applied: list[str] = field(default_factory=list)
 
 
-def _is_server_not_ready(exc: psycopg.OperationalError) -> bool:
-    """Whether the failure means "no server answered yet" (no SQLSTATE) or "server starting up"."""
-    return exc.sqlstate is None or exc.sqlstate == _SQLSTATE_CANNOT_CONNECT_NOW
+def _server_is_up(target: ProvisioningTarget) -> bool:
+    """Whether a server answered at `target` and is past startup, so a failed login is a refusal.
+
+    A failed `psycopg.connect` cannot tell this apart: libpq keeps the SQLSTATE of an error the
+    server sends during connection startup to itself, so every connection-time failure arrives
+    with `sqlstate=None`, whether the server is absent, starting up or refusing the credential.
+    `PQping` (the check `pg_isready` makes) classifies it from that SQLSTATE without logging in:
+    `PQPING_NO_RESPONSE` means no server answered and `PQPING_REJECT` means the server is up but
+    not accepting connections yet (starting up, shutting down, in recovery). Any other answer,
+    including an authentication or permission refusal, means the server is up. No password is
+    sent; the ping stops before authentication.
+    """
+    conninfo = make_conninfo(
+        host=target.host,
+        port=target.port,
+        dbname=target.database,
+        user=target.admin_user,
+        connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+    )
+    return pq.PGconn.ping(conninfo.encode()) not in {pq.Ping.NO_RESPONSE, pq.Ping.REJECT}
 
 
 def _connect_when_server_is_ready(target: ProvisioningTarget) -> psycopg.Connection[TupleRow]:
     """Connect as the admin, retrying until the server accepts connections or the deadline.
+
+    The connection is attempted only once the server is up; a connection failure while it is up
+    is a refusal and raised at once. If the server went away again in between, the wait goes on.
 
     Args:
         target: The target whose host, database, admin credential and connect timeout are used.
@@ -203,24 +224,25 @@ def _connect_when_server_is_ready(target: ProvisioningTarget) -> psycopg.Connect
     """
     deadline = time.monotonic() + target.connect_timeout_seconds
     while True:
-        try:
-            return psycopg.connect(
-                host=target.host,
-                port=target.port,
-                dbname=target.database,
-                user=target.admin_user,
-                password=target.admin_password,
-                connect_timeout=_CONNECT_TIMEOUT_SECONDS,
-            )
-        except psycopg.OperationalError as exc:
-            if not _is_server_not_ready(exc):
-                raise
-            if time.monotonic() >= deadline:
-                message = (
-                    "ps_state Postgres did not accept connections within "
-                    f"{target.connect_timeout_seconds} seconds"
+        if _server_is_up(target):
+            try:
+                return psycopg.connect(
+                    host=target.host,
+                    port=target.port,
+                    dbname=target.database,
+                    user=target.admin_user,
+                    password=target.admin_password,
+                    connect_timeout=_CONNECT_TIMEOUT_SECONDS,
                 )
-                raise StatePostgresProvisioningError(message) from exc
+            except psycopg.OperationalError:
+                if _server_is_up(target):
+                    raise
+        if time.monotonic() >= deadline:
+            message = (
+                "ps_state Postgres did not accept connections within "
+                f"{target.connect_timeout_seconds} seconds"
+            )
+            raise StatePostgresProvisioningError(message)
         time.sleep(_CONNECT_RETRY_INTERVAL_SECONDS)
 
 

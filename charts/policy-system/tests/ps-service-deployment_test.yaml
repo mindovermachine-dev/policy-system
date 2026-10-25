@@ -758,6 +758,39 @@ tests:
       - failedTemplate:
           errorPattern: psService\.gracefulShutdownSeconds must be a whole number
 
+  - it: terminationGracePeriodSeconds is 30 on the default render (window 10 + stop budget 15 + margin 5)
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+
+  - it: terminationGracePeriodSeconds follows psService.gracefulShutdownSeconds, 60 gives 80
+    set:
+      psService.gracefulShutdownSeconds: 60
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 80
+
+  - it: terminationGracePeriodSeconds is 20 when the graceful-shutdown window is 0
+    set:
+      psService.gracefulShutdownSeconds: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 20
+
+  - it: terminationGracePeriodSeconds renders alongside hostAliases
+    set:
+      llm.provider: ollama
+      psService.ollamaHostGatewayIP: 10.88.0.1
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+      - exists:
+          path: spec.template.spec.hostAliases
+
   - it: PS_QUERY_TIMEOUT_MS renders the default 5000
     asserts:
       - equal:

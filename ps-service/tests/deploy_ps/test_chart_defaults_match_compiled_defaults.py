@@ -4,7 +4,9 @@ The chart renders every startup setting below into the PS Service environment, s
 drifted from the one PS Service uses when the variable is unset (the `ServiceConfig` default, or
 what `load_config()` returns with no `PS_*` variable set) would silently change behaviour for
 operators who leave the value alone. The startup probe window must also cover the discovery retry
-budget and still fit inside the wait the deploy script gives `helm upgrade`.
+budget and still fit inside the wait the deploy script gives `helm upgrade`. The pod's termination
+grace period is derived from the graceful-shutdown window plus the service's default shutdown stop
+budget, which the chart carries as a literal, so that literal must equal the service default.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALUES_FILE = REPO_ROOT / "charts" / "policy-system" / "values.yaml"
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy-ps-prod.sh"
+HELPERS_FILE = REPO_ROOT / "charts" / "policy-system" / "templates" / "_helpers.tpl"
 
 # Process boot plus one discovery attempt that starts just before the budget ends (30 s timeout).
 _STARTUP_MARGIN_SECONDS = 90
@@ -82,6 +85,21 @@ def test_chart_default_graceful_shutdown_seconds_matches_load_config_default(
     assert (
         _ps_service_values()["gracefulShutdownSeconds"]
         == _load_config_defaults(monkeypatch).graceful_shutdown_seconds
+    )
+
+
+def _chart_stop_budget_seconds() -> int:
+    match = re.search(r"\$stopBudgetSeconds := (\d+)", HELPERS_FILE.read_text(encoding="utf-8"))
+    assert match is not None, "the chart's stop-budget literal is not found in _helpers.tpl"
+    return int(match.group(1))
+
+
+def test_chart_stop_budget_literal_matches_load_config_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert (
+        _chart_stop_budget_seconds()
+        == _load_config_defaults(monkeypatch).shutdown_stop_budget_seconds
     )
 
 

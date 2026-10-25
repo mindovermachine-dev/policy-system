@@ -21,6 +21,7 @@ from ps_service.curated_source.source_url import validate_source_url
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
 _DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 10
+_DEFAULT_SHUTDOWN_STOP_BUDGET_SECONDS = 15
 _MIN_PORT = 1
 _MAX_PORT = 65535
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
@@ -82,6 +83,9 @@ class ServiceConfig:
         port: TCP port the HTTP server binds to (`PS_SERVICE_PORT`); 1 to 65535.
         graceful_shutdown_seconds: Seconds the server waits for in-flight requests on shutdown
             (`PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS`); non-negative.
+        shutdown_stop_budget_seconds: Total seconds the shutdown then waits for the graph
+            gateway's drift monitor, startup replay and reconciler to stop, shared by the three
+            in that order (`PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS`); non-negative, default 15.
         logging_dir: Directory for log files (`PS_LOGGING_DIR`); `None` when unset.
         llm_interface_model: `<provider>/<model>` string passed straight to LiteLLM's
             completion call (`PS_LLMINTERFACE_MODEL`), for example `azure/gpt-5.4-mini`;
@@ -225,6 +229,7 @@ class ServiceConfig:
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
     ready_reprobe_min_interval_seconds: float = _DEFAULT_READY_REPROBE_MIN_INTERVAL_SECONDS
     ready_reprobe_deadline_seconds: float = _DEFAULT_READY_REPROBE_DEADLINE_SECONDS
+    shutdown_stop_budget_seconds: int = _DEFAULT_SHUTDOWN_STOP_BUDGET_SECONDS
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
     query_row_cap: int = _DEFAULT_QUERY_ROW_CAP
     falkordb_connect_timeout_seconds: float = _DEFAULT_FALKORDB_CONNECT_TIMEOUT_SECONDS
@@ -314,26 +319,6 @@ def _parse_host(raw: str) -> str:
         message = "PS_SERVICE_HOST must not be empty or whitespace-only"
         raise ServiceConfigurationError(message)
     return raw
-
-
-def _parse_graceful_shutdown_seconds(raw: str) -> int:
-    """Parse and validate `PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS` (a non-negative integer).
-
-    A malformed value fails closed with the same typed error as the host/port checks rather
-    than raising a raw `ValueError`.
-    """
-    try:
-        graceful_shutdown_seconds = int(raw)
-    except ValueError as exc:
-        message = f"PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS must be an integer, got {raw!r}"
-        raise ServiceConfigurationError(message) from exc
-    if graceful_shutdown_seconds < 0:
-        message = (
-            "PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS must not be negative, "
-            f"got {graceful_shutdown_seconds}"
-        )
-        raise ServiceConfigurationError(message)
-    return graceful_shutdown_seconds
 
 
 def _parse_falkordb_port(raw: str) -> int:
@@ -508,36 +493,18 @@ def _parse_max_request_body_bytes(raw: str) -> int:
     return max_bytes
 
 
-def _parse_auth_discovery_retry_budget_seconds(raw: str) -> int:
-    """Parse and range-check `PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS`, failing closed if bad.
-
-    Zero is valid and means a single discovery attempt with no retry; a negative or non-integer
-    value is rejected, with a message naming this env var.
-    """
-    try:
-        budget_seconds = int(raw)
-    except ValueError as exc:
-        message = f"PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS must be an integer, got {raw!r}"
-        raise ServiceConfigurationError(message) from exc
-    if budget_seconds < 0:
-        message = (
-            f"PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS must not be negative, got {budget_seconds}"
-        )
-        raise ServiceConfigurationError(message)
-    return budget_seconds
-
-
 def _load_auth_discovery_retry_budget_seconds() -> int:
     """Read `PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS` from the environment, defaulting when unset.
 
     Raises:
         ServiceConfigurationError: The value is not a non-negative integer.
     """
-    return _parse_auth_discovery_retry_budget_seconds(
+    return _parse_non_negative_int(
         os.environ.get(
             "PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS",
             str(_DEFAULT_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS),
-        )
+        ),
+        env_var_name="PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS",
     )
 
 
@@ -606,6 +573,30 @@ def _parse_non_negative_seconds(raw: str, *, env_var_name: str) -> float:
         message = f"{env_var_name} must be a finite number of seconds, not negative, got {raw!r}"
         raise ServiceConfigurationError(message)
     return seconds
+
+
+def _parse_non_negative_int(raw: str, *, env_var_name: str) -> int:
+    """Parse a whole number that may be zero, failing closed on any bad value.
+
+    Args:
+        raw: The raw environment value.
+        env_var_name: Variable name, quoted in the error message.
+
+    Returns:
+        The value; always at least zero.
+
+    Raises:
+        ServiceConfigurationError: The value is not an integer or is negative.
+    """
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        message = f"{env_var_name} must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if value < 0:
+        message = f"{env_var_name} must not be negative, got {value}"
+        raise ServiceConfigurationError(message)
+    return value
 
 
 def _parse_positive_milliseconds(raw: str, *, env_var_name: str) -> int:
@@ -733,26 +724,6 @@ def _parse_query_row_cap(raw: str) -> int:
         message = f"PS_QUERY_ROW_CAP must be positive, got {query_row_cap}"
         raise ServiceConfigurationError(message)
     return query_row_cap
-
-
-def _parse_graph_drift_check_interval_seconds(raw: str) -> int:
-    """Parse `PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS`, failing closed on any bad value.
-
-    The pause between two passes of the Graph Write Gateway's drift check. Zero is
-    valid and turns the periodic check off; a negative or non-integer value is refused. Never
-    required: the default is one hour.
-    """
-    try:
-        interval = int(raw)
-    except ValueError as exc:
-        message = f"PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS must be an integer, got {raw!r}"
-        raise ServiceConfigurationError(message) from exc
-    if interval < 0:
-        message = (
-            f"PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS must not be negative, got {interval}"
-        )
-        raise ServiceConfigurationError(message)
-    return interval
 
 
 def _parse_ingestion_runs_max_in_flight(raw: str) -> int:
@@ -1121,11 +1092,12 @@ def load_config() -> ServiceConfig:
     """
     host = _parse_host(os.environ.get("PS_SERVICE_HOST", _DEFAULT_HOST))
     port = _parse_port(os.environ.get("PS_SERVICE_PORT", str(_DEFAULT_PORT)))
-    graceful_shutdown_seconds = _parse_graceful_shutdown_seconds(
+    graceful_shutdown_seconds = _parse_non_negative_int(
         os.environ.get(
             "PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS",
             str(_DEFAULT_GRACEFUL_SHUTDOWN_SECONDS),
-        )
+        ),
+        env_var_name="PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS",
     )
     logging_dir_raw = os.environ.get("PS_LOGGING_DIR")
     logging_dir = Path(logging_dir_raw) if logging_dir_raw is not None else None
@@ -1290,6 +1262,13 @@ def load_config() -> ServiceConfig:
         host=host,
         port=port,
         graceful_shutdown_seconds=graceful_shutdown_seconds,
+        shutdown_stop_budget_seconds=_parse_non_negative_int(
+            os.environ.get(
+                "PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS",
+                str(_DEFAULT_SHUTDOWN_STOP_BUDGET_SECONDS),
+            ),
+            env_var_name="PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS",
+        ),
         logging_dir=logging_dir,
         llm_interface_model=llm_interface_model,
         llm_interface_embed_model=llm_interface_embed_model,
@@ -1333,11 +1312,12 @@ def load_config() -> ServiceConfig:
         passkey_signing_postgres_statement_timeout_ms=(
             connection_bounds.passkey_signing_postgres_statement_timeout_ms
         ),
-        graph_drift_check_interval_seconds=_parse_graph_drift_check_interval_seconds(
+        graph_drift_check_interval_seconds=_parse_non_negative_int(
             os.environ.get(
                 "PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS",
                 str(_DEFAULT_GRAPH_DRIFT_CHECK_INTERVAL_SECONDS),
-            )
+            ),
+            env_var_name="PS_GRAPHGATEWAY_DRIFT_CHECK_INTERVAL_SECONDS",
         ),
         ingestion_runs_max_in_flight=_parse_ingestion_runs_max_in_flight(
             os.environ.get(

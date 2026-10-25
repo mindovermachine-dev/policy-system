@@ -10,8 +10,9 @@ Three narrow structural Protocols, each with one conversion site, keep the drive
 
 - `_RawGraphConnection`: the raw, single-key Redis-native primitives (`rename`/`delete`/
   `pipeline`) the gateway's swap port needs. `pipeline()` returns `_WatchablePipeline` so a
-  caller can WATCH/MULTI/EXEC. `dump`/`restore` are deliberately absent: FalkorDB corrupts data
-  across that command pair.
+  caller can WATCH/MULTI/EXEC. `dump`/`restore` are deliberately absent: the swap needs only
+  `GRAPH.COPY` and `RENAME`, and FalkorDB graph-module builds up to at least 4.20.4 double a
+  graph's nodes across that command pair (the chart-pinned image does not).
 - `_GraphCopyHandle`: the `GRAPH.COPY` and Cypher `query()` surface the gateway's swap port
   needs (`falkordb.Graph.copy` and `falkordb.Graph.query`).
 - `_GraphQueryHandle`: the bare parameterized-Cypher surface `serialize_graph` needs, nothing

@@ -45,6 +45,7 @@ spec:
           hostnames: [{{ .Values.psService.authentikHostname | quote }}]
         {{- end }}
       {{- end }}
+      terminationGracePeriodSeconds: {{ include "policy-system.psServiceTerminationGracePeriodSeconds" . }}
       initContainers:
         {{- if .Values.psService.localCa.secretName }}
         # Builds PS Service's trust bundle: the image's system CAs plus the local CA.

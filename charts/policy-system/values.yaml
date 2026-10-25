@@ -75,8 +75,9 @@ psService:
   # Service Ingress limit (nginx.ingress.kubernetes.io/proxy-body-size) is derived as 1.5 times this.
   maxRequestBodyBytes: 104857600
   # Seconds PS Service waits for in-flight requests after SIGTERM (PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS).
-  # Whole number, 0 or more; 0 stops without waiting. Keep below the pod termination grace
-  # period (Kubernetes default 30 s; the chart does not set terminationGracePeriodSeconds).
+  # Whole number, 0 or more; 0 stops without waiting. The pod's terminationGracePeriodSeconds is
+  # derived as this value + 15 (PS Service's default shutdown stop budget for the graph gateway,
+  # PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS, not a chart value) + 5 (exit margin): 30 by default.
   # A quoted number such as "5000" is refused at render.
   gracefulShutdownSeconds: 10
   query:

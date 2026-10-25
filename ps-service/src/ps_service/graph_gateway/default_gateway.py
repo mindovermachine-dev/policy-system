@@ -173,9 +173,10 @@ class _PipelineSwapper:
 class FalkorDBKeyPort:
     """`GraphKeyPort` over the opener's FalkorDB connection: `GRAPH.COPY`, `DELETE`, `RENAME`.
 
-    Only commands confirmed clean on the engine are used (never `DUMP`/`RESTORE`). The watch is a
-    Redis `WATCH` held on one pipeline for the length of the block, which is what makes a write by
-    a process outside the gateway between the copy and the rename abort the swap.
+    Only `GRAPH.COPY`, `DELETE` and `RENAME` are used, never `DUMP`/`RESTORE`, which older
+    FalkorDB builds corrupt (see `key_port`). The watch is a Redis `WATCH` held on one pipeline for
+    the length of the block, which is what makes a write by a process outside the gateway between
+    the copy and the rename abort the swap.
     """
 
     def __init__(self, database: Callable[[], FalkorDB]) -> None:

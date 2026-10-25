@@ -288,6 +288,21 @@ Fails the render with "<key> must be a whole number, got <v>." when the value is
 {{- end }}
 
 {{/*
+Seconds Kubernetes gives the PS Service pod between SIGTERM and SIGKILL.
+Input: the root context; reads .Values.psService.gracefulShutdownSeconds (validated by
+policy-system.wholeNumberAtLeast, so a bad value fails the render with its own message).
+Output: the graceful-shutdown window, plus the time PS Service spends stopping the graph gateway
+(the PS_SERVICE_SHUTDOWN_STOP_BUDGET_SECONDS default; the chart does not set that variable), plus
+a margin for process exit.
+*/}}
+{{- define "policy-system.psServiceTerminationGracePeriodSeconds" -}}
+{{- $window := include "policy-system.wholeNumberAtLeast" (dict "value" .Values.psService.gracefulShutdownSeconds "key" "psService.gracefulShutdownSeconds" "minimum" 0) | int64 -}}
+{{- $stopBudgetSeconds := 15 -}}
+{{- $exitMarginSeconds := 5 -}}
+{{- add $window $stopBudgetSeconds $exitMarginSeconds -}}
+{{- end }}
+
+{{/*
 Whether the release uses the production profile, as "true" or "" (empty means false).
 Input: the root context; reads .Values.isProductionProfile, which values-prod.yaml sets to true.
 Fails the render with "isProductionProfile must be true or false, got <v>." when the value is

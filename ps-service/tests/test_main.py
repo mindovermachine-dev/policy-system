@@ -3201,7 +3201,8 @@ def test_lifespan_replays_the_graph_log_in_the_background_and_stops_it_before_th
         )
 
     assert fake.calls[-2:] == ["stop_replay", "stop_reconciler"]
-    assert fake.stop_timeouts == [5.0]
+    assert len(fake.stop_timeouts) == 1
+    assert 14.0 < fake.stop_timeouts[0] <= 15.0
 
 
 class _BlockedReplay:
@@ -3801,7 +3802,325 @@ def test_the_drift_monitor_starts_after_the_startup_replay_ends_and_stops_before
 
     assert fake.intervals == [120]
     assert fake.calls[-3:] == ["stop_drift_monitor", "stop_replay", "stop_reconciler"]
-    assert fake.drift_stop_timeouts == [5.0]
+    assert len(fake.drift_stop_timeouts) == 1
+    assert 14.0 < fake.drift_stop_timeouts[0] <= 15.0
+
+
+# -- the shutdown stop budget --------------------------------------------
+
+
+class _FakeClock:
+    """A monotonic clock that moves only when a stop says it took time."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _TimedStopGateway(_FakeDriftGateway):
+    """A drift-checked gateway whose stops take a set time on a clock, or raise."""
+
+    def __init__(
+        self,
+        advance: Callable[[float], None],
+        *,
+        drift_takes: float = 0.0,
+        replay_takes: float = 0.0,
+        raises_in: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.advance = advance
+        self.drift_takes = drift_takes
+        self.replay_takes = replay_takes
+        self.raises_in = raises_in
+
+    def _maybe_raise(self, stop: str) -> None:
+        if self.raises_in == stop:
+            message = "cannot reach secret-host.internal:6379"
+            raise RuntimeError(message)
+
+    def stop_drift_monitor(self, timeout: float) -> bool:
+        super().stop_drift_monitor(timeout)
+        self.advance(self.drift_takes)
+        self._maybe_raise("drift")
+        return True
+
+    def stop_replay(self) -> None:
+        super().stop_replay()
+        self.advance(self.replay_takes)
+        self._maybe_raise("replay")
+
+    def stop_reconciler(self, timeout: float) -> bool:
+        super().stop_reconciler(timeout)
+        self._maybe_raise("reconciler")
+        return True
+
+
+class _HangingStopGateway(_FakeDriftGateway):
+    """A drift-checked gateway whose drift and reconciler stops ignore their timeout and block."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+
+    def stop_drift_monitor(self, timeout: float) -> bool:
+        super().stop_drift_monitor(timeout)
+        self.release.wait(30.0)
+        return False
+
+    def stop_reconciler(self, timeout: float) -> bool:
+        super().stop_reconciler(timeout)
+        self.release.wait(30.0)
+        return False
+
+
+async def _never_ending_replay() -> None:
+    await asyncio.Event().wait()
+
+
+def _shut_down(
+    gateway: _FakeStartupGateway,
+    *,
+    budget_seconds: float,
+    replay_ends: bool,
+    clock: Callable[[], float] = time.monotonic,
+) -> float:
+    """Run the lifespan's gateway shutdown against `gateway`; return the real seconds it took."""
+
+    async def run() -> float:
+        task = asyncio.create_task(asyncio.sleep(0) if replay_ends else _never_ending_replay())
+        if replay_ends:
+            await task
+        started = time.monotonic()
+        try:
+            await main_module._shutdown_graph_gateway(  # pyright: ignore[reportPrivateUsage]
+                gateway, task, budget_seconds=budget_seconds, clock=clock
+            )
+            return time.monotonic() - started
+        finally:
+            task.cancel()
+
+    return asyncio.run(run())
+
+
+def _shutdown_warnings(read_lines: ReadLines) -> list[dict[str, object]]:
+    return [e for e in _startup_replay_entries(read_lines) if e["outcome"] == "warning"]
+
+
+def test_shutdown_stops_drift_then_replay_then_reconciler_each_with_the_budget_left(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    clock = _FakeClock()
+    gateway = _TimedStopGateway(clock.advance, drift_takes=14.5, replay_takes=0.25)
+
+    _shut_down(gateway, budget_seconds=15, replay_ends=False, clock=clock)
+
+    _wait_for_call(gateway, "stop_reconciler")
+    assert gateway.calls[-3:] == ["stop_drift_monitor", "stop_replay", "stop_reconciler"]
+    assert gateway.drift_stop_timeouts == [15.0]
+    assert gateway.stop_timeouts == [0.25]  # the replay's own stop time is charged to the deadline
+    warnings = [(e["reason"], e["timeout_seconds"]) for e in _shutdown_warnings(read_lines)]
+    assert warnings == [("replay_not_stopped", 0.5)]
+
+
+def test_the_replay_wait_is_bounded_by_the_budget_the_drift_stop_left(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    skew = [0.0]
+
+    def skewed_clock() -> float:
+        return time.monotonic() + skew[0]
+
+    def advance(seconds: float) -> None:
+        skew[0] += seconds
+
+    gateway = _TimedStopGateway(advance, drift_takes=14.0)
+
+    elapsed = _shut_down(gateway, budget_seconds=15, replay_ends=False, clock=skewed_clock)
+
+    # The replay waited its real share (about 1 s), not 0 and not a fixed cap of its own.
+    assert 0.7 <= elapsed < 2.5
+    _wait_for_call(gateway, "stop_reconciler")
+    assert gateway.stop_timeouts[0] < 0.3
+    assert "replay_not_stopped" in [e["reason"] for e in _shutdown_warnings(read_lines)]
+
+
+def test_stops_after_a_spent_budget_are_still_signalled_with_a_zero_wait(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    clock = _FakeClock()
+    gateway = _TimedStopGateway(clock.advance, drift_takes=20.0)
+
+    elapsed = _shut_down(gateway, budget_seconds=15, replay_ends=False, clock=clock)
+
+    # A replay wait of the full 15 s budget, or any fixed cap of its own, would far exceed this.
+    assert elapsed < 2.5
+    _wait_for_call(gateway, "stop_reconciler")
+    assert gateway.calls[-3:] == ["stop_drift_monitor", "stop_replay", "stop_reconciler"]
+    assert gateway.stop_timeouts == [0.0]
+    replay_warnings = [
+        e for e in _shutdown_warnings(read_lines) if e["reason"] == "replay_not_stopped"
+    ]
+    assert [e["timeout_seconds"] for e in replay_warnings] == [0.0]
+
+
+def test_shutdown_with_every_stop_hanging_returns_within_the_budget_and_warns(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    gateway = _HangingStopGateway()
+
+    try:
+        elapsed = _shut_down(gateway, budget_seconds=1, replay_ends=False)
+
+        # The drift stop uses up the 1 s; replay and reconciler are signalled with 0 left. The
+        # hanging stops block until released, so any finite bound proves shutdown did not wait.
+        assert 0.95 <= elapsed < 2.5
+        assert not gateway.release.is_set()
+        _wait_for_call(gateway, "stop_reconciler")
+        assert gateway.stop_timeouts == [0.0]
+        reasons = {e["reason"] for e in _shutdown_warnings(read_lines)}
+        assert {
+            "drift_monitor_not_stopped",
+            "replay_not_stopped",
+            "reconciler_not_stopped",
+        } <= reasons
+    finally:
+        gateway.release.set()
+
+
+def _late_failing_stop(go: threading.Event, done: threading.Event) -> Callable[[float], bool]:
+    """A stop that blocks until `go` is set, then raises; `done` is set once it has raised."""
+
+    def stop(timeout: float) -> bool:
+        del timeout
+        go.wait(30.0)
+        done.set()
+        message = "cannot reach secret-host.internal:6379"
+        raise RuntimeError(message)
+
+    return stop
+
+
+def _failure_entries_once_stops_end(read_lines: ReadLines) -> list[dict[str, object]]:
+    """Join the shutdown stop threads, then return the startup-replay `failure` log entries."""
+    for thread in threading.enumerate():
+        if thread.name == "ps-service-shutdown-stop":
+            thread.join(_REPLAY_START_TIMEOUT_SECONDS)
+    return [e for e in _startup_replay_entries(read_lines) if e["outcome"] == "failure"]
+
+
+def test_a_stop_that_raises_after_its_wait_expired_is_logged_by_class_only(
+    read_lines: ReadLines, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    go, done = threading.Event(), threading.Event()
+
+    async def run() -> bool:
+        stopped = await main_module._run_stop_within(  # pyright: ignore[reportPrivateUsage]
+            _late_failing_stop(go, done), 0.05
+        )
+        go.set()
+        assert await asyncio.to_thread(done.wait, 5.0)
+        await asyncio.sleep(0.1)  # keeps the loop open while the late failure arrives
+        return stopped
+
+    try:
+        assert asyncio.run(run()) is False
+    finally:
+        go.set()
+
+    failures = _failure_entries_once_stops_end(read_lines)
+    assert [e["reason"] for e in failures] == ["RuntimeError"]
+    assert "secret-host" not in json.dumps(read_lines(resolve_default_log_path()))
+    assert "secret-host" not in capsys.readouterr().err
+
+
+def test_a_stop_that_raises_after_the_loop_closed_is_logged_by_class_only(
+    read_lines: ReadLines, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    go, done = threading.Event(), threading.Event()
+
+    async def run() -> bool:
+        return await main_module._run_stop_within(  # pyright: ignore[reportPrivateUsage]
+            _late_failing_stop(go, done), 0.05
+        )
+
+    try:
+        assert asyncio.run(run()) is False
+    finally:
+        go.set()
+
+    assert done.wait(5.0)
+    failures = _failure_entries_once_stops_end(read_lines)
+    assert [e["reason"] for e in failures] == ["RuntimeError"]
+    assert "secret-host" not in json.dumps(read_lines(resolve_default_log_path()))
+    assert "secret-host" not in capsys.readouterr().err
+
+
+def test_lifespan_stops_the_gateway_within_the_configured_stop_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDriftGateway()
+    app = _app_with_gateway(
+        monkeypatch, fake, graph_drift_check_interval_seconds=120, shutdown_stop_budget_seconds=7
+    )
+
+    with TestClient(app):
+        _wait_for_call(fake, "start_drift_monitor")
+
+    assert fake.calls[-3:] == ["stop_drift_monitor", "stop_replay", "stop_reconciler"]
+    assert 6.0 < fake.drift_stop_timeouts[0] <= 7.0
+    assert 6.0 < fake.stop_timeouts[0] <= fake.drift_stop_timeouts[0]
+
+
+@pytest.mark.parametrize("raises_in", ["drift", "replay"])
+def test_a_failing_stop_is_logged_by_class_and_the_later_stops_get_the_budget_left(
+    raises_in: str, read_lines: ReadLines, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    clock = _FakeClock()
+    gateway = _TimedStopGateway(
+        clock.advance, drift_takes=4.0, replay_takes=3.0, raises_in=raises_in
+    )
+
+    _shut_down(gateway, budget_seconds=15, replay_ends=True, clock=clock)
+
+    _wait_for_call(gateway, "stop_reconciler")
+    assert gateway.calls[-3:] == ["stop_drift_monitor", "stop_replay", "stop_reconciler"]
+    assert gateway.stop_timeouts == [8.0]
+    entries = _startup_replay_entries(read_lines)
+    failures = [e for e in entries if e["outcome"] == "failure"]
+    assert [e["reason"] for e in failures] == ["RuntimeError"]
+    all_lines = read_lines(resolve_default_log_path())
+    assert "secret-host" not in json.dumps(all_lines)
+    assert "secret-host" not in capsys.readouterr().err
+
+
+def test_a_failing_reconciler_stop_is_logged_by_class_and_shutdown_goes_on(
+    read_lines: ReadLines, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    clock = _FakeClock()
+    gateway = _TimedStopGateway(clock.advance, raises_in="reconciler")
+
+    _shut_down(gateway, budget_seconds=15, replay_ends=True, clock=clock)
+
+    entries = _startup_replay_entries(read_lines)
+    assert [e["reason"] for e in entries if e["outcome"] == "failure"] == ["RuntimeError"]
+    assert [e for e in entries if e["outcome"] == "warning"] == []
+    all_lines = read_lines(resolve_default_log_path())
+    assert "secret-host" not in json.dumps(all_lines)
+    assert "secret-host" not in capsys.readouterr().err
 
 
 def test_the_drift_monitor_is_not_started_when_the_startup_replay_fails(

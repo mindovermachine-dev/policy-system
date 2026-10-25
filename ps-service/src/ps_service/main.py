@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import threading
+import time
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
@@ -590,11 +592,6 @@ class _DriftMonitored(Protocol):
         ...
 
 
-_RECONCILER_STOP_TIMEOUT_SECONDS = 5.0
-_REPLAY_STOP_TIMEOUT_SECONDS = 5.0
-_DRIFT_MONITOR_STOP_TIMEOUT_SECONDS = 5.0
-
-
 async def _start_graph_replay_at_startup(
     config: ServiceConfig,
     build: Callable[[ServiceConfig], _StartupGateway] | None = None,
@@ -705,49 +702,161 @@ def _gated_graphs(app: FastAPI) -> list[str]:
     return list(gateway.gated_graphs()) if gateway is not None else []
 
 
-async def _stop_graph_replay(
-    gateway: _StartupGateway | None, task: asyncio.Task[None] | None
+async def _run_stop_within(stop: Callable[[float], bool], wait_seconds: float) -> bool:
+    """Run a blocking gateway stop on its own daemon thread and wait at most `wait_seconds`.
+
+    The stop is passed `wait_seconds` as its own timeout. A stop that has not returned in time
+    is left to finish on its thread, which is a daemon so it never holds up process exit, and
+    counts as not stopped. If it raises once nobody waits for it any more, the failure is logged
+    by its exception class only, from the loop while it is open and from the thread otherwise.
+
+    Args:
+        stop: The blocking stop, called with `wait_seconds` as its timeout; it returns whether
+            the stopped work ended.
+        wait_seconds: The longest time to wait for `stop` to return.
+
+    Returns:
+        What `stop` returned, when it returned within `wait_seconds`; `False` otherwise.
+
+    Raises:
+        Exception: Whatever `stop` raised, when it raised within `wait_seconds`.
+    """
+    loop = asyncio.get_running_loop()
+    outcome: asyncio.Future[bool] = loop.create_future()
+    threading.Thread(
+        target=_call_stop_and_hand_over,
+        args=(stop, wait_seconds, loop, outcome),
+        name="ps-service-shutdown-stop",
+        daemon=True,
+    ).start()
+    finished, _ = await asyncio.wait({outcome}, timeout=wait_seconds)
+    if not finished:
+        outcome.cancel()
+        return False
+    return outcome.result()
+
+
+def _call_stop_and_hand_over(
+    stop: Callable[[float], bool],
+    wait_seconds: float,
+    loop: asyncio.AbstractEventLoop,
+    outcome: asyncio.Future[bool],
 ) -> None:
-    """Ask the startup replay to stop at its next page and wait a bounded time for it to end."""
+    """Call `stop` on this thread and hand what it returned or raised to `outcome` on `loop`.
+
+    A failure is logged by its exception class from here when `loop` has already closed.
+    """
+    result, error = False, None
+    try:
+        result = stop(wait_seconds)
+    except Exception as exc:  # noqa: BLE001 - handed to the awaiting coroutine, which raises it
+        error = exc
+    try:
+        loop.call_soon_threadsafe(_deliver_stop_outcome, outcome, result, error)
+    except RuntimeError:
+        # The loop has closed, so nobody is waiting any more.
+        if error is not None:
+            _log_late_stop_failure(error)
+
+
+def _deliver_stop_outcome(
+    outcome: asyncio.Future[bool],
+    result: bool,  # noqa: FBT001 - loop callback
+    error: Exception | None,
+) -> None:
+    """Settle `outcome` with a stop's result or error; log an error nobody waits for any more."""
+    if outcome.done():
+        if error is not None:
+            _log_late_stop_failure(error)
+        return
+    if error is not None:
+        outcome.set_exception(error)
+    else:
+        outcome.set_result(result)
+
+
+def _log_late_stop_failure(error: Exception) -> None:
+    """Log a stop that raised after its wait expired, by its exception class only."""
+    _log_graph_gateway_startup_replay("failure", {"reason": type(error).__name__})
+
+
+def _remaining_seconds(deadline: float, clock: Callable[[], float]) -> float:
+    """Seconds left until `deadline` on `clock`; never negative."""
+    return max(0.0, deadline - clock())
+
+
+def _log_not_stopped(reason: str, wait_seconds: float) -> None:
+    """Log that a shutdown stop did not end within `wait_seconds`, under `reason`."""
+    _log_graph_gateway_startup_replay(
+        "warning", {"reason": reason, "timeout_seconds": round(wait_seconds, 3)}
+    )
+
+
+async def _stop_graph_replay(
+    gateway: _StartupGateway | None, task: asyncio.Task[None] | None, wait_seconds: float
+) -> None:
+    """Ask the startup replay to stop at its next page and wait at most `wait_seconds` for it.
+
+    Never raises: a failing stop request is logged by its exception class, and the replay is
+    still waited for, since it may end on its own.
+    """
     if gateway is None or task is None:
         return
-    gateway.stop_replay()
-    _, still_running = await asyncio.wait({task}, timeout=_REPLAY_STOP_TIMEOUT_SECONDS)
+    try:
+        gateway.stop_replay()
+    except Exception as exc:  # noqa: BLE001 - shutdown must go on whatever the replay stop does
+        _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
+    _, still_running = await asyncio.wait({task}, timeout=wait_seconds)
     if still_running:
-        _log_graph_gateway_startup_replay("warning", {"reason": "replay_not_stopped"})
+        _log_not_stopped("replay_not_stopped", wait_seconds)
 
 
 async def _shutdown_graph_gateway(
-    gateway: _StartupGateway | None, replay_task: asyncio.Task[None] | None
+    gateway: _StartupGateway | None,
+    replay_task: asyncio.Task[None] | None,
+    *,
+    budget_seconds: float,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
-    """Stop the drift check and the startup replay (it holds the graphs), then the reconciler."""
+    """Stop the drift check, the startup replay (it holds the graphs) and the reconciler.
+
+    They stop in that order on one deadline `budget_seconds` from now. Each stop is given the
+    time left on it, which is 0 once the budget is spent, so a later stop is still signalled.
+    Never raises.
+    """
     install_graph_write_gateway(None)
-    await _stop_drift_monitor(gateway)
-    await _stop_graph_replay(gateway, replay_task)
-    await _stop_graph_gateway_reconciler(gateway)
+    deadline = clock() + budget_seconds
+    await _stop_drift_monitor(gateway, _remaining_seconds(deadline, clock))
+    await _stop_graph_replay(gateway, replay_task, _remaining_seconds(deadline, clock))
+    await _stop_graph_gateway_reconciler(gateway, _remaining_seconds(deadline, clock))
 
 
-async def _stop_drift_monitor(gateway: _StartupGateway | None) -> None:
-    """Stop the gateway's periodic drift check at shutdown; never raises, never waits long."""
+async def _stop_drift_monitor(gateway: _StartupGateway | None, wait_seconds: float) -> None:
+    """Stop the gateway's periodic drift check at shutdown; never raises, waits `wait_seconds`."""
     if not isinstance(gateway, _DriftMonitored):
         return
     try:
-        await run_in_threadpool(gateway.stop_drift_monitor, _DRIFT_MONITOR_STOP_TIMEOUT_SECONDS)
+        stopped = await _run_stop_within(gateway.stop_drift_monitor, wait_seconds)
     except Exception as exc:  # noqa: BLE001 - shutdown must go on whatever the drift check does
         _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
+        return
+    if not stopped:
+        _log_not_stopped("drift_monitor_not_stopped", wait_seconds)
 
 
-async def _stop_graph_gateway_reconciler(gateway: _StartupGateway | None) -> None:
-    """Stop the gateway's background reconciler at shutdown; never raises, never waits long."""
+async def _stop_graph_gateway_reconciler(
+    gateway: _StartupGateway | None, wait_seconds: float
+) -> None:
+    """Stop the gateway's background reconciler at shutdown; never raises, waits `wait_seconds`."""
     if gateway is None:
         return
     try:
-        stopped = await run_in_threadpool(gateway.stop_reconciler, _RECONCILER_STOP_TIMEOUT_SECONDS)
+        stopped = await _run_stop_within(gateway.stop_reconciler, wait_seconds)
     except Exception as exc:  # noqa: BLE001 - shutdown must go on whatever the reconciler does
         _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
         return
     if not stopped:
-        _log_graph_gateway_startup_replay("warning", {"reason": "reconciler_not_stopped"})
+        _log_not_stopped("reconciler_not_stopped", wait_seconds)
 
 
 def startup_failure_log_extra(exc: Exception) -> dict[str, object]:
@@ -1178,7 +1287,11 @@ def create_app(
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield
-            await _shutdown_graph_gateway(app.state.graph_write_gateway, replay_task)
+            await _shutdown_graph_gateway(
+                app.state.graph_write_gateway,
+                replay_task,
+                budget_seconds=config.shutdown_stop_budget_seconds,
+            )
             app.state.metrics.shutdown()
             app.state.ready = False
 
