@@ -1,8 +1,9 @@
 """Tests that the guardrail section of CONTRIBUTING.md lists commands that really exist.
 
-Every `uv run pre-commit run <id> --all-files` line must name a declared hook, and every
+Every `uv run pre-commit run <id> --all-files` line must name a declared hook, every
 `uv run python scripts/<name>.py` line must name a script that exists and is wired into a hook or
-a CI check, so the documentation cannot drift from the configuration.
+a CI check, and the structural pytest guards listed must match the guard test files on disk, so
+the documentation cannot drift from the configuration.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ SECTION_PATTERN = re.compile(r"^## Automated guardrails\n(.*?)^## ", re.DOTALL |
 HOOK_COMMAND = re.compile(r"uv run pre-commit run ([\w-]+) --all-files")
 SCRIPT_COMMAND = re.compile(r"uv run python (scripts/[\w./-]+\.py)")
 CI_REPLICA = "scripts/run_ci_guardrails.py"
+GUARD_DIR = "ps-service/tests/guardrails"
+GUARD_TEST_PATH = re.compile(rf"{re.escape(GUARD_DIR)}/test_\w+\.py")
 
 
 def _yaml(name: str) -> dict[str, Any]:
@@ -69,3 +72,14 @@ def test_every_check_run_in_ci_for_the_guardrails_is_listed() -> None:
     for check_id in ("unused-symbols", "import-layering", "config-drift", "doc-links"):
         assert f"`{check_id}`" in section
     assert "`repo-hygiene`" in section
+
+
+def test_every_pytest_guard_is_listed_with_an_existing_path() -> None:
+    listed = set(GUARD_TEST_PATH.findall(_section()))
+    on_disk = {
+        path.relative_to(REPO_ROOT).as_posix() for path in (REPO_ROOT / GUARD_DIR).glob("test_*.py")
+    }
+
+    assert on_disk, f"no guard test files found under {GUARD_DIR}"
+    assert on_disk - listed == set(), "guard test files missing from the section"
+    assert listed - on_disk == set(), "section names guard test files that do not exist"

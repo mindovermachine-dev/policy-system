@@ -137,6 +137,10 @@ is used unchanged:
 uv run pytest
 ```
 
+The default suite includes the chart workload guard, which renders the chart, so it needs `helm`
+and the packaged Authentik chart (`helm dependency build charts/policy-system`, or
+`gh insitu run post-create-deps`). It fails, and never skips, without them.
+
 Pass `-n0` to run serially in a single process, for example under `pdb` or with `-s`:
 
 ```bash
@@ -221,6 +225,19 @@ UV_NO_SYNC=1 uv run python scripts/run_ci_guardrails.py
 Use it before delivering. A hook sees only staged files, so deleting or renaming a file that
 others link to trips `doc-links` only in CI and in this command.
 
+### Structural tests in the default `pytest` run
+
+Three guards are ordinary tests in the default `uv run pytest`, so they also run in CI's `pytest`
+check. They need no live service and use only dummy values. They fail, and never skip, when
+`helm` or the Authentik chart archive is missing. Each exemption a guard allows is stated, with its
+reason, in the guard's module docstring.
+
+| Guard              | What it enforces                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Run it locally                                                         | Where to edit                                                                         |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| chart workloads    | renders `charts/policy-system` with the default values and with `authentik.enabled=true`; `Deployment`, `StatefulSet` and `DaemonSet` main containers declare `readinessProbe`, and `startupProbe` if and only if `livenessProbe`; every main container of those and of `Job` and `CronJob` sets `requests.cpu`, `requests.memory` and `limits.memory`; Jobs are exempt from the probe rule and plain init containers from both, while an init container with `restartPolicy: Always` counts as a main container | `uv run pytest ps-service/tests/guardrails/test_chart_workloads.py`    | the chart templates and values                                                        |
+| migration coverage | every directory of `NNNN_*.sql` files under `ps-service/src/ps_service` has an entry naming its `postgres_live` empty-apply and N-1→N upgrade tests that run, and its database; the entry records the newest migration                                                                                                                                                                                                                                                                                           | `uv run pytest ps-service/tests/guardrails/test_migration_coverage.py` | `ps-service/tests/guardrails/migration_registry.py`                                   |
+| verifier tables    | every table a `ps_state` or `ps_signing` migration creates is declared seeded by a tool in `tools/backup-restore-verify` that the verifier runs, or is on `SEED_EMPTY_EXCEPTIONS`; no list names a table no migration creates                                                                                                                                                                                                                                                                                    | `uv run pytest ps-service/tests/guardrails/test_verifier_tables.py`    | `ps-service/tests/guardrails/verifier_seeding.py`, `scripts/verify-backup-restore.sh` |
+
 ### Fixing a failure and recording an exception
 
 - Fix the cause first. Add an exception only when the code is correct as written.
@@ -250,8 +267,9 @@ No tool checks these yet; reviewers look for them. The `## Enforcement` table of
   public-contract changes, and whether a new test adds value over existing ones.
 - Security: authorisation of new routes and tools, input bounds, and secrets handling.
 - Logging: no secret or personal data in log entries, and a single outcome vocabulary.
-- Persistence: migrations apply from the previous schema and backups cover every state table.
-- Deployment: chart workloads declare probes and resources; workflow actions and images are
+- Persistence: the registered migration tests pass against a live Postgres
+  (`uv run pytest -m postgres_live`), which CI does not run yet.
+- Deployment: probe timings and resource sizes fit the workload; workflow actions and images are
   pinned; shell scripts pass shellcheck.
 - Dependencies: direct imports are declared, licences are allowed, and advisories are triaged.
 - Documentation: component documents match the solution architecture, and removed symbols no

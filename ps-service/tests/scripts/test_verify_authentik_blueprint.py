@@ -7,6 +7,7 @@ up to the point where it would start a container.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
@@ -14,10 +15,10 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from guardrails.chart_render import CHART_DIR, ChartGuardSetupError, require_subchart_archives
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "verify-authentik-blueprint.sh"
-CHART_DIR = REPO_ROOT / "charts" / "policy-system"
 IMAGE_REPOSITORY = "ghcr.io/goauthentik/server"
 
 SUBPROCESS_TIMEOUT_SECONDS = 30.0
@@ -47,20 +48,17 @@ def test_image_tag_is_the_authentik_dependency_version_of_the_chart() -> None:
     assert completed.stdout.strip() == f"{IMAGE_REPOSITORY}:{_authentik_dependency_version()}"
 
 
-def test_dependency_version_is_the_app_version_of_the_packaged_authentik_subchart() -> None:
-    version = _authentik_dependency_version()
-    archive = CHART_DIR / "charts" / f"authentik-{version}.tgz"
-    if not archive.is_file():
-        pytest.skip(
-            "authentik subchart not packaged; run `helm dependency build charts/policy-system`"
-        )
-
+def _packaged_authentik_chart(chart_dir: Path) -> dict[str, Any]:
+    """Return the `Chart.yaml` packaged in the authentik archive; fail when it is not packaged."""
+    archive = require_subchart_archives(chart_dir)["authentik"]
     with tarfile.open(archive) as tar:
         member = tar.extractfile("authentik/Chart.yaml")
         assert member is not None
-        packaged = cast("dict[str, Any]", yaml.safe_load(member.read()))
+        return cast("dict[str, Any]", yaml.safe_load(member.read()))
 
-    assert packaged["appVersion"] == version
+
+def test_dependency_version_is_the_app_version_of_the_packaged_authentik_subchart() -> None:
+    assert _packaged_authentik_chart(CHART_DIR)["appVersion"] == _authentik_dependency_version()
 
 
 def test_an_unknown_option_is_refused() -> None:
@@ -100,3 +98,11 @@ def test_the_postgres_container_and_network_are_removed_on_every_exit_path() -> 
     assert "trap cleanup EXIT" in script
     assert '"$CLI" rm -f "$PG"' in script
     assert '"$CLI" network rm "$NETWORK"' in script
+
+
+def test_a_missing_authentik_archive_fails_with_the_build_hint(tmp_path: Path) -> None:
+    for name in ("Chart.yaml", "Chart.lock"):
+        shutil.copy(CHART_DIR / name, tmp_path / name)
+
+    with pytest.raises(ChartGuardSetupError, match="helm dependency build charts/policy-system"):
+        _packaged_authentik_chart(tmp_path)
