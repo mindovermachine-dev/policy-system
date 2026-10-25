@@ -7,20 +7,8 @@ set:
 templates:
   - authentik-postgres-deployment.yaml
 tests:
-  - it: probes the database over TCP with pg_isready for startup and readiness
+  - it: probes the database over TCP with pg_isready for readiness
     asserts:
-      - equal:
-          path: spec.template.spec.containers[0].startupProbe.exec.command
-          value:
-            - pg_isready
-            - -h
-            - 127.0.0.1
-            - -p
-            - "5432"
-            - -d
-            - authentik
-            - -U
-            - authentik
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.exec.command
           value:
@@ -39,12 +27,6 @@ tests:
       authentik.postgres.user: otheruser
     asserts:
       - contains:
-          path: spec.template.spec.containers[0].startupProbe.exec.command
-          content: otherdb
-      - contains:
-          path: spec.template.spec.containers[0].startupProbe.exec.command
-          content: otheruser
-      - contains:
           path: spec.template.spec.containers[0].readinessProbe.exec.command
           content: otherdb
       - contains:
@@ -53,56 +35,19 @@ tests:
   - it: keeps the TCP host so a socket-only initdb server cannot pass
     asserts:
       - equal:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[1]
-          value: -h
-      - equal:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[2]
-          value: 127.0.0.1
-      - equal:
           path: spec.template.spec.containers[0].readinessProbe.exec.command[1]
           value: -h
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.exec.command[2]
           value: 127.0.0.1
-  - it: has no livenessProbe
+  - it: has neither a startupProbe nor a livenessProbe
     asserts:
       - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+      - notExists:
           path: spec.template.spec.containers[0].livenessProbe
-  - it: carries no credential in any probe
+  - it: carries no credential in the readiness probe
     asserts:
-      - lengthEqual:
-          path: spec.template.spec.containers[0].startupProbe.exec.command
-          count: 9
-      - notContains:
-          path: spec.template.spec.containers[0].startupProbe.exec.command
-          content: -W
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[0]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[1]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[2]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[3]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[4]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[5]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[6]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[7]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].startupProbe.exec.command[8]
-          pattern: (authentik-postgres|AUTHENTIK_POSTGRESQL__PASSWORD|secret|password)
       - lengthEqual:
           path: spec.template.spec.containers[0].readinessProbe.exec.command
           count: 9
@@ -139,15 +84,6 @@ tests:
   - it: uses the documented default timings
     asserts:
       - equal:
-          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
-          value: 5
-      - equal:
-          path: spec.template.spec.containers[0].startupProbe.periodSeconds
-          value: 5
-      - equal:
-          path: spec.template.spec.containers[0].startupProbe.failureThreshold
-          value: 60
-      - equal:
           path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
           value: 5
       - equal:
@@ -156,24 +92,12 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.failureThreshold
           value: 6
-  - it: takes the timings from authentik.postgres.probes values
+  - it: takes the readiness timings from authentik.postgres.probes.readiness
     set:
-      authentik.postgres.probes.startup.timeoutSeconds: 2
-      authentik.postgres.probes.startup.periodSeconds: 3
-      authentik.postgres.probes.startup.failureThreshold: 4
       authentik.postgres.probes.readiness.timeoutSeconds: 6
       authentik.postgres.probes.readiness.periodSeconds: 7
       authentik.postgres.probes.readiness.failureThreshold: 8
     asserts:
-      - equal:
-          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
-          value: 2
-      - equal:
-          path: spec.template.spec.containers[0].startupProbe.periodSeconds
-          value: 3
-      - equal:
-          path: spec.template.spec.containers[0].startupProbe.failureThreshold
-          value: 4
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
           value: 6

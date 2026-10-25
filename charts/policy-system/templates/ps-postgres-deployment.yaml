@@ -75,8 +75,10 @@ spec:
           # and only then serves; without this probe the pod is Ready (and routed to) during
           # that window and ps-service crash-restarts. The TCP host (-h) is essential: over
           # the unix socket pg_isready also succeeds against the temporary server. No
-          # credentials are needed, and there is deliberately no livenessProbe: a slow initdb
-          # must never cause a restart loop.
+          # credentials are needed. There is deliberately neither a startup nor a liveness probe:
+          # either one kills the container when it fails, and a kill during initdb leaves PGDATA
+          # half-initialised (the init script never runs again), while a kill during crash
+          # recovery restarts the recovery in a loop.
           readinessProbe:
             exec:
               command:

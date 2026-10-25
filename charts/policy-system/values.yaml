@@ -283,7 +283,7 @@ llm:
     apiBase: "http://host.containers.internal:11434"
 
 psPostgres:
-  # The single PS Postgres server (issue #130): one instance holding two
+  # The single PS Postgres server: one instance holding two
   # databases, each with its own least-privilege role -- `state` (audit, authz,
   # runtime config) and `signing` (Passkey Signing: pending approvals, enrolled
   # WebAuthn credentials). Created on first start by files/ps-postgres-init.sh,
@@ -300,20 +300,22 @@ psPostgres:
   admin:
     user: postgres_admin
     # Set to reuse an operator-managed Secret (key POSTGRES_PASSWORD) instead of
-    # letting the chart generate and persist its own random password (issue #159);
+    # letting the chart generate and persist its own random password;
     # ps-postgres-secret.yaml renders no admin Secret when this is set.
     existingSecret: ""
   state:
     database: ps_state
     user: ps_state
-    # NOLOGIN role that owns the insert-only graph mutation log tables (issue #205). Created
+    # NOLOGIN role that owns the insert-only graph mutation log tables. Created
     # by the init script on first start and by the provisioning step on an existing cluster;
     # the state role is never a member of it. Never reuse the state role's name here.
     graphOwnerRole: ps_state_graph_owner
     # Operator-managed Secret (key PS_STATE_POSTGRES_PASSWORD); empty = chart-generated.
     existingSecret: ""
-  # Readiness only (issue #223): the pod is Ready once the final server accepts TCP
-  # connections, i.e. after first-start initdb. There is no liveness probe on purpose.
+  # Readiness only: the pod is Ready once the final server accepts TCP connections, i.e.
+  # after first-start initdb. There is no startup or liveness probe on purpose: a failed
+  # one kills the container, and a kill during initdb leaves PGDATA half-initialised
+  # while a kill during crash recovery restarts the recovery in a loop.
   probes:
     readiness:
       timeoutSeconds: 5
@@ -329,7 +331,7 @@ psPostgres:
     limits:
       memory: 512Mi
   # Job that applies the ordinary ps_state migrations and creates and migrates the
-  # owner-protected graph log tables in ps_state with the admin credential (issue #205); runs
+  # owner-protected graph log tables in ps_state with the admin credential; runs
   # on fresh installs and on every `helm upgrade`. Disable it only if the operator provisions by
   # hand (`python -m ps_service.graph_gateway.provision`): ps-service fails closed at startup until the tables exist. Upgrades must be run with
   # `--wait --wait-for-jobs` so a failed Job fails the upgrade.
@@ -363,7 +365,7 @@ psPostgres:
       # Off by default (local-test/kind), mirroring
       # authentik.postgres.persistence.durableStorageClass below exactly.
       # See values-prod.yaml -- Premium SSD, Retain-reclaim StorageClass for
-      # this Postgres volume (AC-BI-006).
+      # this Postgres volume.
       enabled: false
 
 authentik:
@@ -382,28 +384,21 @@ authentik:
   # (authentik-credentials-secret.yaml's own fail() guard).
   credentialsExistingSecret: ""
   postgres:
-    # Authentik's own hand-rolled Postgres (AC-BI-008, #129 S2) — mirrors
-    # FalkorDB's durable-StorageClass/Retain/NetworkPolicy pattern rather
-    # than depending on the upstream `authentik` chart's own nested Bitnami
-    # Postgres dependency, so this chart keeps full control of the
-    # StorageClass name and the NetworkPolicy's pod-selector labels (see
-    # PLAN.md §0.3 for the rationale).
+    # Authentik's own hand-rolled Postgres, following FalkorDB's
+    # durable-StorageClass/Retain/NetworkPolicy pattern instead of the upstream
+    # `authentik` chart's nested Bitnami Postgres dependency, so this chart
+    # controls the StorageClass name and the NetworkPolicy's pod-selector labels.
     image:
       repository: postgres
       tag: "16-alpine"
     database: authentik
     user: authentik
-    # Startup and readiness use `pg_isready` over TCP (`-h 127.0.0.1`), because first-start
-    # initdb runs a temporary server that listens on the unix socket only; the pod is Ready
-    # only once the final server accepts connections. The startup window (60 x 5s = 5 min)
-    # covers first-start initdb plus crash recovery. There is no liveness probe on purpose:
-    # crash recovery can exceed any fixed window, so a liveness probe could restart the
-    # server into a loop.
+    # Readiness only: `pg_isready` over TCP (`-h 127.0.0.1`), because first-start initdb runs a
+    # temporary server that listens on the unix socket only; the pod is Ready only once the
+    # final server accepts connections. There is no startup or liveness probe on purpose: a
+    # failed one kills the container, and a kill during initdb leaves PGDATA half-initialised
+    # while a kill during crash recovery restarts the recovery in a loop.
     probes:
-      startup:
-        timeoutSeconds: 5
-        periodSeconds: 5
-        failureThreshold: 60
       readiness:
         timeoutSeconds: 5
         periodSeconds: 5
@@ -422,15 +417,11 @@ authentik:
       storageClassName: ""
       durableStorageClass:
         # Off by default (local-test/kind), mirroring
-        # falkordb.persistence.durableStorageClass above (values.yaml:14-17)
-        # exactly, per PLAN.md S2's own instruction to mirror the FalkorDB
-        # trio "exactly" -- this key was missing from S2's original render
-        # (authentik-postgres-storageclass.yaml/-pvc.yaml unconditionally
-        # required the Azure-only disk.csi.azure.com provisioner whenever
-        # authentik.enabled=true, with no local-cluster fallback, unlike
-        # FalkorDB's own dual-path). See values-prod.yaml — Premium SSD,
-        # Retain-reclaim StorageClass for Authentik's Postgres volume
-        # (AC-BI-008).
+        # falkordb.persistence.durableStorageClass above: when off, the PVC uses
+        # authentik.postgres.persistence.storageClassName (or the cluster default)
+        # instead of the Azure-only disk.csi.azure.com StorageClass. See
+        # values-prod.yaml -- Premium SSD, Retain-reclaim StorageClass for
+        # Authentik's Postgres volume.
         enabled: false
   postgresql:
     # Off by default (local-test/kind, matches authentik.enabled: false
