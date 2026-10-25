@@ -111,3 +111,18 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.key
           value: PS_AUTHENTIK_API_TOKEN
+
+  - it: the production profile refuses psService.curatedSource.allowInsecureHttp=true naming the key
+    template: ps-service-deployment.yaml
+    set:
+      psService.curatedSource.allowInsecureHttp: true
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.curatedSource\.allowInsecureHttp=true is refused
+
+  - it: the production profile renders PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP false by default
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP")].value
+          value: "false"

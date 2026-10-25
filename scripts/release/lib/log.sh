@@ -13,6 +13,15 @@
 #   summary_append "<markdown line>"
 #     Appends to $GITHUB_STEP_SUMMARY when it is set; a no-op in local runs.
 #
+#   capture_step <var_name> <step> <command> [args ...]
+#     Use instead of `var="$(command ...)"`. Runs <command> and stores its stdout in <var_name>.
+#     On failure it logs `event=step_failed step=<step> exit_code=<rc>`, writes a human-readable
+#     line plus the command's captured stdout to stderr, and exits with the command's status --
+#     so a failing sub-command is never hidden by `set -e` inside a command substitution.
+#     The command's stderr is passed through untouched. Errexit does not apply inside <command>
+#     (it runs in a condition context), so a function passed here must return its status from
+#     its last command, e.g. a single command or a pipeline under `pipefail`.
+#
 # `action` defaults to the sourcing script's basename (without .sh); a script may set
 # RELEASE_LOG_ACTION before sourcing to override it.
 
@@ -62,4 +71,23 @@ summary_append() {
     return 0
   fi
   printf '%s\n' "$markdown_line" >>"$GITHUB_STEP_SUMMARY"
+}
+
+# capture_step <var_name> <step> <command> [args ...] -> stdout into <var_name>, or exit loudly.
+capture_step() {
+  local capture_step_var="$1"
+  local capture_step_name="$2"
+  shift 2
+  local capture_step_output
+  local capture_step_status=0
+  capture_step_output="$("$@")" || capture_step_status=$?
+  if ((capture_step_status != 0)); then
+    release_log error step_failed step="$capture_step_name" exit_code="$capture_step_status"
+    printf '%s failed (exit %s)\n' "$capture_step_name" "$capture_step_status" >&2
+    if [[ -n "$capture_step_output" ]]; then
+      printf '%s\n' "$capture_step_output" >&2
+    fi
+    exit "$capture_step_status"
+  fi
+  printf -v "$capture_step_var" '%s' "$capture_step_output"
 }

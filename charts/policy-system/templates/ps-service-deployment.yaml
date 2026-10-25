@@ -222,6 +222,20 @@ spec:
               value: {{ .Values.psService.localTestBypass.enabled | quote }}
             - name: PS_SERVICE_MAX_REQUEST_BODY_BYTES
               value: {{ include "policy-system.maxRequestBodyBytes" . | quote }}
+            - name: PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS
+              value: {{ include "policy-system.wholeNumberAtLeast" (dict "value" .Values.psService.gracefulShutdownSeconds "key" "psService.gracefulShutdownSeconds" "minimum" 0) | quote }}
+            - name: PS_QUERY_TIMEOUT_MS
+              value: {{ include "policy-system.wholeNumberAtLeast" (dict "value" .Values.psService.query.timeoutMs "key" "psService.query.timeoutMs" "minimum" 1) | quote }}
+            - name: PS_QUERY_ROW_CAP
+              value: {{ include "policy-system.wholeNumberAtLeast" (dict "value" .Values.psService.query.rowCap "key" "psService.query.rowCap" "minimum" 1) | quote }}
+            - name: PS_INGESTIONRUNS_MAX_IN_FLIGHT
+              value: {{ include "policy-system.wholeNumberAtLeast" (dict "value" .Values.psService.ingestionRuns.maxInFlight "key" "psService.ingestionRuns.maxInFlight" "minimum" 1) | quote }}
+            - name: PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP
+              value: {{ include "policy-system.curatedSourceAllowInsecureHttp" . | quote }}
+            {{- if .Values.psService.curatedSource.url }}
+            - name: PS_CURATEDSOURCE_URL
+              value: {{ .Values.psService.curatedSource.url | quote }}
+            {{- end }}
             - name: PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS
               value: {{ int64 .Values.psService.auth.discoveryRetryBudgetSeconds | quote }}
             - name: PS_LLMINTERFACE_MODEL

@@ -440,5 +440,6 @@ def test_report_labels_classifications_as_ai_proposed(make_emitter: MakeEmitter)
     assert "unreviewed" in report
     assert (
         "**Provisional recommendation — pending human review of the AI-proposed "
-        "classifications above (see user decision 2, issue #27 context)**" in report
+        "classifications above**" in report
     )
+    assert report.startswith("# Domain Mapper Exclusion Audit — Findings Report\n")

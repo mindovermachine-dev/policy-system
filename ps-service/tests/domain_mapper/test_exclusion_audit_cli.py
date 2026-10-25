@@ -5,7 +5,8 @@ by `test_exclusion_audit_report.py`'s
 `test_main_cached_mode_assembles_report_from_json_with_zero_extraction_calls`. This file
 covers only: `--help` text, `--cache-dir`/`--report-path`/
 `--record-source` argument parsing, and the cached-by-default guarantee that running this
-script's CLI with no flags at all can never reach for a live Azure OpenAI or FalkorDB call.
+script's CLI with only the required `--cache-dir` can never reach for a live Azure OpenAI or
+FalkorDB call.
 
 Loads `exclusion_audit.py` by path, same pattern as the sibling `test_exclusion_audit_*.py`
 files (`tools/domain-mapper/` is hyphenated, not an importable dotted package).
@@ -92,18 +93,28 @@ def test_help_mentions_the_cached_only_no_live_call_guarantee(
 # --- Argument defaults ---------------------------------------------------------
 
 
-def test_record_source_defaults_to_cached(cli_module: ModuleType) -> None:
-    args = cli_module._parse_args([])  # pyright: ignore[reportPrivateUsage] -- internal parser under test
+def test_record_source_defaults_to_cached(cli_module: ModuleType, tmp_path: Path) -> None:
+    args = cli_module._parse_args(["--cache-dir", str(tmp_path)])  # pyright: ignore[reportPrivateUsage] -- internal parser under test
 
     assert args.record_source == "cached"
 
 
-def test_cache_dir_and_report_path_default_to_the_module_constants(
-    cli_module: ModuleType,
-) -> None:
-    args = cli_module._parse_args([])  # pyright: ignore[reportPrivateUsage] -- internal parser under test
+def test_cache_dir_is_required(cli_module: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
+    """The records live outside the repository, so the tool has no built-in records
+    directory: leaving `--cache-dir` out is a usage error that names the missing flag.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module._parse_args([])  # pyright: ignore[reportPrivateUsage] -- internal parser under test
 
-    assert args.records_dir == cli_module._DEFAULT_RECORDS_DIR  # pyright: ignore[reportPrivateUsage]
+    assert exc_info.value.code == 2
+    assert "--cache-dir" in capsys.readouterr().err
+
+
+def test_report_path_defaults_to_the_module_constant(
+    cli_module: ModuleType, tmp_path: Path
+) -> None:
+    args = cli_module._parse_args(["--cache-dir", str(tmp_path)])  # pyright: ignore[reportPrivateUsage] -- internal parser under test
+
     assert args.report_path == cli_module._DEFAULT_REPORT_PATH  # pyright: ignore[reportPrivateUsage]
 
 
@@ -160,15 +171,12 @@ def _write_minimal_regulation_fixture(
     (records_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_main_with_no_flags_at_all_stays_cached_and_never_calls_the_llm(
+def test_main_with_only_cache_dir_stays_cached_and_never_calls_the_llm(
     cli_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The core guarantee: `main([])` -- i.e. every flag left at its default,
-    the shape of running this script with no arguments -- must still never reach for
-    `call_completion`. Points `--cache-dir`'s own default at a tmp fixture via
-    monkeypatching the module constant (rather than writing into the real
-    default records directory), so this test never
-    touches the real captured audit data.
+    """The core guarantee: with every optional flag left at its default, `main()` must
+    still never reach for `call_completion`. The report path's default is redirected to
+    `tmp_path` so this test never overwrites the committed findings report.
     """
     records_dir = tmp_path / "records"
     records_dir.mkdir()
@@ -183,10 +191,11 @@ def test_main_with_no_flags_at_all_stays_cached_and_never_calls_the_llm(
             records_dir, regulation=regulation, filename=filename, citation_ref=citation_ref
         )
 
-    monkeypatch.setattr(cli_module, "_DEFAULT_RECORDS_DIR", records_dir)
     monkeypatch.setattr(cli_module, "_DEFAULT_REPORT_PATH", report_path)
 
-    exit_code = cli_module.main([], call_completion=_forbidden_call_completion)
+    exit_code = cli_module.main(
+        ["--cache-dir", str(records_dir)], call_completion=_forbidden_call_completion
+    )
 
     assert exit_code == 0
     assert report_path.exists()

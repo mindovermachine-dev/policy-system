@@ -96,9 +96,8 @@ process_os:
   # testing, not a behavior fake (the loader function itself always runs for real against the
   # redirected directory); same shape as `_domain_concepts_path` above.
   - company_merge_similarity_sweep._CORPUS_DIR
-  # Same category: resource-location config values (a records dir and a report path), not
-  # behavior fakes; `main()` itself always runs for real against the redirected paths.
-  - exclusion_audit._DEFAULT_RECORDS_DIR
+  # Same category: a resource-location config value (a report path), not a behavior fake;
+  # `main()` itself always runs for real against the redirected path.
   - exclusion_audit._DEFAULT_REPORT_PATH
 
 # Deliberately NOT listed: `build_default_pipeline_dependencies` and

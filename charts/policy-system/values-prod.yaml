@@ -1,6 +1,9 @@
 # Production profile — passed via `-f values-prod.yaml`. Overrides only what
 # differs from values.yaml's local-test/kind defaults. Nothing here is kind-specific.
 
+# Marks this as the production profile; production-only refusals key on it.
+isProductionProfile: true
+
 falkordb:
   persistence:
     enabled: true

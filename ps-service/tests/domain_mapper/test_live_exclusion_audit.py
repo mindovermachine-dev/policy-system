@@ -1,58 +1,28 @@
 """Live wiring proof for `tools/domain-mapper/exclusion_audit.py`.
 
-`@pytest.mark.falkordb_live @pytest.mark.llm_live`: reads the real, already-populated
-`cra_native` FalkorDB graph through the real `CellarEliDomainMappingAdapter`, then runs
-the real `capture_unit_record` (which calls
-`ps_service.domain_mapper.extraction._extract_candidates_for_unit` ->
-`route_completion` against real Azure OpenAI). Any flagged (zero-candidate) unit
-is then run through `propose_classification` (also a real, but separately-budgeted,
-LLM call; classification calls are excluded from the 120-call extraction ceiling).
+`@pytest.mark.falkordb_live @pytest.mark.llm_live`: each test reads one real native graph
+(`cra_native`, `gdpr_native`, `nis2_native`, ingested fresh from Cellar by
+`live_native_graphs`) through the real `CellarEliDomainMappingAdapter`, selects the real
+`select_sample_units` sample (Tier A: the first 30 units; Tier B: up to a per-regulation cap of
+regex-flagged conditional-permissive units), and runs the real `capture_unit_record` (which
+calls `ps_service.domain_mapper.extraction._extract_candidates_for_unit` -> `route_completion`
+against real Azure OpenAI) on every sampled unit. Any flagged (zero-candidate) unit is then run
+through `propose_classification`, also a real LLM call but outside the extraction-call ceiling.
+
+Every test is self-contained: it takes its own fresh sample, holds its own extraction-call
+ceiling (the sample size), and writes its captured records only under its own `tmp_path`, then
+reads them back with `load_regulation_records`, the loader the cached-mode CLI uses.
 
 Read-only against FalkorDB by construction: `capture_unit_record`/`propose_classification`
 only ever call `route_completion` (an LLM call) -- neither one, nor anything else in
-`exclusion_audit.py`, issues a FalkorDB write. These tests additionally confirm that
-belt-and-suspenders, via a `cra_baseline` node-count Cypher query before and after the
-run (mirrors `test_live_capstone.py`'s own "prove it against real FalkorDB state, not
-just in-memory return values" posture).
+`exclusion_audit.py`, issues a FalkorDB write. Each test additionally confirms that via a
+`{regulation}_baseline` node-count Cypher query before and after the run (mirrors
+`test_live_capstone.py`'s own "prove it against real FalkorDB state, not just in-memory return
+values" posture).
 
 Does NOT import the private `_native_citation_refs` helper from `test_live_capstone.py`;
 `_native_citation_refs` below is this module's own local copy (`_fakes.py`'s "doubles stay
 local to each test module" convention).
-
-The first test samples exactly the first 5 CRA `ExtractionUnit`s in document order (its own
-budget is exactly 5 live extraction calls), under a running counter that also hard-stops at
-the cumulative <=120 ceiling shared across all the live tests here. Those units are Art. 1
-(a single, paragraph-less unit, heading "Subject matter") and Art. 2(1)-2(4) (four
-paragraphs, heading "Scope"). Typically most come back `status="ok"` with `candidate_count=0`
-(flagged) and are AI-classified `correct_exclusion_scope_applicability`; a unit whose LLM
-response is malformed is captured as `status="error"`, not conflated with a zero-candidate
-flag, and never sent to classification.
-
-`test_live_audit_extends_cra_sample_to_tier_a_and_b` loads this file's own cached
-`records/cra.json` (the first test's 5 units), computes the real `select_sample_units`
-sample (Tier A first 30 + Tier B up to 10) over the FULL real `cra_native` unit list, calls
-`capture_unit_record` only for units not already cached (up to 35 net-new calls -- 25
-remaining Tier A + up to 10 Tier B), and writes the merged ~40-entry result back to
-`records/cra.json`. `_CountingCompletionCaller` below takes an optional
-`start_count`/`slice_limit` pair (defaulting to the first test's own values) so a later
-test's counter starts at the calls already spent and enforces both the 120-call cumulative
-ceiling and its own net-new ceiling.
-
-`test_live_audit_captures_gdpr_sample` and `test_live_audit_captures_nis2_sample` each run a
-FRESH (no prior cache to merge with, unlike CRA) Tier A (first 30 units) + Tier B (up to
-`_SLICE_4_TIER_B_SIZE = 8` regex-flagged units) sample against the real
-`gdpr_native`/`nis2_native` graphs, hard-capped at `_SLICE_4_PER_REGULATION_CALL_LIMIT = 38`
-new extraction calls each (30 Tier A + <=8 Tier B <= 38, never 40), writing
-`records/gdpr.json`/`records/nis2.json`.
-
-The true cumulative extraction-call count going into the GDPR/NIS2 tests is **42**, not the 37
-persisted in `records/cra.json`: an accidental test re-run spent 5 extra real calls not
-reflected in that persisted cache count. `_CountingCompletionCaller` is seeded accordingly:
-the GDPR test starts its counter at 42 (cap 80), the NIS2 test starts at 80 -- the GDPR
-test's own worst-case ceiling, whether or not GDPR's actual run used its full 38-call budget
--- so the two tests' ceilings compose correctly regardless of run order or whether only one
-is selected (cap 118), staying inside the shared 120-call budget with a 2-call safety
-margin.
 """
 
 from __future__ import annotations
@@ -85,11 +55,16 @@ _TOOLS_DOMAIN_MAPPER_DIR = Path(__file__).resolve().parents[3] / "tools" / "doma
 _SCRIPT_PATH = _TOOLS_DOMAIN_MAPPER_DIR / "exclusion_audit.py"
 _MODULE_NAME = "_exclusion_audit_live_under_test"
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_RECORDS_DIR = _REPO_ROOT / ".orchestrator" / "tracker" / "issue-27-exclusion-audit" / "records"
-_CRA_RECORDS_PATH = _RECORDS_DIR / "cra.json"
+_TIER_A_SIZE = 30
+_CRA_TIER_B_SIZE = 10
+_GDPR_NIS2_TIER_B_SIZE = 8
 
-_REGULATION = "CRA"
+# Captured at module-import time (collection), before tests/conftest.py's autouse
+# `_isolate_logging` fixture runs `monkeypatch.delenv("PS_LLMINTERFACE_MODEL", ...)` --
+# mirrors `test_live_capstone.py`'s exact pattern, for the same reason: this live test's
+# whole point is to use the real configured model, so it must be read before that
+# fixture strips it.
+_LLM_INTERFACE_MODEL = os.environ.get("PS_LLMINTERFACE_MODEL")
 
 
 def _only_instrument_id(native_graph: GraphHandle) -> str:
@@ -100,37 +75,6 @@ def _only_instrument_id(native_graph: GraphHandle) -> str:
     )
     assert len(rows) == 1, f"expected exactly one RegulatoryInstrument, got {len(rows)}"
     return cast("str", rows[0][0])
-
-
-_LIVE_UNIT_LIMIT = 5  # The first test's own hard scope, no more.
-# Cumulative ceiling shared across all the live tests here, zero margin.
-_MAX_CUMULATIVE_EXTRACTION_CALLS = 120
-
-# The CRA extension test is additive over the first test's cached 5 CRA units. Tier A is the
-# first 30 CRA units (5 already cached + 25 net-new) + Tier B up to 10 net-new -- up to 35
-# net-new extraction calls, carried forward from the first test's actual 5 so the
-# cumulative CRA total stays <=40.
-_SLICE_2_ACTUAL_CALL_COUNT = 5
-_SLICE_3_NEW_CALL_LIMIT = 35
-
-# GDPR and NIS2 each get a FRESH (no prior cache) Tier A (30) + Tier B (<=8) sample, hard-
-# capped at 38 new extraction calls per regulation -- never 40. The true cumulative count
-# going into these tests is 42 (not the 37 persisted in records/cra.json -- an
-# accidental test re-run spent 5 extra real calls not reflected there). Ceiling stays <=120
-# with a 2-call safety margin: 42 + 38 (GDPR) + 38 (NIS2) = 118.
-_TRUE_CUMULATIVE_BEFORE_SLICE_4 = 42
-_SLICE_4_TIER_A_SIZE = 30
-_SLICE_4_TIER_B_SIZE = 8
-_SLICE_4_PER_REGULATION_CALL_LIMIT = 38
-_GDPR_RECORDS_PATH = _RECORDS_DIR / "gdpr.json"
-_NIS2_RECORDS_PATH = _RECORDS_DIR / "nis2.json"
-
-# Captured at module-import time (collection), before tests/conftest.py's autouse
-# `_isolate_logging` fixture runs `monkeypatch.delenv("PS_LLMINTERFACE_MODEL", ...)` --
-# mirrors `test_live_capstone.py`'s exact pattern, for the same reason: this live test's
-# whole point is to use the real configured model, so it must be read before that
-# fixture strips it.
-_LLM_INTERFACE_MODEL = os.environ.get("PS_LLMINTERFACE_MODEL")
 
 
 def _load_exclusion_audit_module() -> ModuleType:
@@ -178,353 +122,42 @@ def _node_count(graph: GraphHandle) -> int:
     return cast("int", _query_rows(graph, "MATCH (n) RETURN count(n)")[0][0])
 
 
-def _load_cached_cra_records() -> dict[str, dict[str, object]]:
-    """Load `records/cra.json` (if it exists) keyed by `citation_ref` -- the cache the CRA
-    extension test is additive over. Returns `{}` if no cache file exists yet.
-    """
-    if not _CRA_RECORDS_PATH.exists():
-        return {}
-    payload = json.loads(_CRA_RECORDS_PATH.read_text(encoding="utf-8"))
-    records = cast("list[dict[str, object]]", payload["records"])
-    return {cast("str", record["citation_ref"]): record for record in records}
-
-
 class _CountingCompletionCaller:
-    """Wraps the real `default_completion_caller`, counting every live extraction call
-    and hard-stopping both at the cumulative `_MAX_CUMULATIVE_EXTRACTION_CALLS` ceiling
-    shared across the live tests and at this instance's own net-new-call budget. Never
-    used for classification calls (those are outside this ceiling).
-
-    `start_count` seeds `call_count` at the calls already spent, so `call_count` is the
-    true cumulative total across the whole run, while `new_call_count` tracks only calls
-    made through *this* instance (its own net-new spend). Defaults (`start_count=0`,
-    `slice_limit=_LIVE_UNIT_LIMIT`) give the unseeded behaviour of the first test.
+    """Wraps the real `default_completion_caller`, counting every live extraction call and
+    hard-stopping at `call_limit`. Never used for classification calls (those are outside
+    the ceiling).
     """
 
-    def __init__(self, *, start_count: int = 0, slice_limit: int = _LIVE_UNIT_LIMIT) -> None:
-        self.call_count = start_count
-        self.new_call_count = 0
-        self._slice_limit = slice_limit
+    def __init__(self, *, call_limit: int) -> None:
+        self.call_count = 0
+        self._call_limit = call_limit
 
     def __call__(
         self, *, model: str, messages: list[dict[str, str]], timeout: float
     ) -> ModelResponse:
         self.call_count += 1
-        self.new_call_count += 1
-        assert self.call_count <= _MAX_CUMULATIVE_EXTRACTION_CALLS, (
-            f"live extraction call budget exceeded: {self.call_count} > "
-            f"{_MAX_CUMULATIVE_EXTRACTION_CALLS} (CHANGES.md row 1 cumulative ceiling "
-            "across Slices 2-4)"
-        )
-        assert self.new_call_count <= self._slice_limit, (
-            f"this slice's own live extraction call budget exceeded: "
-            f"{self.new_call_count} > {self._slice_limit}"
+        assert self.call_count <= self._call_limit, (
+            f"live extraction call ceiling exceeded: {self.call_count} > {self._call_limit}"
         )
         return default_completion_caller(model=model, messages=messages, timeout=timeout)
 
 
-@pytest.mark.falkordb_live
-@pytest.mark.postgres_live
-@pytest.mark.cellar_live
-@pytest.mark.llm_live
-@pytest.mark.skipif(
-    not _LLM_INTERFACE_MODEL,
-    reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
-)
-def test_live_audit_captures_first_five_cra_units(
-    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
-) -> None:
-    """Runs the real capture -> flag -> propose(AI-labeled) -> report-row chain on the
-    first 5 CRA `ExtractionUnit`s (document order) against the real `cra_native` graph
-    and real Azure OpenAI, and writes the captured records to
-    `records/cra.json` under the exclusion-audit records directory (the cache the CRA
-    extension test loads and extends).
-    """
-    assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
-    model = _LLM_INTERFACE_MODEL
-
-    module = _load_exclusion_audit_module()
-
-    # The native graphs are ingested fresh from Cellar by `live_native_graphs`, which yields the
-    # config that reaches the scratch stores.
-    config = live_native_graphs
-    db = connect_from_config(config)
-    native_graph = select_graph(db, native_graph_name(_REGULATION))
-    baseline_graph = select_graph(db, baseline_graph_name(_REGULATION))
-
-    native_refs = _native_citation_refs(native_graph)
-    baseline_count_before = _node_count(baseline_graph)
-
-    adapter = CellarEliDomainMappingAdapter()
-    all_units = adapter.read_native_units(native_graph, _only_instrument_id(native_graph))
-    assert len(all_units) >= _LIVE_UNIT_LIMIT, (
-        f"cra_native has only {len(all_units)} ExtractionUnits; need at least {_LIVE_UNIT_LIMIT}"
-    )
-    units = all_units[:_LIVE_UNIT_LIMIT]
-
-    emitter, _log_path = make_emitter()
-    extraction_caller = _CountingCompletionCaller()
-
-    records = [
-        module.capture_unit_record(
-            unit,
-            regulation=_REGULATION,
-            model=model,
-            call_completion=extraction_caller,
-            emitter=emitter,
-        )
-        for unit in units
-    ]
-
-    assert extraction_caller.call_count == _LIVE_UNIT_LIMIT, (
-        f"expected exactly {_LIVE_UNIT_LIMIT} live extraction calls, got "
-        f"{extraction_caller.call_count}"
-    )
-
-    serializable_records: list[dict[str, object]] = []
-    for unit, record in zip(units, records, strict=True):
-        assert record.citation_ref in native_refs, (
-            f"{record.citation_ref!r} not found in cra_native's own ARTICLE/PARAGRAPH "
-            "citation_ref set -- provenance broken"
-        )
-
-        proposal = None
-        if record.is_flagged:
-            # A real, but separately-budgeted, classification call -- not counted
-            # against `_MAX_CUMULATIVE_EXTRACTION_CALLS`.
-            proposal = module.propose_classification(
-                record.citation_ref,
-                unit.text,
-                model=model,
-                call_completion=None,
-                emitter=emitter,
-            )
-            assert proposal.source == "ai_proposed"
-
-        row = module.render_report_row(record, proposal)
-        assert row.startswith("|")
-        assert row.endswith("|")
-        assert record.citation_ref in row
-
-        serializable_records.append(
-            {
-                **dataclasses.asdict(record),
-                "unit_text": unit.text,
-                "article_heading": unit.article_heading,
-                "classification": dataclasses.asdict(proposal) if proposal is not None else None,
-            }
-        )
-
-    baseline_count_after = _node_count(baseline_graph)
-    assert baseline_count_after == baseline_count_before, (
-        "cra_baseline node count changed during this audit run -- exclusion_audit.py "
-        f"must be read-only against cra_native only (before={baseline_count_before}, "
-        f"after={baseline_count_after})"
-    )
-
-    _RECORDS_DIR.mkdir(parents=True, exist_ok=True)
-    _CRA_RECORDS_PATH.write_text(
-        json.dumps({"regulation": _REGULATION, "records": serializable_records}, indent=2),
-        encoding="utf-8",
-    )
-
-
-@pytest.mark.falkordb_live
-@pytest.mark.postgres_live
-@pytest.mark.cellar_live
-@pytest.mark.llm_live
-@pytest.mark.skipif(
-    not _LLM_INTERFACE_MODEL,
-    reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
-)
-def test_live_audit_extends_cra_sample_to_tier_a_and_b(
-    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
-) -> None:
-    """Widens the tiny 5-unit CRA sample to the real Tier A (first 30 units) + Tier B
-    (up to 10 regex-flagged conditional-permissive units) strategy, additively over the
-    already-cached `records/cra.json` -- issues live calls ONLY for units not already cached.
-
-    Asserts: net-new call count equals the net-new sample size and stays <=
-    `_SLICE_3_NEW_CALL_LIMIT` (35); no cached unit is ever re-selected for a live call
-    (cache-loading correctness); the cumulative counter (seeded at the 5 calls already
-    spent) stays <=120; the final merged `records/cra.json` holds every cached unit plus
-    every newly captured unit (37 total for CRA on the actual run -- Tier A's full 30 +
-    only 7 real Tier B regex matches found in the rest of the document, short of the 10
-    cap).
-
-    Observed on a live run: Art. 1-3 (10 Tier A units) are 100% flagged (zero-candidate),
-    nearly all classified `correct_exclusion_scope_applicability`; from Art. 4 onward the
-    flag rate drops sharply (7/20), as most units produce real `RequirementCandidate`s,
-    consistent with scope/definitions clustering at the start. The only AI-proposed "miss"
-    classifications occurred in the post-Art.-3 window, not in the scope/definitions cluster.
-
-    Most real Tier B regex matches are the ACTIVE "[actor] may [verb] ... where/if
-    <condition>" empowerment shape (e.g. "Member States may, where appropriate, establish
-    cyber resilience regulatory sandboxes"), not the narrower passive "may be X where
-    <conditions>" pattern the regex targets, so the regex is broader than its prose
-    description. In that run it caused no harmful audit outcome: most matched units were
-    not flagged, and the flagged ones were judged legitimate
-    `correct_exclusion_conditional_permissive`, with zero misses among Tier B; a human
-    reviewer should still look closely at those classifications given the shape mismatch.
-    """
-    assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
-    model = _LLM_INTERFACE_MODEL
-
-    module = _load_exclusion_audit_module()
-
-    config = live_native_graphs
-    db = connect_from_config(config)
-    native_graph = select_graph(db, native_graph_name(_REGULATION))
-    baseline_graph = select_graph(db, baseline_graph_name(_REGULATION))
-
-    native_refs = _native_citation_refs(native_graph)
-    baseline_count_before = _node_count(baseline_graph)
-
-    adapter = CellarEliDomainMappingAdapter()
-    all_units = adapter.read_native_units(native_graph, _only_instrument_id(native_graph))
-
-    cached_by_ref = _load_cached_cra_records()
-    assert cached_by_ref, (
-        "expected Slice 2's cached records/cra.json to already exist -- this slice is "
-        "additive, not a fresh run (CHANGES.md row 1a)"
-    )
-
-    sampled = module.select_sample_units(all_units)
-    tier_a = [s for s in sampled if s.selection_tier == "A"]
-    tier_b = [s for s in sampled if s.selection_tier == "B"]
-    assert len(tier_a) == 30
-    assert len(tier_b) <= 10
-
-    # Sanity check on the "additive" premise itself: every unit already cached
-    # must fall inside this run's own Tier A window (the first
-    # 5 doc-order units are assumed stable across runs).
-    tier_a_refs = {s.unit.citation_ref for s in tier_a}
-    assert set(cached_by_ref) <= tier_a_refs, (
-        "Slice 2's cached units are not a subset of this run's Tier A window -- the "
-        "'additive over Slice 2' assumption (CHANGES.md row 1a) does not hold"
-    )
-
-    new_sampled = [s for s in sampled if s.unit.citation_ref not in cached_by_ref]
-    new_refs = {s.unit.citation_ref for s in new_sampled}
-    assert new_refs.isdisjoint(cached_by_ref.keys()), (
-        "cache-loading correctness: a cached unit was re-selected for a live call"
-    )
-    assert len(new_sampled) <= _SLICE_3_NEW_CALL_LIMIT, (
-        f"net-new sample ({len(new_sampled)}) exceeds this slice's own "
-        f"<={_SLICE_3_NEW_CALL_LIMIT}-call budget"
-    )
-
-    emitter, _log_path = make_emitter()
-    extraction_caller = _CountingCompletionCaller(
-        start_count=_SLICE_2_ACTUAL_CALL_COUNT, slice_limit=_SLICE_3_NEW_CALL_LIMIT
-    )
-
-    merged_by_ref: dict[str, dict[str, object]] = dict(cached_by_ref)
-
-    for sampled_unit in new_sampled:
-        unit = sampled_unit.unit
-        record = module.capture_unit_record(
-            unit,
-            regulation=_REGULATION,
-            model=model,
-            call_completion=extraction_caller,
-            emitter=emitter,
-        )
-        assert record.citation_ref in native_refs, (
-            f"{record.citation_ref!r} not found in cra_native's own ARTICLE/PARAGRAPH "
-            "citation_ref set -- provenance broken"
-        )
-
-        proposal = None
-        if record.is_flagged:
-            # A real, but separately-budgeted, classification call -- not counted
-            # against `_MAX_CUMULATIVE_EXTRACTION_CALLS`.
-            proposal = module.propose_classification(
-                record.citation_ref,
-                unit.text,
-                model=model,
-                call_completion=None,
-                emitter=emitter,
-            )
-            assert proposal.source == "ai_proposed"
-
-        row = module.render_report_row(record, proposal)
-        assert row.startswith("|")
-        assert row.endswith("|")
-        assert record.citation_ref in row
-
-        merged_by_ref[record.citation_ref] = {
-            **dataclasses.asdict(record),
-            "unit_text": unit.text,
-            "article_heading": unit.article_heading,
-            "classification": dataclasses.asdict(proposal) if proposal is not None else None,
-            "selection_tier": sampled_unit.selection_tier,
-            "tier_b_match_text": sampled_unit.tier_b_match_text,
-        }
-
-    assert extraction_caller.new_call_count == len(new_sampled), (
-        f"expected exactly {len(new_sampled)} net-new live extraction calls, got "
-        f"{extraction_caller.new_call_count}"
-    )
-    assert extraction_caller.new_call_count <= _SLICE_3_NEW_CALL_LIMIT
-    expected_cumulative = _SLICE_2_ACTUAL_CALL_COUNT + extraction_caller.new_call_count
-    assert extraction_caller.call_count == expected_cumulative
-    assert extraction_caller.call_count <= 40, (
-        f"cumulative CRA extraction call count ({extraction_caller.call_count}) exceeds "
-        "this slice's <=40 CRA target (CHANGES.md row 1a)"
-    )
-    assert extraction_caller.call_count <= _MAX_CUMULATIVE_EXTRACTION_CALLS
-
-    # Backfill selection_tier="A" for the earlier cached entries (all within the first
-    # 5 units, i.e. inside the Tier A window) so every entry in the merged file carries
-    # the same schema going forward.
-    for entry in merged_by_ref.values():
-        if "selection_tier" not in entry:
-            entry["selection_tier"] = "A"
-            entry["tier_b_match_text"] = None
-
-    baseline_count_after = _node_count(baseline_graph)
-    assert baseline_count_after == baseline_count_before, (
-        "cra_baseline node count changed during this audit run -- exclusion_audit.py "
-        f"must be read-only against cra_native only (before={baseline_count_before}, "
-        f"after={baseline_count_after})"
-    )
-
-    assert len(merged_by_ref) <= 40, f"expected ~40 CRA records total, got {len(merged_by_ref)}"
-
-    # Preserve document order in the written file (native adapter order), not dict
-    # insertion/merge order -- easier for a human reviewer to scan.
-    doc_order = {unit.citation_ref: index for index, unit in enumerate(all_units)}
-    ordered_records = sorted(
-        merged_by_ref.values(),
-        key=lambda record: doc_order.get(cast("str", record["citation_ref"]), len(all_units)),
-    )
-
-    _RECORDS_DIR.mkdir(parents=True, exist_ok=True)
-    _CRA_RECORDS_PATH.write_text(
-        json.dumps({"regulation": _REGULATION, "records": ordered_records}, indent=2),
-        encoding="utf-8",
-    )
-
-
 def _run_fresh_regulation_sample(
     *,
-    module: ModuleType,
     regulation: str,
-    model: str,
+    tier_b_size: int,
     records_path: Path,
-    start_count: int,
     make_emitter: MakeEmitter,
     config: ServiceConfig,
 ) -> None:
-    """A FRESH Tier A (30) + Tier B (<=8) live sample for one regulation with no
-    prior cache to merge with (unlike CRA, which is additive over its 5-unit cache). Hard-capped
-    at `_SLICE_4_PER_REGULATION_CALL_LIMIT` (38) new extraction calls via
-    `_CountingCompletionCaller`, seeded at `start_count` (the true cumulative total going
-    into this regulation's run, per this module's own docstring accounting) so the shared
-    120-call ceiling is enforced across the whole run, not just this regulation's own
-    38-call slice.
+    """A fresh Tier A + Tier B live sample for one regulation, capped at one extraction call
+    per sampled unit (`_TIER_A_SIZE + tier_b_size` at most), with records written to
+    `records_path` and read back through `load_regulation_records`.
     """
+    assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
+    model = _LLM_INTERFACE_MODEL
+    module = _load_exclusion_audit_module()
+
     db = connect_from_config(config)
     native_graph = select_graph(db, native_graph_name(regulation))
     baseline_graph = select_graph(db, baseline_graph_name(regulation))
@@ -536,23 +169,17 @@ def _run_fresh_regulation_sample(
     all_units = adapter.read_native_units(native_graph, _only_instrument_id(native_graph))
 
     sampled = module.select_sample_units(
-        all_units, tier_a_size=_SLICE_4_TIER_A_SIZE, tier_b_size=_SLICE_4_TIER_B_SIZE
+        all_units, tier_a_size=_TIER_A_SIZE, tier_b_size=tier_b_size
     )
     tier_a = [s for s in sampled if s.selection_tier == "A"]
     tier_b = [s for s in sampled if s.selection_tier == "B"]
-    assert len(tier_a) == _SLICE_4_TIER_A_SIZE
-    assert len(tier_b) <= _SLICE_4_TIER_B_SIZE
-    assert len(sampled) <= _SLICE_4_PER_REGULATION_CALL_LIMIT, (
-        f"{regulation} sample size ({len(sampled)}) exceeds the "
-        f"<={_SLICE_4_PER_REGULATION_CALL_LIMIT}-call budget for this slice"
-    )
+    assert len(tier_a) == _TIER_A_SIZE
+    assert len(tier_b) <= tier_b_size
 
     emitter, _log_path = make_emitter()
-    extraction_caller = _CountingCompletionCaller(
-        start_count=start_count, slice_limit=_SLICE_4_PER_REGULATION_CALL_LIMIT
-    )
+    extraction_caller = _CountingCompletionCaller(call_limit=_TIER_A_SIZE + tier_b_size)
 
-    captured: dict[str, dict[str, object]] = {}
+    captured: list[dict[str, object]] = []
     for sampled_unit in sampled:
         unit = sampled_unit.unit
         record = module.capture_unit_record(
@@ -564,13 +191,12 @@ def _run_fresh_regulation_sample(
         )
         assert record.citation_ref in native_refs, (
             f"{record.citation_ref!r} not found in {regulation.lower()}_native's own "
-            "ARTICLE/PARAGRAPH citation_ref set -- provenance broken"
+            "ARTICLE/PARAGRAPH/ANNEX citation_ref set -- provenance broken"
         )
 
         proposal = None
         if record.is_flagged:
-            # A real, but separately-budgeted, classification call -- not counted
-            # against `_SLICE_4_PER_REGULATION_CALL_LIMIT` or the cumulative 120-call ceiling.
+            # A real classification call, outside the extraction-call ceiling.
             proposal = module.propose_classification(
                 record.citation_ref,
                 unit.text,
@@ -585,22 +211,21 @@ def _run_fresh_regulation_sample(
         assert row.endswith("|")
         assert record.citation_ref in row
 
-        captured[record.citation_ref] = {
-            **dataclasses.asdict(record),
-            "unit_text": unit.text,
-            "article_heading": unit.article_heading,
-            "classification": dataclasses.asdict(proposal) if proposal is not None else None,
-            "selection_tier": sampled_unit.selection_tier,
-            "tier_b_match_text": sampled_unit.tier_b_match_text,
-        }
+        captured.append(
+            {
+                **dataclasses.asdict(record),
+                "unit_text": unit.text,
+                "article_heading": unit.article_heading,
+                "classification": dataclasses.asdict(proposal) if proposal is not None else None,
+                "selection_tier": sampled_unit.selection_tier,
+                "tier_b_match_text": sampled_unit.tier_b_match_text,
+            }
+        )
 
-    assert extraction_caller.new_call_count == len(sampled), (
-        f"expected exactly {len(sampled)} net-new live extraction calls for {regulation}, "
-        f"got {extraction_caller.new_call_count}"
+    assert extraction_caller.call_count == len(sampled), (
+        f"expected exactly {len(sampled)} live extraction calls for {regulation}, "
+        f"got {extraction_caller.call_count}"
     )
-    assert extraction_caller.new_call_count <= _SLICE_4_PER_REGULATION_CALL_LIMIT
-    assert extraction_caller.call_count == start_count + extraction_caller.new_call_count
-    assert extraction_caller.call_count <= _MAX_CUMULATIVE_EXTRACTION_CALLS
 
     baseline_count_after = _node_count(baseline_graph)
     assert baseline_count_after == baseline_count_before, (
@@ -609,18 +234,34 @@ def _run_fresh_regulation_sample(
         f"(before={baseline_count_before}, after={baseline_count_after})"
     )
 
-    # Preserve document order in the written file (native adapter order), not dict
-    # insertion/merge order -- easier for a human reviewer to scan.
-    doc_order = {unit.citation_ref: index for index, unit in enumerate(all_units)}
-    ordered_records = sorted(
-        captured.values(),
-        key=lambda record: doc_order.get(cast("str", record["citation_ref"]), len(all_units)),
-    )
-
-    _RECORDS_DIR.mkdir(parents=True, exist_ok=True)
     records_path.write_text(
-        json.dumps({"regulation": regulation, "records": ordered_records}, indent=2),
+        json.dumps({"regulation": regulation, "records": captured}, indent=2),
         encoding="utf-8",
+    )
+    loaded_records, _proposals = module.load_regulation_records(records_path)
+    assert [loaded.citation_ref for loaded in loaded_records] == [
+        s.unit.citation_ref for s in sampled
+    ]
+
+
+@pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+@pytest.mark.cellar_live
+@pytest.mark.llm_live
+@pytest.mark.skipif(
+    not _LLM_INTERFACE_MODEL,
+    reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
+)
+def test_live_audit_captures_cra_sample(
+    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig, tmp_path: Path
+) -> None:
+    """Fresh Tier A (30) + Tier B (<=10) CRA sample against the real `cra_native` graph."""
+    _run_fresh_regulation_sample(
+        regulation="CRA",
+        tier_b_size=_CRA_TIER_B_SIZE,
+        records_path=tmp_path / "cra.json",
+        make_emitter=make_emitter,
+        config=live_native_graphs,
     )
 
 
@@ -633,21 +274,13 @@ def _run_fresh_regulation_sample(
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
 def test_live_audit_captures_gdpr_sample(
-    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
+    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig, tmp_path: Path
 ) -> None:
-    """Fresh Tier A + Tier B GDPR sample against the real `gdpr_native` graph,
-    <=38 new extraction calls, written to `records/gdpr.json`. Counter seeded at this
-    module's own `_TRUE_CUMULATIVE_BEFORE_SLICE_4` (42) so the cumulative ceiling check
-    reflects the true call count, not just this test's own count.
-    """
-    assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
-    module = _load_exclusion_audit_module()
+    """Fresh Tier A (30) + Tier B (<=8) GDPR sample against the real `gdpr_native` graph."""
     _run_fresh_regulation_sample(
-        module=module,
         regulation="GDPR",
-        model=_LLM_INTERFACE_MODEL,
-        records_path=_GDPR_RECORDS_PATH,
-        start_count=_TRUE_CUMULATIVE_BEFORE_SLICE_4,
+        tier_b_size=_GDPR_NIS2_TIER_B_SIZE,
+        records_path=tmp_path / "gdpr.json",
         make_emitter=make_emitter,
         config=live_native_graphs,
     )
@@ -662,22 +295,13 @@ def test_live_audit_captures_gdpr_sample(
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
 def test_live_audit_captures_nis2_sample(
-    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig
+    make_emitter: MakeEmitter, live_native_graphs: ServiceConfig, tmp_path: Path
 ) -> None:
-    """Fresh Tier A + Tier B NIS2 sample against the real `nis2_native` graph,
-    <=38 new extraction calls, written to `records/nis2.json`. Counter seeded at
-    `_TRUE_CUMULATIVE_BEFORE_SLICE_4 + _SLICE_4_PER_REGULATION_CALL_LIMIT` (80) -- the
-    GDPR test's own worst-case ceiling -- so this test's cumulative-ceiling check holds
-    regardless of run order or whether only one of the two live tests is selected.
-    """
-    assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
-    module = _load_exclusion_audit_module()
+    """Fresh Tier A (30) + Tier B (<=8) NIS2 sample against the real `nis2_native` graph."""
     _run_fresh_regulation_sample(
-        module=module,
         regulation="NIS2",
-        model=_LLM_INTERFACE_MODEL,
-        records_path=_NIS2_RECORDS_PATH,
-        start_count=_TRUE_CUMULATIVE_BEFORE_SLICE_4 + _SLICE_4_PER_REGULATION_CALL_LIMIT,
+        tier_b_size=_GDPR_NIS2_TIER_B_SIZE,
+        records_path=tmp_path / "nis2.json",
         make_emitter=make_emitter,
         config=live_native_graphs,
     )

@@ -262,3 +262,61 @@ psService.maxRequestBodyBytes, rounded up, so the Ingress never rejects a body t
 {{- define "policy-system.ingressBodySizeBytes" -}}
 {{- div (add (mul (int64 (include "policy-system.maxRequestBodyBytes" .)) 3) 1) 2 -}}
 {{- end }}
+
+{{/*
+A chart value as whole-number text, checked at render time.
+Input: a dict with "value" (the raw chart value), "key" (its dotted values path, used in
+messages) and "minimum" (the smallest allowed whole number).
+Output: the value as integer text with no exponent form (Helm reads numbers as float64, so a
+large value would otherwise print as 1e+07).
+Fails the render with "<key> must be a whole number, got <v>." when the value is not a number
+(a string, including a quoted number, a boolean or null) or has a fractional part, and with
+"<key> must be at least <minimum>, got <v>." when it is below the minimum.
+*/}}
+{{- define "policy-system.wholeNumberAtLeast" -}}
+{{- $value := .value -}}
+{{- if not (or (kindIs "float64" $value) (kindIs "int64" $value) (kindIs "int" $value)) }}
+{{- fail (printf "%s must be a whole number, got %v." .key $value) }}
+{{- end }}
+{{- if ne (float64 $value) (float64 (int64 $value)) }}
+{{- fail (printf "%s must be a whole number, got %v." .key $value) }}
+{{- end }}
+{{- if lt (int64 $value) (int64 .minimum) }}
+{{- fail (printf "%s must be at least %d, got %d." .key (int64 .minimum) (int64 $value)) }}
+{{- end }}
+{{- int64 $value -}}
+{{- end }}
+
+{{/*
+Whether the release uses the production profile, as "true" or "" (empty means false).
+Input: the root context; reads .Values.isProductionProfile, which values-prod.yaml sets to true.
+Fails the render with "isProductionProfile must be true or false, got <v>." when the value is
+not a boolean.
+*/}}
+{{- define "policy-system.isProductionProfile" -}}
+{{- $isProduction := .Values.isProductionProfile -}}
+{{- if not (kindIs "bool" $isProduction) }}
+{{- fail (printf "isProductionProfile must be true or false, got %v." $isProduction) }}
+{{- end }}
+{{- ternary "true" "" $isProduction -}}
+{{- end }}
+
+{{/*
+psService.curatedSource.allowInsecureHttp as "true" or "false".
+Input: the root context; reads .Values.psService.curatedSource.allowInsecureHttp and, through
+policy-system.isProductionProfile, .Values.isProductionProfile.
+Fails the render with "psService.curatedSource.allowInsecureHttp must be true or false." when
+the value is not a boolean, and with "psService.curatedSource.allowInsecureHttp=true is refused
+when isProductionProfile=true: ..." when both are true.
+*/}}
+{{- define "policy-system.curatedSourceAllowInsecureHttp" -}}
+{{- $allow := .Values.psService.curatedSource.allowInsecureHttp -}}
+{{- if not (kindIs "bool" $allow) }}
+{{- fail "psService.curatedSource.allowInsecureHttp must be true or false." }}
+{{- end }}
+{{- $isProduction := include "policy-system.isProductionProfile" . -}}
+{{- if and $allow $isProduction }}
+{{- fail "psService.curatedSource.allowInsecureHttp=true is refused when isProductionProfile=true: the production profile fetches the curated source over https only." }}
+{{- end }}
+{{- ternary "true" "false" $allow -}}
+{{- end }}

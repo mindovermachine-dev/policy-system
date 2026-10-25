@@ -36,16 +36,13 @@ Building blocks:
   `docs/audits/domain-mapper-exclusion-audit-findings.md` from `{regulation}.json` records
   without calling the LLM.
 
-The command line (`main`) is cached mode only: it reads already-captured records from
-`--cache-dir` and writes the report to `--report-path`. `--record-source` defaults to, and only
-accepts, `"cached"`, so running
-
-    python tools/domain-mapper/exclusion_audit.py
-
-with no flags can never trigger a live Azure OpenAI or FalkorDB call.
+The command line (`main`) is cached mode only: it reads already-captured records from the
+required `--cache-dir` and writes the report to `--report-path`. `--record-source` defaults to,
+and only accepts, `"cached"`, so the command line can never trigger a live Azure OpenAI or
+FalkorDB call.
 
 Usage:
-    python tools/domain-mapper/exclusion_audit.py [--help]
+    python tools/domain-mapper/exclusion_audit.py --help
     python tools/domain-mapper/exclusion_audit.py \
         --cache-dir ./exclusion-audit-records \
         --report-path docs/audits/domain-mapper-exclusion-audit-findings.md
@@ -81,9 +78,6 @@ if TYPE_CHECKING:
     from ps_service.logging import LogEmitter
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_RECORDS_DIR = (
-    _REPO_ROOT / ".orchestrator" / "tracker" / "issue-27-exclusion-audit" / "records"
-)
 _DEFAULT_REPORT_PATH = _REPO_ROOT / "docs" / "audits" / "domain-mapper-exclusion-audit-findings.md"
 _REPORT_REGULATIONS: tuple[tuple[str, str], ...] = (
     ("CRA", "cra.json"),
@@ -551,15 +545,14 @@ Two tiers, per regulation, both pure functions over the real adapter's real
 `select_sample_units` in `tools/domain-mapper/exclusion_audit.py`.
 
 **Tier A -- first 30 units in document order.** Hypothesis, sanity-checked by the live
-runs below (CHANGES.md row 6): EU regulations conventionally open with "Subject matter
+runs below: EU regulations conventionally open with "Subject matter
 and scope" and "Definitions" before substantive duties begin, so scope/applicability
 exclusions cluster structurally at the start of the document. A document-order prefix
 therefore deliberately front-loads exactly the text most likely to produce genuine
 scope/applicability zero-candidate units, while also covering a real cross-section of
 ordinary substantive articles for baseline comparison.
 
-**Tier B -- up to 10 additional units for CRA (Slices 2-3), tightened to up to 8 for
-GDPR/NIS2 in this Slice 4 run (per the orchestrator's corrected Slice 4 budget, below),
+**Tier B -- up to 10 additional units for CRA, up to 8 for GDPR/NIS2,
 keyword-targeted.** Rationale: conditional-permissive constructions ("may be X where/
 if/unless <conditions>") are scattered throughout substantive articles, not
 front-loaded like scope text -- a document-order prefix alone would likely under-sample
@@ -571,16 +564,11 @@ reached or the regulation is exhausted (whichever comes first: GDPR's real run h
 stopped there, short of the cap) -- from the rest of the regulation (excluding anything
 Tier A already selected).
 
-**Live-run budget (CHANGES.md row 1, tightened further for this Slice 4 run per the
-orchestrator's corrected accounting):** the true cumulative extraction-call count going
-into Slice 4 was 42 for CRA (37 persisted in `records/cra.json` + 5 extra real calls
-from a prior slice's accidental test re-run, not reflected in the persisted cache
-count). Against a 120-call ceiling and a 38-new-call-per-regulation hard cap, this run
-actually spent 38 new extraction calls for GDPR (30 Tier A + 8 Tier B, hitting the cap)
-and 32 for NIS2 (30 Tier A + only 2 real Tier B regex matches found, short of the cap)
--- 70 new calls total, for a true cumulative total of 112, an 8-call safety margin
-against the 120 ceiling, never exceeded. Classification-proposal calls (one per flagged
-unit) are separately budgeted, outside this ceiling (CONTEXT.md decision 5).
+**Live-run budget:** 37 extraction calls for CRA (30 Tier A + 7 Tier B), 38 for GDPR
+(30 Tier A + 8 Tier B, hitting the cap) and 32 for NIS2 (30 Tier A + only 2 real Tier B
+regex matches found, short of the cap), each regulation under a 38-call cap, all three
+inside a 120-call ceiling. Classification-proposal calls (one per flagged unit) are
+budgeted separately, outside this ceiling.
 
 Still nowhere near the full corpus for any of the three regulations. Every row below is
 an AI-proposed, unreviewed classification -- see the Recommendation section's heading.
@@ -621,7 +609,7 @@ def _render_recommendation(summaries: Sequence[RegulationSummary]) -> str:
         )
     return (
         "**Provisional recommendation — pending human review of the AI-proposed "
-        "classifications above (see user decision 2, issue #27 context)**\n\n"
+        "classifications above**\n\n"
         f"{outcome}"
     )
 
@@ -649,7 +637,7 @@ def render_findings_report(
         The complete report text.
     """
     sections = [
-        "# Domain Mapper Exclusion Audit — Findings Report (Issue #27)",
+        "# Domain Mapper Exclusion Audit — Findings Report",
         "",
         "## Methodology",
         "",
@@ -749,10 +737,10 @@ def load_regulation_records(
 # --- CLI ----------------------------------------------------------------------
 #
 # No capture/report logic here: `main()`'s body assembles the report from cached records and
-# this section only wraps it in an argv/argparse surface: `--cache-dir`/`--report-path`/
-# `--record-source`, all documented in `--help`, with `--record-source` defaulting to (and,
-# for now, only accepting) `"cached"` so simply running this script -- with no flags at
-# all -- can never trigger a live Azure OpenAI or FalkorDB call.
+# this section only wraps it in an argv/argparse surface: a required `--cache-dir`, plus
+# `--report-path`/`--record-source`, all documented in `--help`, with `--record-source`
+# defaulting to (and, for now, only accepting) `"cached"` so this script can never trigger
+# a live Azure OpenAI or FalkorDB call.
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -775,12 +763,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--cache-dir",
         dest="records_dir",
         type=Path,
-        default=_DEFAULT_RECORDS_DIR,
+        required=True,
         help=(
-            "Directory holding one {regulation}.json cache file per regulation "
+            "Required. Directory holding one {regulation}.json cache file per regulation "
             "(CRA/GDPR/NIS2), each a prior live capture run's captured "
-            "AuditUnitRecord/ClassificationProposal data. "
-            "(default: the tool's built-in records directory)"
+            "AuditUnitRecord/ClassificationProposal data."
         ),
     )
     parser.add_argument(
@@ -800,8 +787,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
             "Where per-unit records come from. Only 'cached' is implemented: records "
             "are read from --cache-dir and the real extraction/classification LLM is "
             "never called on this path. Defaulting to 'cached' (rather than requiring "
-            "an explicit opt-in) is deliberate, so running this script with no flags "
-            "at all can never accidentally spend real Azure OpenAI/FalkorDB calls."
+            "an explicit opt-in) is deliberate, so running this script can never "
+            "accidentally spend real Azure OpenAI/FalkorDB calls."
         ),
     )
     return parser.parse_args(argv)
@@ -821,8 +808,8 @@ def main(
     `"cached"` before this body runs, rather than silently falling back to a live sweep.
 
     Args:
-        argv: Command-line arguments without the program name. Pass an explicit list (for
-            example `[]` for all defaults) from tests; `None` parses the real `sys.argv`.
+        argv: Command-line arguments without the program name. Pass an explicit list from
+            tests; `None` parses the real `sys.argv`.
         call_completion: Keyword-only injection seam with deliberately no CLI flag, accepted so
             a test can pass a poisoned fake and prove the cached path never reaches for it.
             It is not read.
@@ -835,6 +822,7 @@ def main(
         json.JSONDecodeError: A cache file is not valid JSON.
         KeyError: A cache file or entry lacks a required field.
         ExclusionAuditError: A cached entry has an unrecognized status or label.
+        SystemExit: `--cache-dir` is missing or an argument is invalid (raised by `argparse`).
 
     Side Effects:
         Creates the parent directories of `--report-path` and writes the report there,
@@ -848,9 +836,7 @@ def main(
     if record_source != "cached":  # pragma: no cover -- unreachable: argparse's own
         # choices=["cached"] already rejects any other value before main() runs; kept
         # as a fail-fast belt-and-suspenders check, not a reachable branch.
-        raise ValueError(
-            f"only record_source='cached' is implemented (CHANGES.md row 1b); got {record_source!r}"
-        )
+        raise ValueError(f"only record_source='cached' is implemented; got {record_source!r}")
     del call_completion  # unused on the cached path by design -- see docstring
 
     summaries: list[RegulationSummary] = []

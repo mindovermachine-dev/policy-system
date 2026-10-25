@@ -874,9 +874,11 @@ What an operator sees when a bound is hit:
 | Passkey signing Postgres does not answer | Startup logs a warning and continues; approvals fail with the stores' fixed errors | `passkey_signing_postgres` in `unhealthy_dependencies` |
 
 **Tuning.** Keep `PS_FALKORDB_SOCKET_TIMEOUT_SECONDS` above `PS_QUERY_TIMEOUT_MS`: raise both
-together when a legitimately long Cypher query is needed. Raise the socket timeout alone only for a
-very large graph whose copy, digest scan or replay page takes longer than the default (a CRA-sized
-graph takes well under a second to copy, under a second to scan and a few seconds a replay page).
+together when a legitimately long Cypher query is needed. `PS_QUERY_TIMEOUT_MS` is set from the
+chart value `psService.query.timeoutMs`; the socket timeout (30 s by default) is set only through
+the pod environment. Raise the socket timeout alone only for a very large graph whose copy, digest
+scan or replay page takes longer than the default (a CRA-sized graph takes well under a second to
+copy, under a second to scan and a few seconds a replay page).
 Raise `PS_STATE_POSTGRES_STATEMENT_TIMEOUT_MS` if the audit chain check (`verify_chain`, run by the
 `verify-audit-log` tool) or another large scan is cancelled on a large audit table; one bound
 covers all request-path statements, so there is no per-call override.

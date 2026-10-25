@@ -31,8 +31,11 @@ write_release_notes() {
   local baseline="$1"
   local release_version="$2"
   local notes_file="$3"
-  "${PS_RELEASE_GH:-gh}" tt semver note \
-    --from "$baseline" --to "$release_version" --filename "$notes_file" >/dev/null
+  # gh-tt's stdout is not needed on success; capture_step only surfaces it on failure.
+  # shellcheck disable=SC2034  # assigned by capture_step through `printf -v`
+  local note_output
+  capture_step note_output write_release_notes "${PS_RELEASE_GH:-gh}" tt semver note \
+    --from "$baseline" --to "$release_version" --filename "$notes_file"
 }
 
 # release_exists <release_version>: true iff a GitHub Release already exists for the tag.
@@ -45,8 +48,10 @@ release_exists() {
 publish_release() {
   local release_version="$1"
   local notes_file="$2"
-  "${PS_RELEASE_GH:-gh}" release create "$release_version" \
-    --verify-tag --title "$release_version" --notes-file "$notes_file" >/dev/null
+  # shellcheck disable=SC2034  # assigned by capture_step through `printf -v`
+  local create_output
+  capture_step create_output publish_release "${PS_RELEASE_GH:-gh}" release create \
+    "$release_version" --verify-tag --title "$release_version" --notes-file "$notes_file"
   release_log info release_created outcome=created release_version="$release_version"
   summary_append "### create-github-release: created"
   summary_append "Created GitHub Release \`$release_version\`."
@@ -56,7 +61,10 @@ publish_release() {
 update_release() {
   local release_version="$1"
   local notes_file="$2"
-  "${PS_RELEASE_GH:-gh}" release edit "$release_version" --notes-file "$notes_file" >/dev/null
+  # shellcheck disable=SC2034  # assigned by capture_step through `printf -v`
+  local edit_output
+  capture_step edit_output update_release "${PS_RELEASE_GH:-gh}" release edit \
+    "$release_version" --notes-file "$notes_file"
   release_log info release_edited outcome=edited release_version="$release_version"
   summary_append "### create-github-release: updated"
   summary_append "Updated GitHub Release \`$release_version\`."
@@ -71,10 +79,10 @@ main() {
   local bare_release_version="${release_version#v}"
 
   local baseline
-  baseline="$("$script_dir/previous-release-tag.sh" "$bare_release_version")"
+  capture_step baseline find_baseline "$script_dir/previous-release-tag.sh" "$bare_release_version"
 
   local notes_file
-  notes_file="$(mktemp)"
+  capture_step notes_file create_notes_file mktemp
   # Left in place, not cleaned up: the job container that runs this script is ephemeral (the
   # same convention as the rest of `on_semver.yml`'s `/tmp` artifacts).
 

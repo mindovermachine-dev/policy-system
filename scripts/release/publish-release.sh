@@ -55,15 +55,18 @@ commit_release_files() {
 # create_release_tag <bump_size>: run gh-tt's bump subcommand, which tags HEAD (PLAN A-03).
 create_release_tag() {
   local bump_size="$1"
-  "${PS_RELEASE_GH:-gh}" tt semver bump "--$bump_size" >/dev/null
+  # gh-tt's stdout is not needed on success; capture_step only surfaces it on failure.
+  # shellcheck disable=SC2034  # assigned by capture_step through `printf -v`
+  local bump_output
+  capture_step bump_output create_release_tag "${PS_RELEASE_GH:-gh}" tt semver bump "--$bump_size"
 }
 
 # assert_tag_points_at_head <release_version>: defense-in-depth before pushing (AC-BI-015).
 assert_tag_points_at_head() {
   local release_version="$1"
   local tag_commit head_commit
-  tag_commit="$(git rev-list -n 1 "$release_version")"
-  head_commit="$(git rev-parse HEAD)"
+  capture_step tag_commit resolve_tag_commit git rev-list -n 1 "$release_version"
+  capture_step head_commit resolve_head_commit git rev-parse HEAD
   if [[ "$tag_commit" != "$head_commit" ]]; then
     release_log error tag_mismatch outcome=tag_mismatch release_version="$release_version" \
       tag_commit="$tag_commit" head_commit="$head_commit"

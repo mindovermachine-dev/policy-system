@@ -4,6 +4,10 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Marks the production profile; values-prod.yaml sets it to true. Production-only refusals (for
+# example psService.curatedSource.allowInsecureHttp=true) key on it. Do not override it.
+isProductionProfile: false
+
 falkordb:
   image:
     repository: falkordb/falkordb
@@ -58,6 +62,34 @@ psService:
   # whose Content-Length is larger is answered 413 before its body is read. Must be positive. The PS
   # Service Ingress limit (nginx.ingress.kubernetes.io/proxy-body-size) is derived as 1.5 times this.
   maxRequestBodyBytes: 104857600
+  # Seconds PS Service waits for in-flight requests after SIGTERM (PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS).
+  # Whole number, 0 or more; 0 stops without waiting. Keep below the pod termination grace
+  # period (Kubernetes default 30 s; the chart does not set terminationGracePeriodSeconds).
+  # A quoted number such as "5000" is refused at render.
+  gracefulShutdownSeconds: 10
+  query:
+    # Server-side time limit for one Cypher query, in milliseconds (PS_QUERY_TIMEOUT_MS). Whole
+    # number, 1 or more. Must stay below PS_FALKORDB_SOCKET_TIMEOUT_SECONDS (30 s by default, not a
+    # chart value), or PS Service refuses to start. A quoted number such as "5000" is refused at render.
+    timeoutMs: 5000
+    # Most rows one Cypher query returns (PS_QUERY_ROW_CAP); extra rows are dropped and the result is
+    # marked truncated. Whole number, 1 or more. A quoted number such as "5000" is refused at render.
+    rowCap: 1000
+  ingestionRuns:
+    # Most ingestion runs executing at once (PS_INGESTIONRUNS_MAX_IN_FLIGHT). The limit is per
+    # process and assumes replicas: 1. Whole number, 1 or more. A quoted number such as "5000" is
+    # refused at render.
+    maxInFlight: 1
+  curatedSource:
+    # Base URL of the curated-content source (PS_CURATEDSOURCE_URL). Empty means PS Service uses the
+    # public curated-content tree, and no env entry is rendered. Must be https:// unless
+    # allowInsecureHttp is true. Do not put credentials (user info, tokens in the query) in this URL:
+    # it is stored in plain text in the Deployment spec.
+    url: ""
+    # Whether a plain http:// curated source URL is accepted (PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP).
+    # For non-production use only, for example a local curated-content mirror. true or false;
+    # refused at render when isProductionProfile is true.
+    allowInsecureHttp: false
   companyMerge:
     capabilityMergeThreshold: 0.59
     # Similarity at or above which a Capability near miss is raised for review; pairs below it are

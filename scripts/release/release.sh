@@ -72,7 +72,7 @@ main() {
   fi
 
   local baseline_tag
-  baseline_tag="$(read_baseline_tag)"
+  capture_step baseline_tag read_baseline_tag read_baseline_tag
   if ! validate_semver "$baseline_tag"; then
     fail_invalid_baseline "$baseline_tag"
     exit 1
@@ -80,7 +80,7 @@ main() {
   release_log info baseline_read baseline="$baseline_tag"
 
   local classification bump_size
-  classification="$(classify_commits_since "$baseline_tag")"
+  capture_step classification classify_commits classify_commits_since "$baseline_tag"
   bump_size="$(bump_size_from_classification "$classification")"
 
   if [[ "$bump_size" == "none" ]]; then
@@ -89,7 +89,7 @@ main() {
   fi
 
   local release_version
-  release_version="$("$script_dir/next-version.sh" "$baseline_tag" "$bump_size")"
+  capture_step release_version next_version "$script_dir/next-version.sh" "$baseline_tag" "$bump_size"
   "$script_dir/sync-version-files.sh" "$release_version"
   "$script_dir/verify-version-files.sh" "$release_version"
   "$script_dir/publish-release.sh" "$release_version" "$bump_size"

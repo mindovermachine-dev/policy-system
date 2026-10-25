@@ -1,21 +1,26 @@
-"""The chart's defaults agree with the service's compiled defaults and with the deploy script.
+"""The chart's defaults agree with the service's own defaults and with the deploy script.
 
 The chart renders every startup setting below into the PS Service environment, so a default that
-drifted from the one compiled into `ServiceConfig` would silently change behaviour for operators
-who leave the value alone. The startup probe window must also cover the discovery retry budget and
-still fit inside the wait the deploy script gives `helm upgrade`.
+drifted from the one PS Service uses when the variable is unset (the `ServiceConfig` default, or
+what `load_config()` returns with no `PS_*` variable set) would silently change behaviour for
+operators who leave the value alone. The startup probe window must also cover the discovery retry
+budget and still fit inside the wait the deploy script gives `helm upgrade`.
 """
 
 from __future__ import annotations
 
 import math
+import os
 import re
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, TypeIs, cast
 
 import yaml
 
-from ps_service.config import ServiceConfig
+from ps_service.config import ServiceConfig, load_config
+
+if TYPE_CHECKING:
+    import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALUES_FILE = REPO_ROOT / "charts" / "policy-system" / "values.yaml"
@@ -30,10 +35,27 @@ def _ps_service_values() -> dict[str, object]:
     return cast("dict[str, object]", values["psService"])
 
 
+def _is_mapping(value: object) -> TypeIs[dict[str, object]]:
+    """Narrow a `values.yaml` node to a mapping (the chart's keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _ps_service_section(name: str) -> dict[str, object]:
+    section = _ps_service_values()[name]
+    assert _is_mapping(section), f"psService.{name} in values.yaml is not a mapping"
+    return section
+
+
 def _compiled_defaults() -> ServiceConfig:
     return ServiceConfig(
         host="127.0.0.1", port=8000, graceful_shutdown_seconds=10, logging_dir=None
     )
+
+
+def _load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> ServiceConfig:
+    for name in [name for name in os.environ if name.startswith("PS_")]:
+        monkeypatch.delenv(name)
+    return load_config()
 
 
 def _helm_wait_seconds() -> int:
@@ -51,6 +73,53 @@ def _chart_budget() -> int:
 def test_chart_default_max_request_body_bytes_matches_compiled_default() -> None:
     assert (
         _ps_service_values()["maxRequestBodyBytes"] == _compiled_defaults().max_request_body_bytes
+    )
+
+
+def test_chart_default_graceful_shutdown_seconds_matches_load_config_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert (
+        _ps_service_values()["gracefulShutdownSeconds"]
+        == _load_config_defaults(monkeypatch).graceful_shutdown_seconds
+    )
+
+
+def _query_values() -> dict[str, object]:
+    return _ps_service_section("query")
+
+
+def test_chart_default_query_timeout_ms_matches_load_config_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _query_values()["timeoutMs"] == _load_config_defaults(monkeypatch).query_timeout_ms
+
+
+def test_chart_default_query_row_cap_matches_load_config_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _query_values()["rowCap"] == _load_config_defaults(monkeypatch).query_row_cap
+
+
+def test_chart_default_ingestion_runs_max_in_flight_matches_load_config_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ingestion_runs = _ps_service_section("ingestionRuns")
+
+    assert (
+        ingestion_runs["maxInFlight"]
+        == _load_config_defaults(monkeypatch).ingestion_runs_max_in_flight
+    )
+
+
+def test_chart_default_curated_source_allow_insecure_http_matches_load_config_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    curated_source = _ps_service_section("curatedSource")
+
+    assert (
+        curated_source["allowInsecureHttp"]
+        == _load_config_defaults(monkeypatch).curated_source_allow_insecure_http
     )
 
 

@@ -677,6 +677,264 @@ tests:
       - failedTemplate:
           errorPattern: psService\.maxRequestBodyBytes
 
+  - it: PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS renders the default 10
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS")].value
+          value: "10"
+
+  - it: PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS follows psService.gracefulShutdownSeconds
+    set:
+      psService.gracefulShutdownSeconds: 20
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS")].value
+          value: "20"
+
+  - it: PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS renders a value of 10000000 without exponent form
+    set:
+      psService.gracefulShutdownSeconds: 10000000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS")].value
+          value: "10000000"
+
+  - it: a zero psService.gracefulShutdownSeconds renders 0
+    set:
+      psService.gracefulShutdownSeconds: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS")].value
+          value: "0"
+
+  - it: a negative psService.gracefulShutdownSeconds fails the render naming the key
+    set:
+      psService.gracefulShutdownSeconds: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.gracefulShutdownSeconds must be at least 0
+
+  - it: a psService.gracefulShutdownSeconds that is not a number fails the render naming the key
+    set:
+      psService.gracefulShutdownSeconds: abc
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.gracefulShutdownSeconds must be a whole number
+
+  - it: a fractional psService.gracefulShutdownSeconds fails the render naming the key
+    set:
+      psService.gracefulShutdownSeconds: 1.5
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.gracefulShutdownSeconds must be a whole number
+
+  - it: a boolean psService.gracefulShutdownSeconds fails the render as not a whole number
+    set:
+      psService.gracefulShutdownSeconds: true
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.gracefulShutdownSeconds must be a whole number
+
+  - it: a quoted number psService.gracefulShutdownSeconds fails the render as not a whole number
+    set:
+      psService.gracefulShutdownSeconds: "5000"
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.gracefulShutdownSeconds must be a whole number
+
+  - it: a null psService.gracefulShutdownSeconds fails the render as not a whole number
+    set:
+      psService.gracefulShutdownSeconds: null
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.gracefulShutdownSeconds must be a whole number
+
+  - it: PS_QUERY_TIMEOUT_MS renders the default 5000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_QUERY_TIMEOUT_MS")].value
+          value: "5000"
+
+  - it: PS_QUERY_TIMEOUT_MS follows psService.query.timeoutMs
+    set:
+      psService.query.timeoutMs: 7000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_QUERY_TIMEOUT_MS")].value
+          value: "7000"
+
+  - it: PS_QUERY_TIMEOUT_MS renders a value of 10000000 without exponent form
+    set:
+      psService.query.timeoutMs: 10000000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_QUERY_TIMEOUT_MS")].value
+          value: "10000000"
+
+  - it: a zero psService.query.timeoutMs fails the render naming the key
+    set:
+      psService.query.timeoutMs: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.query\.timeoutMs must be at least 1
+
+  - it: a negative psService.query.timeoutMs fails the render naming the key
+    set:
+      psService.query.timeoutMs: -5
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.query\.timeoutMs must be at least 1
+
+  - it: a psService.query.timeoutMs that is not a number fails the render naming the key
+    set:
+      psService.query.timeoutMs: abc
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.query\.timeoutMs must be a whole number
+
+  - it: PS_QUERY_ROW_CAP renders the default 1000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_QUERY_ROW_CAP")].value
+          value: "1000"
+
+  - it: PS_QUERY_ROW_CAP follows psService.query.rowCap
+    set:
+      psService.query.rowCap: 250
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_QUERY_ROW_CAP")].value
+          value: "250"
+
+  - it: PS_QUERY_ROW_CAP renders a value of 10000000 without exponent form
+    set:
+      psService.query.rowCap: 10000000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_QUERY_ROW_CAP")].value
+          value: "10000000"
+
+  - it: a zero psService.query.rowCap fails the render naming the key
+    set:
+      psService.query.rowCap: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.query\.rowCap must be at least 1
+
+  - it: a negative psService.query.rowCap fails the render naming the key
+    set:
+      psService.query.rowCap: -5
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.query\.rowCap must be at least 1
+
+  - it: a psService.query.rowCap that is not a number fails the render naming the key
+    set:
+      psService.query.rowCap: abc
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.query\.rowCap must be a whole number
+
+  - it: PS_INGESTIONRUNS_MAX_IN_FLIGHT renders the default 1
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_INGESTIONRUNS_MAX_IN_FLIGHT")].value
+          value: "1"
+
+  - it: PS_INGESTIONRUNS_MAX_IN_FLIGHT follows psService.ingestionRuns.maxInFlight
+    set:
+      psService.ingestionRuns.maxInFlight: 3
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_INGESTIONRUNS_MAX_IN_FLIGHT")].value
+          value: "3"
+
+  - it: PS_INGESTIONRUNS_MAX_IN_FLIGHT renders a value of 10000000 without exponent form
+    set:
+      psService.ingestionRuns.maxInFlight: 10000000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_INGESTIONRUNS_MAX_IN_FLIGHT")].value
+          value: "10000000"
+
+  - it: a zero psService.ingestionRuns.maxInFlight fails the render naming the key
+    set:
+      psService.ingestionRuns.maxInFlight: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.ingestionRuns\.maxInFlight must be at least 1
+
+  - it: a negative psService.ingestionRuns.maxInFlight fails the render naming the key
+    set:
+      psService.ingestionRuns.maxInFlight: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.ingestionRuns\.maxInFlight must be at least 1
+
+  - it: a psService.ingestionRuns.maxInFlight that is not a number fails the render naming the key
+    set:
+      psService.ingestionRuns.maxInFlight: abc
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.ingestionRuns\.maxInFlight must be a whole number
+
+  - it: PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP renders the default false
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP")].value
+          value: "false"
+
+  - it: PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP renders true when psService.curatedSource.allowInsecureHttp=true outside the production profile
+    set:
+      psService.curatedSource.allowInsecureHttp: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP")].value
+          value: "true"
+
+  - it: a psService.curatedSource.allowInsecureHttp that is not a boolean fails the render naming the key
+    set:
+      psService.curatedSource.allowInsecureHttp: "yes"
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.curatedSource\.allowInsecureHttp must be true or false
+
+  - it: psService.curatedSource.allowInsecureHttp=true with isProductionProfile=true fails the render naming the key
+    set:
+      isProductionProfile: true
+      psService.curatedSource.allowInsecureHttp: true
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.curatedSource\.allowInsecureHttp=true is refused
+
+  - it: an isProductionProfile that is not a boolean fails the render naming the key when insecure HTTP is on
+    set:
+      isProductionProfile: "false"
+      psService.curatedSource.allowInsecureHttp: true
+    asserts:
+      - failedTemplate:
+          errorPattern: isProductionProfile must be true or false
+
+  - it: an isProductionProfile that is not a boolean fails the render naming the key when insecure HTTP is off
+    set:
+      isProductionProfile: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: isProductionProfile must be true or false
+
+  - it: an empty psService.curatedSource.url renders no PS_CURATEDSOURCE_URL entry
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_CURATEDSOURCE_URL")]
+
+  - it: PS_CURATEDSOURCE_URL equals psService.curatedSource.url when set
+    set:
+      psService.curatedSource.url: https://curated.example.test/content
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_CURATEDSOURCE_URL")].value
+          value: https://curated.example.test/content
+
   - it: PS_AUTH_DISCOVERY_RETRY_BUDGET_SECONDS renders the default budget as a string
     asserts:
       - equal:
