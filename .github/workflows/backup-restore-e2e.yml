@@ -26,7 +26,7 @@ jobs:
   e2e:
     name: Verify a restore in a throwaway kind cluster
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 15
     env:
       E2E_OUT: /tmp/backup-restore-e2e/out
       E2E_LOG: /tmp/backup-restore-e2e/e2e.log

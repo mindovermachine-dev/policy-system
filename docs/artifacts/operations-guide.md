@@ -1539,7 +1539,7 @@ default branch and disables them after 60 days without repository activity.
 The job builds the `ps-service` image, pushes it to a registry inside the runner, installs the
 chart from the checked-out tree, waits until every pod is Ready and runs the image it built,
 retains the generated secrets, and then runs `e2e --yes`. It passes only when the log has an
-`event=e2e_verified` line with at least one graph. The job times out at 45 minutes. The run
+`event=e2e_verified` line with at least one graph. A healthy run takes about 7 minutes and the job times out at 15 minutes. The run
 installs the release with real authentication against a stub OIDC issuer (a static discovery
 document served from the built image), not with the local test bypass: PS Service refuses to
 start with the bypass on the container's non-loopback bind. The stub validates no token; the

@@ -1828,7 +1828,8 @@ def test_operations_guide_documents_the_scheduled_restore_verification_job() -> 
         "kind-registry:5000",
         "KUBECONFIG",
         "stub OIDC issuer",
-        "45 minutes",
+        "takes about 7 minutes",
+        "times out at 15 minutes",
     ):
         assert needle in section, needle
     assert re.search(r"destroys the volumes of the cluster it targets", section)

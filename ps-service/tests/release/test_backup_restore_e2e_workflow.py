@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 JOB = "e2e"
 CLUSTER_NAME = "backup-restore-e2e"
 EXACT_ACTION_REF = re.compile(r"@v\d+\.\d+\.\d+$")
-MAX_TIMEOUT_MINUTES = 60
+TIMEOUT_MINUTES = 15
 
 
 def _triggers(workflow: WorkflowFile) -> dict[str, object]:
@@ -99,7 +99,7 @@ def test_toolchain_and_every_action_are_pinned_to_exact_versions(
 def test_job_has_a_bounded_timeout(backup_restore_e2e_workflow: WorkflowFile) -> None:
     timeout = backup_restore_e2e_workflow.job(JOB).get("timeout-minutes")
     assert isinstance(timeout, int)
-    assert 0 < timeout <= MAX_TIMEOUT_MINUTES
+    assert timeout == TIMEOUT_MINUTES
 
 
 REGISTRY_HOST = "kind-registry:5000"
