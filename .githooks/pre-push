@@ -30,9 +30,11 @@ zero_sha="0000000000000000000000000000000000000000"
 remote_name="${1:-origin}"
 
 # ruff comes from this repository's uv dev group (the same pin pre-commit and CI use), whichever
-# repository is doing the pushing.
+# repository is doing the pushing. `--no-sync` runs the already-installed ruff: a push is no place
+# to lock or rebuild the workspace, which fails offline and whenever a member's pyproject.toml is
+# newer than the environment.
 ruff() {
-  uv run --project "$repo_root" ruff "$@"
+  uv run --no-sync --project "$repo_root" ruff "$@"
 }
 
 # The commit the pushed range starts at: the remote's current tip when it has one we know of,

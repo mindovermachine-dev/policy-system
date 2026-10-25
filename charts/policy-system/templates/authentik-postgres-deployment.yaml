@@ -51,6 +51,10 @@ spec:
                   # duplicate password Secret.
                   name: {{ include "policy-system.authentikCredentialsSecretName" . }}
                   key: AUTHENTIK_POSTGRESQL__PASSWORD
+          {{- with .Values.authentik.postgres.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           # TCP (`-h`) is required: initdb runs a temporary server that listens on the
           # unix socket only, so a socket probe would pass before the final server is up.
           # No credential is used and there is deliberately no livenessProbe.

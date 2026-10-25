@@ -1,0 +1,40 @@
+suite: ps state provisioning job resources
+templates:
+  - ps-state-provision-job.yaml
+chart:
+  appVersion: 9.9.9
+release:
+  name: policy-system
+  revision: 2
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+tests:
+  - it: requests cpu and memory and limits memory only by default
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+  - it: renders an overridden memory limit and keeps the default requests
+    set:
+      psPostgres.provisioning.resources.limits.memory: 512Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+  - it: renders no resources when the value is null
+    set:
+      psPostgres.provisioning.resources: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].resources

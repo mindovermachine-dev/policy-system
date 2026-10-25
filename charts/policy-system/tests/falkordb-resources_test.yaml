@@ -1,0 +1,32 @@
+suite: falkordb resources
+templates:
+  - falkordb-deployment.yaml
+tests:
+  - it: requests cpu and memory and limits memory only by default
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+  - it: renders an overridden memory limit and keeps the default requests
+    set:
+      falkordb.resources.limits.memory: 4Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 4Gi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+  - it: renders no resources when the value is null
+    set:
+      falkordb.resources: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].resources

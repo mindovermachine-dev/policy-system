@@ -23,6 +23,9 @@ templates:
   - charts/authentik/templates/server/deployment.yaml
   - charts/authentik/templates/worker/deployment.yaml
   - charts/authentik/templates/secret.yaml
+  - ps-postgres-deployment.yaml
+  - authentik-postgres-deployment.yaml
+  - ps-state-provision-job.yaml
 tests:
   - it: falkordb deployment uses the pinned image from values.yaml under prod values
     template: falkordb-deployment.yaml
@@ -126,3 +129,111 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP")].value
           value: "false"
+
+  - it: falkordb keeps its default resources under prod values
+    template: falkordb-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+
+  - it: ps-postgres keeps its default resources under prod values
+    template: ps-postgres-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+
+  - it: authentik postgres keeps its default resources under prod values
+    template: authentik-postgres-deployment.yaml
+    set:
+      authentik.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+
+  - it: provision job keeps its default resources under prod values
+    template: ps-state-provision-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+
+  - it: authentik server keeps its default resources under prod values
+    template: charts/authentik/templates/server/deployment.yaml
+    set:
+      authentik.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+
+  - it: authentik worker keeps its default resources under prod values
+    template: charts/authentik/templates/worker/deployment.yaml
+    set:
+      authentik.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+
+  - it: ps-service keeps its default resources under prod values
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+
+  - it: overriding one workload's resources leaves the others at their defaults
+    set:
+      falkordb.resources.limits.memory: 4Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 4Gi
+        template: falkordb-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+        template: ps-postgres-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+        template: ps-state-provision-job.yaml

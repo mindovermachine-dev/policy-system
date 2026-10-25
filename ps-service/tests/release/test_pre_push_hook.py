@@ -17,6 +17,8 @@ the ruff tests rely only on ruff's default rule set (F401) and default formattin
 
 from __future__ import annotations
 
+import dataclasses
+import shutil
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -190,3 +192,59 @@ def test_ruff_gate_applies_to_ready_pushes_alongside_the_header_lint(
     assert "would be reformatted" in run.output
     assert EXPECTED_FORM not in run.output, "the conventional header must not be blamed"
     assert READY_REF not in release_fixture.origin_refs()
+
+
+def _copy_hook_with_fresh_project_files(release_fixture: ReleaseFixture, repo_root: Path) -> Path:
+    """Copy the hook and the project files `uv` reads into a throwaway checkout; return its root.
+
+    The copies carry new modification times and live at a different path than the checkout the
+    shared `.venv` was installed from, so `uv` sees that environment as out of date with the
+    project -- the situation any edit to a workspace member's `pyproject.toml` creates.
+    """
+    tool_root = release_fixture.root / "tool-checkout"
+    shutil.copytree(repo_root / ".githooks", tool_root / ".githooks")
+    (tool_root / "scripts" / "release").mkdir(parents=True)
+    shutil.copy2(
+        repo_root / "scripts" / "release" / "lint-commit-header.sh",
+        tool_root / "scripts" / "release" / "lint-commit-header.sh",
+    )
+    for project_file in (
+        "pyproject.toml",
+        "uv.lock",
+        "ps-service/pyproject.toml",
+        "ps-cli/pyproject.toml",
+    ):
+        (tool_root / project_file).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo_root / project_file, tool_root / project_file)
+    return tool_root
+
+
+def test_ruff_gate_runs_when_the_tool_environment_is_out_of_date_with_the_project(
+    release_fixture: ReleaseFixture, repo_root: Path
+) -> None:
+    """The gate must lint with the installed ruff, never try to rebuild the project to do so.
+
+    An offline push cannot rebuild the workspace members, so a hook that syncs the environment
+    before running ruff dies on the sync and never reports the formatting problem.
+    """
+    tool_root = _copy_hook_with_fresh_project_files(release_fixture, repo_root)
+    work = dataclasses.replace(
+        release_fixture.work,
+        environment={
+            **release_fixture.work.environment,
+            "UV_PROJECT_ENVIRONMENT": str(repo_root / ".venv"),
+        },
+    )
+    _commit_python(release_fixture, UNFORMATTED_PYTHON)
+
+    run = work.run(
+        "-c",
+        f"core.hooksPath={tool_root / '.githooks'}",
+        "push",
+        "origin",
+        f"HEAD:{ISSUE_REF}",
+        expect=1,
+    )
+
+    assert "would be reformatted" in run.output, "ruff must run and report, not fail to sync"
+    assert ISSUE_REF not in release_fixture.origin_refs()

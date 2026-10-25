@@ -23,6 +23,10 @@ spec:
           ports:
             - name: redis
               containerPort: 6379
+          {{- with .Values.falkordb.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           # Every probe requires a PONG reply: `redis-cli ping` exits 0 on a LOADING or
           # other error reply, so the reply is compared instead of the exit status.
           # No credential is used (FalkorDB has no password in this chart).

@@ -433,6 +433,15 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
           value: 2Gi
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
 
   - it: psService.resources values override the defaults
     set:

@@ -1,0 +1,83 @@
+suite: authentik server and worker resources
+set:
+  authentik.enabled: true
+  # Unrelated to this suite's assertions; see authentik-postgres-storageclass_test.yaml.
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+templates:
+  - charts/authentik/templates/server/deployment.yaml
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  - it: renders requests cpu and memory and a memory-only limit on the server by default
+    template: charts/authentik/templates/server/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+  - it: renders requests cpu and memory and a memory-only limit on the worker by default
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 512Mi
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+  - it: renders an overridden server memory limit and leaves the worker at its default
+    set:
+      authentik.server.resources.limits.memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 1Gi
+        template: charts/authentik/templates/server/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+        template: charts/authentik/templates/server/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+        template: charts/authentik/templates/worker/deployment.yaml
+  - it: renders an overridden worker memory limit and leaves the server at its default
+    set:
+      authentik.worker.resources.limits.memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 1Gi
+        template: charts/authentik/templates/worker/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+        template: charts/authentik/templates/server/deployment.yaml
+  - it: renders no requests or limits on the server when the value is null
+    template: charts/authentik/templates/server/deployment.yaml
+    set:
+      authentik.server.resources: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].resources.requests
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits
+  - it: renders no requests or limits on the worker when the value is null
+    template: charts/authentik/templates/worker/deployment.yaml
+    set:
+      authentik.worker.resources: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].resources.requests
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits

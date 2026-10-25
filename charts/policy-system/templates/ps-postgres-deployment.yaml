@@ -66,6 +66,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "policy-system.psPostgresSigningSecretName" . }}
                   key: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+          {{- with .Values.psPostgres.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           # Ready only once the FINAL server accepts TCP connections. On an empty PGDATA the
           # image first runs initdb and the init script against a temporary server, restarts,
           # and only then serves; without this probe the pod is Ready (and routed to) during

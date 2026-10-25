@@ -34,6 +34,18 @@ falkordb:
       timeoutSeconds: 5
       periodSeconds: 15
       failureThreshold: 5
+  # Starting point, not measured. FalkorDB is an in-memory store, so the memory limit bounds
+  # a runaway instance instead of letting it take the node; there is no CPU limit, to avoid
+  # throttling. A graph larger than the limit is OOMKilled and the pod restarts; the graph is
+  # rebuilt from the PS Postgres mutation log, so no data is lost, but a large graph needs a
+  # higher limit. Set to null to omit resources entirely (an empty map is merged with this
+  # default and does not opt out).
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
   persistence:
     enabled: true
     storageClassName: ""
@@ -107,6 +119,10 @@ psService:
     # graph with the digest checkpointed after its last gateway write and logs an alert if they
     # differ (issue #215). 0 turns the check off.
     driftCheckIntervalSeconds: 3600
+  # Starting point, not measured. Unlike the other workloads this one carries a
+  # CPU limit, because it predates them; the new workloads are memory-limited only.
+  # Override individual keys; setting the whole block to null is not supported
+  # here (the template reads each key).
   resources:
     requests:
       cpu: 500m
@@ -302,6 +318,15 @@ psPostgres:
       timeoutSeconds: 5
       periodSeconds: 5
       failureThreshold: 6
+  # Starting point, not measured. The memory limit bounds a runaway server; there is no CPU
+  # limit, to avoid throttling. Set to null to omit resources entirely (an empty map is merged
+  # with this default and does not opt out).
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
   # Job that applies the ordinary ps_state migrations and creates and migrates the
   # owner-protected graph log tables in ps_state with the admin credential (issue #205); runs
   # on fresh installs and on every `helm upgrade`. Disable it only if the operator provisions by
@@ -316,6 +341,15 @@ psPostgres:
     backoffLimit: 3
     connectTimeoutSeconds: 120
     activeDeadlineSeconds: 900
+    # Starting point, not measured. The Job runs a short migration CLI; the memory limit bounds a
+    # runaway run and there is no CPU limit, to avoid throttling. Set to null to omit resources
+    # entirely (an empty map is merged with this default and does not opt out).
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
   signing:
     database: ps_signing
     user: ps_signing
@@ -373,6 +407,15 @@ authentik:
         timeoutSeconds: 5
         periodSeconds: 5
         failureThreshold: 6
+    # Starting point, not measured. The memory limit bounds a runaway server; there is no CPU
+    # limit, to avoid throttling. Set to null to omit resources entirely (an empty map is
+    # merged with this default and does not opt out).
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
     persistence:
       size: 10Gi
       storageClassName: ""
@@ -425,6 +468,16 @@ authentik:
           secretKeyRef:
             name: policy-system-authentik-api-token
             key: PS_AUTHENTIK_API_TOKEN
+    # Starting point, not measured: the upstream chart's own suggested values.
+    # Memory-only limit (no CPU limit) to avoid throttling. The upstream chart
+    # ships an empty map; setting this to null renders an empty resources
+    # field (no requests or limits), the key itself is not removed.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 512Mi
   server:
     env:
       - name: AUTHENTIK_BOOTSTRAP_TOKEN
@@ -432,6 +485,16 @@ authentik:
           secretKeyRef:
             name: policy-system-authentik-api-token
             key: PS_AUTHENTIK_API_TOKEN
+    # Starting point, not measured: the upstream chart's own suggested values.
+    # Memory-only limit (no CPU limit) to avoid throttling. The upstream chart
+    # ships an empty map; setting this to null renders an empty resources
+    # field (no requests or limits), the key itself is not removed.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 512Mi
     # ClusterIP in every profile: clients reach Authentik through the chart Ingress, never a node port of its own.
     service:
       type: ClusterIP
