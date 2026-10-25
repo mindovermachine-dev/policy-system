@@ -370,25 +370,28 @@ def test_identification_webauthn_stage_is_the_bound_passkey_validate_stage(
     assert identification["attrs"]["user_fields"] == ["email", "username"]
 
 
-def test_obsolete_reputation_deny_binding_on_the_shipped_flow_is_removed_after_the_stage_is_defined(
+def test_no_entry_deletes_a_row_with_state_absent(
     main_entries: list[dict[str, Any]],
 ) -> None:
-    stage_index = next(
-        i for i, e in enumerate(main_entries) if e.get("id") == "ps-login-reputation-deny-stage"
-    )
-    removals = [
-        (i, e)
-        for i, e in enumerate(main_entries)
-        if e["model"] == "authentik_flows.flowstagebinding" and e.get("state") == "absent"
-    ]
+    """Authentik's importer deletes through an instance it builds unsaved when no row matches.
 
-    assert len(removals) == 1
-    index, removal = removals[0]
-    assert index > stage_index
-    assert removal["identifiers"]["order"] == 25
-    assert removal["identifiers"]["stage"] == Tag("KeyOf", "ps-login-reputation-deny-stage")
-    target = removal["identifiers"]["target"]
-    assert target == Tag("Find", ["authentik_flows.flow", ["slug", "default-authentication-flow"]])
+    For the multi-table-inheritance models (a flow-stage binding and a policy binding both
+    inherit from the policy-binding model) that unsaved instance has no parent pointer, so the
+    delete raises and the whole apply fails on any install where the row does not exist. A
+    blueprint cannot condition a deletion on the row existing, so none may use `state: absent`.
+    """
+    removals = [e["model"] for e in main_entries if e.get("state") == "absent"]
+
+    assert removals == []
+
+
+def test_login_flow_keeps_the_reputation_deny_then_passkey_validate_then_login_order(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    flow_id = _login_flow_id(main_entries)
+    orders = sorted(b["identifiers"]["order"] for b in _bindings_for(main_entries, flow_id))
+
+    assert orders == [10, 25, 30, 100]
 
 
 def test_login_validate_binding_is_skipped_only_after_a_verified_passkey_identification(

@@ -109,6 +109,11 @@ inventory:
     command: uv run pytest -q
     timeout: 10m
 
+  - id: authentik-blueprint
+    name: Apply the chart's Authentik blueprint to the pinned Authentik image
+    command: uv run pytest -m authentik_blueprint -q -n0
+    timeout: 20m
+
   - id: mock-boundary-guardrail
     name: Check Detroit-style mock boundary discipline in tests
     command: uv run python scripts/check_mock_boundaries.py ps-service/tests ps-cli/tests
@@ -286,6 +291,7 @@ waves:
       - pip-audit
       - helm-lint
       - helm-unittest
+      - authentik-blueprint
 
   - id: "fix-all"
     name: "Fix anything that can be fixed automatically"

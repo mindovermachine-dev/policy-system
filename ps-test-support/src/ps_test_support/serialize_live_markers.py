@@ -34,6 +34,7 @@ LIVE_MARKERS: tuple[str, ...] = (
     "falkordb_live",
     "postgres_live",
     "container_image",
+    "authentik_blueprint",
 )
 """The markers `pyproject.toml`'s default `-m` expression deselects (a test pins them equal)."""
 

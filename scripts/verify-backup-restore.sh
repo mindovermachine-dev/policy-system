@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Backup and restore verification harness for PS Postgres (issue #216).
+# Backup and restore verification harness for PS Postgres.
 #
 #   scripts/verify-backup-restore.sh backup [--out-dir DIR] [--allow-context CTX]
 #   scripts/verify-backup-restore.sh counts [--allow-context CTX]
@@ -20,8 +20,13 @@
 #         Prints the artifact path on stdout. A failed backup leaves no artifact behind.
 #         The artifact holds the whole data directory, including the stored role password
 #         hashes and the audit trail: keep it out of the repository and encrypt it at rest.
-# counts  Prints the row counts of `audit_log.audit_events`, `access_role_assignments` and
-#         `graph_log.entries`, the figures compared before and after a backup or restore.
+# counts  Prints the exact row count of every base table of the `ps_state` and `ps_signing`
+#         databases as `<database>.<schema>.<table>=<N>` entries on one sorted line, the figures
+#         compared before and after a backup or restore. The tables come from the catalog, so the
+#         bookkeeping tables (`ps_schema_migrations`, `ps_signing.public.schema_migrations`) are
+#         counted and a table added by a migration needs no change here. Authentik's database is
+#         a separate deployment and is not covered. The queries only read; they print counts,
+#         never row content. A failed query or connection, or no tables, exits 1 with no line.
 # retain-secrets
 #         Prepares a running release for `restore` and `e2e`: copies the three generated
 #         credentials Secrets (`<release>-ps-postgres-{admin,state,signing}-credentials`) to
@@ -57,13 +62,22 @@
 #         (e2e still proves every graph by comparing digests).
 # seed    Fills a running deployment with content to verify: restores curated instruments (default
 #         ENGPRAC-1.0 and CRA-1.0, the first imports draft Policy/Standard/Control nodes) through
-#         the restore path and grants access roles through the access-role store, by piping
-#         tools/backup-restore-verify/seed_content.py and seed_grants.py into the ps-service pod.
+#         the restore path, grants access roles through the access-role store and writes one
+#         synthetic row to each of the runtime-config, ingestion-run, pending-approval and
+#         signing-credential tables, by piping tools/backup-restore-verify/seed_content.py,
+#         seed_grants.py and seed_state.py into the ps-service pod. It then logs the counts and
+#         exits 1, naming each table, if any table of `ps_state` or `ps_signing` still holds no
+#         row, unless SEED_EMPTY_EXCEPTIONS lists it with a reason (the list is empty).
 #         The ps-service image must write graphs through the Graph Write Gateway.
 # e2e     The whole check on one cluster: seed; snapshot the digest of every logged graph and the
-#         row counts; take one backup; wipe the PS Postgres and FalkorDB volumes; restore
+#         row counts, stopping before the backup if a table is empty after seeding (the seed
+#         guard above); take one backup; wipe the PS Postgres and FalkorDB volumes; restore
 #         (the restore sequence above, minus the stop, which the wipe already did); snapshot and
-#         count again; compare. Exits 0 only if every graph digest and every count is equal.
+#         count again; compare. Exits 0 only if every graph digest and every count is equal; a
+#         differing count is reported as `Count differs for <database>.<schema>.<table>: before
+#         <n>, after <n>` (`absent` for a table on one side only). A table listed in
+#         VOLATILE_COUNT_TABLES with a reason is skipped and logged as counts_volatile_skipped
+#         (the list is empty).
 #         The credentials Secrets are retained (see restore) and the operator types "yes".
 #         --skip-restore leaves the wiped volumes unrestored: the comparison must then fail.
 #
@@ -149,30 +163,132 @@ require_allowed_context() {
   fi
 }
 
-count_rows() {
-  local table="$1"
-  kubectl exec "$POSTGRES_DEPLOYMENT" -- \
-    psql -U "$ADMIN_USER" -d "$STATE_DATABASE" -tA -c "SELECT count(*) FROM ${table}"
+# database_counts prints one `<database>.<schema>.<table>=<N>` row for every base table of the
+# database, discovered from the catalog (so a table added by a migration is counted with no change
+# here). The query is read-only, quotes the identifiers it takes from the catalog, and returns
+# counts only, never row content. Partition children are skipped; their parent counts them.
+# It fails, printing nothing, on a query or connection failure, on no tables, and on any row that
+# is not a plain lower-case `schema.table=count` entry.
+# shellcheck disable=SC2016 # no expansion is wanted; the double quotes only hold the SQL text
+readonly COUNTS_SQL="SELECT format('%I.%I', n.nspname, c.relname) || '=' ||
+       (xpath('/row/c/text()',
+              query_to_xml(format('SELECT count(*) AS c FROM %I.%I', n.nspname, c.relname),
+                           false, true, '')))[1]::text
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname !~ '^pg_(toast|temp)'
+ORDER BY 1;"
+readonly COUNTED_DATABASES=(ps_state ps_signing)
+readonly COUNT_ROW_PATTERN='^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*=[0-9]+$'
+# Tables a seeded cluster may legitimately hold no rows in, as `<database>.<schema>.<table>|<reason>`.
+# Every other table must hold at least one row after `seed`, or the seeding proves nothing for it.
+readonly -a SEED_EMPTY_EXCEPTIONS=()
+# Tables whose count may legitimately differ across a restore, as `<database>.<schema>.<table>|<reason>`
+# with a comment per entry. The comparison skips them and logs `event=counts_volatile_skipped`.
+readonly -a VOLATILE_COUNT_TABLES=()
+
+database_counts() {
+  local database="$1" output row
+  output="$(kubectl exec "$POSTGRES_DEPLOYMENT" -- \
+    psql -U "$ADMIN_USER" -d "$database" -v ON_ERROR_STOP=1 -tA -c "$COUNTS_SQL")" || {
+    print_error 'Counting the tables of database "%s" failed\n' "$database"
+    return "$EXIT_FAILURE"
+  }
+  if [[ -z "$output" ]]; then
+    print_error 'Database "%s" returned no tables to count\n' "$database"
+    return "$EXIT_FAILURE"
+  fi
+  while IFS= read -r row; do
+    if [[ ! "$row" =~ $COUNT_ROW_PATTERN ]]; then
+      print_error 'Database "%s" returned a row that is not schema.table=count: %s\n' "$database" "$row"
+      return "$EXIT_FAILURE"
+    fi
+    printf '%s.%s\n' "$database" "$row"
+  done <<<"$output"
 }
 
-counts_line() {
-  printf 'audit_events=%s access_role_assignments=%s graph_log_entries=%s' \
-    "$(count_rows audit_log.audit_events)" \
-    "$(count_rows access_role_assignments)" \
-    "$(count_rows graph_log.entries)"
+# collect_counts prints the counts of every table of every counted database as one line of
+# space-separated entries in byte order. Nothing is printed unless every database was counted.
+collect_counts() {
+  local database part rows=""
+  for database in "${COUNTED_DATABASES[@]}"; do
+    part="$(database_counts "$database")" || return "$EXIT_FAILURE"
+    rows+="${part}"$'\n'
+  done
+  printf '%s' "$rows" | LC_ALL=C sort | paste -sd' ' -
+}
+
+# assert_seeded LINE [EXCEPTION...] fails, naming each table, when LINE (a counts line) holds a
+# `<table>=0` entry that no EXCEPTION (`<table>|<reason>`) names.
+assert_seeded() {
+  local line="$1" entry exception key empty="false"
+  shift
+  for entry in $line; do
+    [[ "${entry##*=}" == "0" ]] || continue
+    key="${entry%=*}"
+    for exception in "$@"; do
+      [[ "${exception%%|*}" == "$key" ]] && continue 2
+    done
+    print_error 'Table "%s" is empty after seeding\n' "$key"
+    empty="true"
+  done
+  [[ "$empty" == "false" ]]
+}
+
+# count_of LINE KEY prints the count LINE (a counts line) holds for KEY, or `absent`.
+count_of() {
+  local line="$1" key="$2" entry
+  for entry in $line; do
+    if [[ "${entry%%=*}" == "$key" ]]; then
+      printf '%s' "${entry#*=}"
+      return 0
+    fi
+  done
+  printf 'absent'
+}
+
+# compare_counts BEFORE AFTER [VOLATILE...] compares two counts lines table by table and prints
+# `Count differs for <table>: before <n|absent>, after <n|absent>` for every table that differs,
+# including one present on one side only. A table named by a VOLATILE entry (`<table>|<reason>`)
+# is logged as skipped and not compared. It fails if any compared table differs.
+compare_counts() {
+  local before="$1" after="$2" key volatile skipped differs="false" before_count after_count
+  shift 2
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    skipped="false"
+    for volatile in "$@"; do
+      [[ "${volatile%%|*}" == "$key" ]] && skipped="true"
+    done
+    if [[ "$skipped" == "true" ]]; then
+      log_event counts_volatile_skipped "table=${key}"
+      continue
+    fi
+    before_count="$(count_of "$before" "$key")"
+    after_count="$(count_of "$after" "$key")"
+    if [[ "$before_count" != "$after_count" ]]; then
+      print_error 'Count differs for %s: before %s, after %s\n' "$key" "$before_count" "$after_count"
+      differs="true"
+    fi
+  done < <(printf '%s %s\n' "$before" "$after" | tr ' ' '\n' | cut -d= -f1 | LC_ALL=C sort -u)
+  [[ "$differs" == "false" ]]
 }
 
 log_counts() {
   local phase="$1" line
-  line="$(counts_line)"
+  line="$(collect_counts)" || exit "$EXIT_FAILURE"
   # shellcheck disable=SC2086 # the line is space-separated key=value words by construction
   log_event counts "phase=${phase}" $line
 }
 
 run_counts() {
+  local line
   require_command kubectl
   require_allowed_context
-  printf '%s\n' "$(counts_line)"
+  line="$(collect_counts)" || exit "$EXIT_FAILURE"
+  printf '%s\n' "$line"
 }
 
 fail_backup() {
@@ -531,13 +647,21 @@ seed_content() {
     print_error 'Seeding the access-role grants failed\n'
     exit "$EXIT_FAILURE"
   }
-  log_counts seeded
+  pipe_tool seed_state.py || {
+    print_error 'Seeding the state tables failed\n'
+    exit "$EXIT_FAILURE"
+  }
 }
 
 run_seed() {
+  local line
   require_command kubectl
   require_allowed_context
   seed_content
+  line="$(collect_counts)" || exit "$EXIT_FAILURE"
+  # shellcheck disable=SC2086 # the line is space-separated key=value words by construction
+  log_event counts phase=seeded $line
+  assert_seeded "$line" ${SEED_EMPTY_EXCEPTIONS[@]+"${SEED_EMPTY_EXCEPTIONS[@]}"} || exit "$EXIT_FAILURE"
 }
 
 logged_graphs() {
@@ -607,8 +731,10 @@ run_e2e() {
   [[ ${#graphs[@]} -gt 0 ]] || fail_e2e "graph_log holds no graph, so there is nothing to compare"
   log_event e2e_graphs "graphs=${graphs[*]}"
   digest_snapshot "$before_digests" "${graphs[@]}"
-  before_counts="$(counts_line)"
+  before_counts="$(collect_counts)" || fail_e2e "the row counts could not be read"
   log_event counts phase=before "$before_counts"
+  assert_seeded "$before_counts" ${SEED_EMPTY_EXCEPTIONS[@]+"${SEED_EMPTY_EXCEPTIONS[@]}"} ||
+    fail_e2e "a table is empty after seeding"
 
   artifact="$(run_backup "$OUT_DIR")" || fail_e2e "the backup failed"
   ARTIFACT="$artifact"
@@ -624,14 +750,14 @@ run_e2e() {
   fi
 
   digest_snapshot "$after_digests" "${graphs[@]}"
-  after_counts="$(counts_line)"
+  after_counts="$(collect_counts)" || fail_e2e "the row counts could not be read"
   log_event counts phase=after "$after_counts"
   local failed="false"
   if ! compare_digests "$before_digests" "$after_digests"; then
     failed="true"
   fi
-  if [[ "$before_counts" != "$after_counts" ]]; then
-    print_error 'Counts differ: before %s, after %s\n' "$before_counts" "$after_counts"
+  if ! compare_counts "$before_counts" "$after_counts" \
+    ${VOLATILE_COUNT_TABLES[@]+"${VOLATILE_COUNT_TABLES[@]}"}; then
     failed="true"
   fi
   [[ "$failed" == "false" ]] || fail_e2e "a graph digest or a count differs after the restore"
@@ -706,4 +832,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

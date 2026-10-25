@@ -1535,6 +1535,54 @@ def test_operations_guide_backup_excludes_authentik_and_links_the_procedure() ->
     assert "docs.goauthentik.io" not in backup
 
 
+def test_operations_guide_describes_counts_of_every_table_of_both_databases() -> None:
+    ops = _read(_OPS)
+    backup = _collapsed(_section(ops, "## Backup"))
+    restore = _collapsed(_section(ops, "## Restore"))
+
+    assert not re.search(r"graph_log_[a-z]+=", ops)
+    assert "`audit_events`, `access_role_assignments` and `graph_log.entries`" not in ops
+    for text in (backup, restore):
+        assert "`ps_state`" in text
+        assert "`ps_signing`" in text
+        assert "<database>.<schema>.<table>" in text
+    assert "ps_schema_migrations" in backup
+    assert "ps_signing.public.schema_migrations" in backup
+    assert "Authentik" in backup
+    assert "not covered" in backup
+    assert "ps_state.audit_log.audit_events" in ops
+
+
+def test_operations_guide_describes_the_seed_tables_and_the_empty_table_exceptions() -> None:
+    backup = _collapsed(_section(_read(_OPS), "## Backup"))
+
+    assert "### What the verifier seeds" in backup
+    assert "scripts/verify-backup-restore.sh seed" in backup
+    for table in (
+        "ps_state.public.runtime_config",
+        "ps_state.public.ingestion_runs",
+        "ps_signing.public.pending_approvals",
+        "ps_signing.public.signing_credentials",
+    ):
+        assert table in backup
+    assert "SEED_EMPTY_EXCEPTIONS" in backup
+    assert "exception" in backup
+    assert "kind" in backup
+
+
+def test_operations_guide_describes_what_the_verifier_compares() -> None:
+    backup = _collapsed(_section(_read(_OPS), "## Backup"))
+
+    assert "### What the verifier compares" in backup
+    assert "Count differs for <database>.<schema>.<table>: before <n>, after <n>" in backup
+    assert "absent" in backup
+    assert "VOLATILE_COUNT_TABLES" in backup
+    assert "counts_volatile_skipped" in backup
+    assert "graph digest" in backup
+    assert "`ps_state`" in backup
+    assert "`ps_signing`" in backup
+
+
 def test_operations_guide_authentik_backup_and_restore_sections() -> None:
     ops = _read(_OPS)
     backup = _collapsed(_section(ops, "## Authentik Backup"))

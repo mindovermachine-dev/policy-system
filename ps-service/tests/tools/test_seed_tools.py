@@ -126,3 +126,181 @@ class _FakeGateway:
     def stop_reconciler(self) -> bool:
         self._events.append("stop")
         return True
+
+
+class _FakeRuntimeConfigStore:
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+        self.writes: list[tuple[str, object, tuple[str, str]]] = []
+
+    def get(self, key: str) -> object | None:
+        return self.values.get(key)
+
+    def set(self, key: str, value: object, *, actor: tuple[str, str]) -> None:
+        self.values[key] = value
+        self.writes.append((key, value, actor))
+
+
+class _FakeRunStore:
+    def __init__(self) -> None:
+        self.runs: dict[str, dict[str, object]] = {}
+        self.completions: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def get_run(self, run_id: str) -> object | None:
+        return self.runs.get(run_id)
+
+    def create_run(
+        self, *, run_id: str, celex: str, short_name: str, actor: tuple[str, str]
+    ) -> object:
+        self.runs[run_id] = {"celex": celex, "short_name": short_name, "actor": actor}
+        return self.runs[run_id]
+
+    def complete_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        result: dict[str, object] | None,
+        error: str | None,
+        reason_code: object | None = None,
+        audit_actor: tuple[str, str] | None = None,
+    ) -> bool:
+        assert error is None
+        assert reason_code is None
+        assert audit_actor is None
+        self.completions.append((run_id, status, result))
+        return True
+
+
+class _FakeApprovalStore:
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+
+    def create_pending_approval(
+        self,
+        *,
+        tool_name: str,
+        normalized_args: dict[str, object],
+        actor_subject: str,
+        actor_issuer: str,
+        display_summary: dict[str, object],
+    ) -> tuple[object, str]:
+        self.created.append(
+            {
+                "tool_name": tool_name,
+                "normalized_args": normalized_args,
+                "actor": (actor_subject, actor_issuer),
+                "display_summary": display_summary,
+            }
+        )
+        return object(), "raw-code"
+
+
+class _FakeCredentialStore:
+    def __init__(self) -> None:
+        self.rows: dict[bytes, dict[str, object]] = {}
+
+    def get_by_credential_id(self, credential_id: bytes) -> object | None:
+        return self.rows.get(credential_id)
+
+    def create_signing_credential(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        credential_id: bytes,
+        public_key: bytes,
+        sign_count: int,
+        rp_id: str | None,
+    ) -> object:
+        self.rows[credential_id] = {
+            "actor": (actor_subject, actor_issuer),
+            "public_key": public_key,
+            "sign_count": sign_count,
+            "rp_id": rp_id,
+        }
+        return self.rows[credential_id]
+
+
+class _StateStores:
+    def __init__(self) -> None:
+        self.runtime_config = _FakeRuntimeConfigStore()
+        self.runs = _FakeRunStore()
+        self.approvals = _FakeApprovalStore()
+        self.credentials = _FakeCredentialStore()
+
+    def seed(self, module: ModuleType, *, issuer: str = "https://idp.invalid") -> None:
+        module.seed_state(
+            self.runtime_config,
+            self.runs,
+            self.approvals,
+            self.credentials,
+            issuer=issuer,
+            catalog_url="https://catalog.example/effective",
+        )
+
+
+def test_seed_state_writes_one_synthetic_row_to_each_state_table() -> None:
+    module = _load("seed_state")
+    stores = _StateStores()
+
+    stores.seed(module)
+
+    assert stores.runtime_config.values == {
+        "curated_source.base_url": "https://catalog.example/effective"
+    }
+    assert list(stores.runs.runs) == [module.SEED_RUN_ID]
+    assert stores.runs.runs[module.SEED_RUN_ID]["celex"] == "32099R0000"
+    assert [(run_id, status) for run_id, status, _ in stores.runs.completions] == [
+        (module.SEED_RUN_ID, "succeeded")
+    ]
+    assert len(stores.approvals.created) == 1
+    assert stores.approvals.created[0]["tool_name"] == "backup-restore-verify"
+    assert list(stores.credentials.rows) == [module.SEED_CREDENTIAL_ID]
+
+
+def test_seed_state_attributes_every_row_to_a_synthetic_actor_of_the_given_issuer() -> None:
+    module = _load("seed_state")
+    stores = _StateStores()
+
+    stores.seed(module, issuer="https://idp.example")
+
+    actor = (module.SEED_ACTOR_SUBJECT, "https://idp.example")
+    assert module.SEED_ACTOR_SUBJECT.startswith("system:backup-restore-verify")
+    assert [written_actor for _, _, written_actor in stores.runtime_config.writes] == [actor]
+    assert stores.runs.runs[module.SEED_RUN_ID]["actor"] == actor
+    assert stores.approvals.created[0]["actor"] == actor
+    assert stores.credentials.rows[module.SEED_CREDENTIAL_ID]["actor"] == actor
+
+
+def test_seed_state_twice_adds_no_duplicate_config_run_or_credential() -> None:
+    module = _load("seed_state")
+    stores = _StateStores()
+
+    stores.seed(module)
+    stores.seed(module)
+
+    assert len(stores.runtime_config.writes) == 1
+    assert len(stores.runs.completions) == 1
+    assert len(stores.credentials.rows) == 1
+
+
+def test_seed_state_adds_one_pending_approval_per_call() -> None:
+    module = _load("seed_state")
+    stores = _StateStores()
+
+    stores.seed(module)
+    stores.seed(module)
+
+    assert len(stores.approvals.created) == 2
+
+
+def test_seed_state_keeps_an_operator_configured_catalog_source() -> None:
+    module = _load("seed_state")
+    stores = _StateStores()
+    stores.runtime_config.values["curated_source.base_url"] = "https://catalog.example/c"
+
+    stores.seed(module)
+
+    assert stores.runtime_config.writes == []
+    assert stores.runtime_config.values["curated_source.base_url"] == "https://catalog.example/c"

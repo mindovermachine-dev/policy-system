@@ -508,16 +508,6 @@ entries:
       stage: !KeyOf ps-login-user-login-stage
       order: 100
 
-  # Removes the reputation Deny binding that an earlier revision of this blueprint attached
-  # to the shipped `default-authentication-flow`. The brand no longer serves that flow, so the
-  # row is dead weight; deleting it also deletes its bound reputation policy binding.
-  - model: authentik_flows.flowstagebinding
-    state: absent
-    identifiers:
-      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
-      stage: !KeyOf ps-login-reputation-deny-stage
-      order: 25
-
   # --- 7. Brand patch (the one `authentik-default` brand created by `Default - Brand`, applied
   # first by entry 0): the recovery link flow, the login flow served to browsers, and the flow
   # the device-code verification page uses (without `flow_device_code` PS-Cli's verification

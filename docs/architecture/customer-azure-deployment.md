@@ -277,7 +277,9 @@ startup/on change — a native Authentik feature, no custom code), covering:
   `akadmin`, is denied; it regains access through an admin recovery link. A password set by an
   administrator is not usable in `ps-login`. Authentik's shipped `default-authentication-flow`
   is not part of the brand and is not modified, but it remains reachable by its direct URL and is
-  password-capable there for an account that has a password (none has one by policy).
+  password-capable there for an account that has a password (none has one by policy). On an
+  install upgraded from an earlier revision, a reputation Deny binding left on that flow is not
+  removed and has no effect on login through `ps-login`.
 - A **Reputation-Policy Deny stage** — see the failed-login write-up below.
 
 **Dual-purpose, single-hostname Ingress, not a second hostname — and an allowlist, not the whole
@@ -705,7 +707,8 @@ model-*availability* failure).
   lockout (see [Authentik](#authentik)); only failures for a typed username do.
 - **Authentik's shipped `default-authentication-flow` remains reachable by its direct URL.** The
   brand does not use it and it is not modified, so it still offers a password stage to an account
-  that has a password (none has one by policy).
+  that has a password (none has one by policy). On an install upgraded from an earlier revision,
+  a reputation Deny binding left on that flow is not removed and has no effect on `ps-login`.
 - **`scripts/ps-upgrade.sh` reuse is unit-tested, not live-verified**: it upgrades with
   `--reset-then-reuse-values` so the values this flow adds (bootstrap owner, Authentik URLs,
   local-TLS values) survive, checked against a fake `helm` only.

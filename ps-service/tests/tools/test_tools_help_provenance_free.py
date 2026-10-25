@@ -46,6 +46,7 @@ ENTRY_POINTS: tuple[str, ...] = (
     "tools/backup-restore-verify/graph_digests.py",
     "tools/backup-restore-verify/seed_content.py",
     "tools/backup-restore-verify/seed_grants.py",
+    "tools/backup-restore-verify/seed_state.py",
     "scripts/check_mock_boundaries.py",
     "scripts/grant_access_role_client.py",
     "scripts/measure_skills.py",

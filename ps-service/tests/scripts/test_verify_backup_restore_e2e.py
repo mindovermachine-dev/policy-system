@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -35,6 +36,29 @@ DIGESTS = {"alpha": "sha256:" + "a" * 64, "beta": "sha256:" + "b" * 64}
 CHANGED_DIGESTS = {"alpha": DIGESTS["alpha"], "beta": "sha256:" + "c" * 64}
 EMPTY_DIGESTS = {"alpha": "sha256:" + "0" * 64, "beta": "sha256:" + "0" * 64}
 PAYLOAD = b"artifact-payload"
+COUNTS = {
+    "ps_state": [
+        "audit_log.audit_events=7",
+        "graph_log.entries=5",
+        "public.access_role_assignments=2",
+        "public.ps_schema_migrations=4",
+    ],
+    "ps_signing": ["public.pending_approvals=1", "public.signing_credentials=1"],
+}
+WIPED_COUNTS = {
+    "ps_state": [
+        "audit_log.audit_events=0",
+        "graph_log.entries=0",
+        "public.access_role_assignments=0",
+        "public.ps_schema_migrations=4",
+    ],
+    "ps_signing": ["public.pending_approvals=0", "public.signing_credentials=0"],
+}
+COUNTS_LINE = (
+    "ps_signing.public.pending_approvals=1 ps_signing.public.signing_credentials=1 "
+    "ps_state.audit_log.audit_events=7 ps_state.graph_log.entries=5 "
+    "ps_state.public.access_role_assignments=2 ps_state.public.ps_schema_migrations=4"
+)
 
 FAKE_KUBECTL = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"$FAKE_KUBECTL_LOG"
@@ -61,8 +85,13 @@ case "$args" in
     cat >>"$FAKE_DIR/seed-stdin.txt"; exit 0 ;;
   *"psql"*"DISTINCT graph"*) printf 'alpha\\nbeta\\n'; exit 0 ;;
   *psql*)
-    if [[ -e "$FAKE_DIR/restored" ]]; then printf '%s\\n' "$FAKE_COUNT_AFTER"
-    else printf '%s\\n' "$FAKE_COUNT_BEFORE"; fi
+    [[ "$args" =~ -d\\ ([a-z_]+) ]]
+    phase=before
+    [[ -e "$FAKE_DIR/helper-applied" ]] && phase=wiped
+    [[ -e "$FAKE_DIR/restored" ]] && phase=after
+    fail_var="FAKE_PSQL_FAIL_${BASH_REMATCH[1]}"
+    if [[ -n "${!fail_var:-}" ]]; then exit "${!fail_var}"; fi
+    cat "$FAKE_DIR/counts-$phase/${BASH_REMATCH[1]}"
     exit 0 ;;
 esac
 exit 0
@@ -101,8 +130,9 @@ def _run(
     stdin: str = "yes\n",
     helm_values: dict[str, object] | None = None,
     after_digests: dict[str, str] | None = None,
-    count_before: str = "7",
-    count_after: str = "7",
+    counts_before: dict[str, list[str]] | None = None,
+    counts_after: dict[str, list[str]] | None = None,
+    psql_failures: dict[str, int] | None = None,
 ) -> RunResult:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -122,6 +152,16 @@ def _run(
         ("empty.json", EMPTY_DIGESTS),
     ):
         (work / name).write_text(json.dumps(content))
+    for phase, counts in (
+        ("before", counts_before),
+        ("after", counts_after),
+        ("wiped", WIPED_COUNTS),
+    ):
+        (work / f"counts-{phase}").mkdir()
+        for database, entries in (COUNTS if counts is None else counts).items():
+            (work / f"counts-{phase}" / database).write_text(
+                "".join(f"{entry}\n" for entry in entries)
+            )
     (work / "source").mkdir()
     (work / "source" / "PG_VERSION").write_bytes(PAYLOAD)
     tar = shutil.which("tar")
@@ -146,9 +186,9 @@ def _run(
         "FAKE_DIGESTS_EMPTY": str(work / "empty.json"),
         "FAKE_TAR": str(work / "backup.tar"),
         "FAKE_READY": READY_OK,
-        "FAKE_COUNT_BEFORE": count_before,
-        "FAKE_COUNT_AFTER": count_after,
     }
+    for database, code in (psql_failures or {}).items():
+        env[f"FAKE_PSQL_FAIL_{database}"] = str(code)
     result = subprocess.run(  # noqa: S603 - bash is a shutil.which-resolved absolute path; args are literals
         [bash, str(SCRIPT), *args],
         env=env,
@@ -182,7 +222,7 @@ def _index(calls: list[str], needle: str, *, start: int = 0) -> int:
     raise AssertionError(message)
 
 
-def test_seed_pipes_both_seed_tools_into_the_service_pod_with_the_instruments(
+def test_seed_pipes_the_three_seed_tools_into_the_service_pod_with_the_instruments(
     tmp_path: Path,
 ) -> None:
     result = _run(tmp_path, ["seed", "--instrument", "A-1.0", "--instrument", "B-1.0"])
@@ -193,9 +233,14 @@ def test_seed_pipes_both_seed_tools_into_the_service_pod_with_the_instruments(
     grants = _index(
         result.kubectl, "exec -i deploy/policy-system-ps-service -- python -", start=content + 1
     )
-    assert grants > content
+    state = _index(
+        result.kubectl, "exec -i deploy/policy-system-ps-service -- python -", start=grants + 1
+    )
+    assert content < grants < state
     assert result.seed_stdin == (
-        (TOOLS / "seed_content.py").read_text() + (TOOLS / "seed_grants.py").read_text()
+        (TOOLS / "seed_content.py").read_text()
+        + (TOOLS / "seed_grants.py").read_text()
+        + (TOOLS / "seed_state.py").read_text()
     )
 
 
@@ -256,11 +301,62 @@ def test_e2e_exits_one_and_names_the_graph_when_a_digest_differs(tmp_path: Path)
 
 
 def test_e2e_exits_one_when_a_count_differs(tmp_path: Path) -> None:
-    result = _run(tmp_path, _e2e_args(tmp_path), count_before="7", count_after="8")
+    changed = {
+        **COUNTS,
+        "ps_signing": ["public.pending_approvals=1", "public.signing_credentials=0"],
+    }
+    result = _run(tmp_path, _e2e_args(tmp_path), counts_after=changed)
 
     assert result.code == 1
     assert "event=e2e_verified" not in result.stderr
-    assert "audit_events" in result.stderr
+    assert (
+        "Count differs for ps_signing.public.signing_credentials: before 1, after 0"
+        in result.stderr
+    )
+    assert "Count differs for ps_signing.public.pending_approvals" not in result.stderr
+
+
+def test_e2e_names_a_table_that_is_missing_after_the_restore(tmp_path: Path) -> None:
+    missing = {**COUNTS, "ps_signing": ["public.pending_approvals=1"]}
+    result = _run(tmp_path, _e2e_args(tmp_path), counts_after=missing)
+
+    assert result.code == 1
+    assert (
+        "Count differs for ps_signing.public.signing_credentials: before 1, after absent"
+        in result.stderr
+    )
+    assert "event=e2e_verified" not in result.stderr
+
+
+def test_e2e_names_a_table_that_only_exists_after_the_restore(tmp_path: Path) -> None:
+    extra = {**COUNTS, "ps_state": [*COUNTS["ps_state"], "public.extra_table=3"]}
+    result = _run(tmp_path, _e2e_args(tmp_path), counts_after=extra)
+
+    assert result.code == 1
+    assert "Count differs for ps_state.public.extra_table: before absent, after 3" in result.stderr
+
+
+def test_e2e_logs_identical_before_and_after_counts_for_both_databases(tmp_path: Path) -> None:
+    result = _run(tmp_path, _e2e_args(tmp_path))
+
+    assert result.code == 0, result.stderr
+    assert f"event=counts phase=before {COUNTS_LINE}\n" in result.stderr
+    assert f"event=counts phase=after {COUNTS_LINE}\n" in result.stderr
+
+
+def test_seed_logs_the_counts_of_every_table(tmp_path: Path) -> None:
+    result = _run(tmp_path, ["seed"])
+
+    assert result.code == 0, result.stderr
+    assert f"event=counts phase=seeded {COUNTS_LINE}\n" in result.stderr
+
+
+def test_e2e_stops_before_the_backup_when_the_counts_cannot_be_read(tmp_path: Path) -> None:
+    result = _run(tmp_path, _e2e_args(tmp_path), psql_failures={"ps_signing": 2})
+
+    assert result.code == 1
+    assert "event=e2e_verified" not in result.stderr
+    assert not any("pg_basebackup" in call for call in result.kubectl)
 
 
 def test_e2e_skip_restore_leaves_the_data_unrestored_and_fails_the_comparison(
@@ -271,6 +367,149 @@ def test_e2e_skip_restore_leaves_the_data_unrestored_and_fails_the_comparison(
     assert result.code == 1
     assert not any("tar -xf" in call for call in result.kubectl)
     assert "graph alpha" in result.stderr
+    assert "Count differs for ps_state.audit_log.audit_events: before 7, after 0" in result.stderr
+    assert "Count differs for ps_state.public.ps_schema_migrations" not in result.stderr
+
+
+EMPTY_SIGNING = {
+    **COUNTS,
+    "ps_signing": ["public.pending_approvals=0", "public.signing_credentials=1"],
+}
+
+
+def test_e2e_stops_before_the_backup_when_a_table_is_empty_after_seeding(tmp_path: Path) -> None:
+    result = _run(tmp_path, _e2e_args(tmp_path), counts_before=EMPTY_SIGNING)
+
+    assert result.code == 1
+    assert "ps_signing.public.pending_approvals" in result.stderr
+    assert "event=e2e_failed" in result.stderr
+    assert "event=e2e_verified" not in result.stderr
+    assert not any("pg_basebackup" in call for call in result.kubectl)
+
+
+def test_seed_fails_and_names_every_table_that_is_empty_after_seeding(tmp_path: Path) -> None:
+    both_empty = {
+        "ps_state": [*COUNTS["ps_state"][:-1], "public.ps_schema_migrations=0"],
+        "ps_signing": EMPTY_SIGNING["ps_signing"],
+    }
+    result = _run(tmp_path, ["seed"], counts_before=both_empty)
+
+    assert result.code == 1
+    assert "ps_signing.public.pending_approvals" in result.stderr
+    assert "ps_state.public.ps_schema_migrations" in result.stderr
+    assert 'Table "ps_state.graph_log.entries" is empty' not in result.stderr
+
+
+def _source(tmp_path: Path, snippet: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    assert bash is not None
+    return subprocess.run(  # noqa: S603 - bash is a shutil.which-resolved absolute path; args are literals
+        [bash, "-c", f'source "$1"; shift; {snippet}', "_", str(SCRIPT), *arguments],
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        check=False,
+        cwd=tmp_path,
+    )
+
+
+def test_seed_guard_passes_an_empty_table_named_in_the_exception_list(tmp_path: Path) -> None:
+    line = "ps_signing.public.pending_approvals=0 ps_state.graph_log.entries=5"
+
+    exempt = _source(
+        tmp_path,
+        'assert_seeded "$@"',
+        line,
+        "ps_signing.public.pending_approvals|the live seed leaves it empty",
+    )
+    unlisted = _source(tmp_path, 'assert_seeded "$@"', line)
+
+    assert exempt.returncode == 0, exempt.stderr
+    assert unlisted.returncode == 1
+    assert "ps_signing.public.pending_approvals" in unlisted.stderr
+
+
+def test_seed_guard_does_not_exempt_a_table_that_only_shares_a_prefix(tmp_path: Path) -> None:
+    result = _source(
+        tmp_path,
+        'assert_seeded "$@"',
+        "ps_state.public.runtime_config_extra=0",
+        "ps_state.public.runtime_config|reason",
+    )
+
+    assert result.returncode == 1
+    assert "ps_state.public.runtime_config_extra" in result.stderr
+
+
+def test_seed_empty_exceptions_are_declared_and_each_carries_a_reason(tmp_path: Path) -> None:
+    result = _source(
+        tmp_path,
+        'for entry in ${SEED_EMPTY_EXCEPTIONS[@]+"${SEED_EMPTY_EXCEPTIONS[@]}"}; do '
+        'printf "%s\\n" "$entry"; done',
+    )
+
+    assert result.returncode == 0, result.stderr
+    for entry in result.stdout.splitlines():
+        assert re.fullmatch(r"[a-z_]+\.[a-z_]+\.[a-z_]+\|\S.*", entry), entry
+
+
+COUNTS_BEFORE_LINE = "ps_state.graph_log.entries=5 ps_state.public.runtime_config=1"
+
+
+def test_count_comparison_passes_when_every_entry_is_equal(tmp_path: Path) -> None:
+    result = _source(tmp_path, 'compare_counts "$@"', COUNTS_BEFORE_LINE, COUNTS_BEFORE_LINE)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+
+
+def test_count_comparison_skips_a_volatile_table_and_logs_it(tmp_path: Path) -> None:
+    after = "ps_state.graph_log.entries=9 ps_state.public.runtime_config=1"
+    volatile = "ps_state.graph_log.entries|rewritten by replay at startup"
+
+    skipped = _source(tmp_path, 'compare_counts "$@"', COUNTS_BEFORE_LINE, after, volatile)
+    listed_only = _source(tmp_path, 'compare_counts "$@"', COUNTS_BEFORE_LINE, after)
+
+    assert skipped.returncode == 0, skipped.stderr
+    assert "event=counts_volatile_skipped table=ps_state.graph_log.entries" in skipped.stderr
+    assert "Count differs" not in skipped.stderr
+    assert listed_only.returncode == 1
+    assert "Count differs for ps_state.graph_log.entries: before 5, after 9" in listed_only.stderr
+
+
+def test_count_comparison_still_reports_the_other_tables_when_one_is_volatile(
+    tmp_path: Path,
+) -> None:
+    after = "ps_state.graph_log.entries=9 ps_state.public.runtime_config=0"
+    volatile = "ps_state.graph_log.entries|rewritten by replay at startup"
+
+    result = _source(tmp_path, 'compare_counts "$@"', COUNTS_BEFORE_LINE, after, volatile)
+
+    assert result.returncode == 1
+    assert "Count differs for ps_state.public.runtime_config: before 1, after 0" in result.stderr
+    assert "Count differs for ps_state.graph_log.entries" not in result.stderr
+
+
+def test_count_comparison_does_not_treat_a_name_prefix_as_the_same_table(tmp_path: Path) -> None:
+    result = _source(
+        tmp_path,
+        'compare_counts "$@"',
+        "ps_state.public.runtime_config=1",
+        "ps_state.public.runtime_config=1 ps_state.public.runtime_config_extra=2",
+        "ps_state.public.runtime_config|reason",
+    )
+
+    assert result.returncode == 1
+    assert "Count differs for ps_state.public.runtime_config_extra" in result.stderr
+
+
+def test_sourcing_the_script_declares_the_lists_and_runs_nothing(tmp_path: Path) -> None:
+    result = _source(tmp_path, "declare -p SEED_EMPTY_EXCEPTIONS VOLATILE_COUNT_TABLES")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("declare -") == 2
+    assert "event=" not in result.stderr
+    assert "Usage" not in result.stderr
 
 
 def test_e2e_refuses_a_non_kind_context_without_touching_the_cluster(tmp_path: Path) -> None:

@@ -60,7 +60,9 @@ case "$args" in
       mv "$FAKE_READY_SEQUENCE.next" "$FAKE_READY_SEQUENCE"
     fi
     printf '%s\\n' "$first"; exit 0 ;;
-  *psql*) printf '7\\n'; exit 0 ;;
+  *psql*)
+    [[ "$args" =~ -d\\ ([a-z_]+) ]]
+    cat "$FAKE_COUNTS_DIR/${BASH_REMATCH[1]}"; exit 0 ;;
 esac
 exit 0
 """
@@ -136,6 +138,10 @@ def _run(
     ready_stdin.write_text("")
     ready_file = tmp_path / "ready.seq"
     ready_file.write_text("\n".join(ready_lines) + "\n")
+    counts_dir = tmp_path / "counts"
+    counts_dir.mkdir()
+    (counts_dir / "ps_state").write_text("audit_log.audit_events=7\npublic.runtime_config=2\n")
+    (counts_dir / "ps_signing").write_text("public.signing_credentials=3\n")
     stdin_copy = tmp_path / "helper-stdin.tar"
     manifest = tmp_path / "helper-pod.yaml"
 
@@ -153,6 +159,7 @@ def _run(
         "FAKE_PG_LOGS": str(pg_logs_file),
         "FAKE_READY_SEQUENCE": str(ready_file),
         "FAKE_READY_STDIN": str(ready_stdin),
+        "FAKE_COUNTS_DIR": str(counts_dir),
         "FAKE_MISSING_SECRET": missing_secret,
         "FAKE_STDIN_FILE": str(stdin_copy),
         "FAKE_APPLY_FILE": str(manifest),
@@ -400,13 +407,16 @@ def test_restore_fails_when_helm_upgrade_fails(tmp_path: Path) -> None:
     ]
 
 
-def test_restore_logs_counts_after_the_restore(tmp_path: Path) -> None:
+def test_restore_logs_the_counts_of_every_table_after_the_restore(tmp_path: Path) -> None:
     artifact = _make_artifact(tmp_path)
 
     result = _run(tmp_path, _restore_args(artifact))
 
     assert result.code == 0, result.stderr
-    assert "event=counts phase=restored audit_events=7" in result.stderr
+    assert (
+        "event=counts phase=restored ps_signing.public.signing_credentials=3 "
+        "ps_state.audit_log.audit_events=7 ps_state.public.runtime_config=2\n"
+    ) in result.stderr
 
 
 def test_verify_provision_passes_for_a_complete_job_and_clean_logs(tmp_path: Path) -> None:

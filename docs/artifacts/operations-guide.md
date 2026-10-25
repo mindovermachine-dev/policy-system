@@ -790,7 +790,7 @@ on the data.
 **If the check reports a break.** Treat it as a security incident. Preserve the database and its
 logs as they are and do not run anything that writes to the audit table. Compare the row counts
 with the last [Backup](#backup) using `scripts/verify-backup-restore.sh counts`
-(`audit_events` is counted from `audit_log.audit_events`), and restore an earlier backup to
+(the audit trail is counted as `ps_state.audit_log.audit_events`), and restore an earlier backup to
 compare the rows around `chain_seq`.
 
 **Backup and restore.** The physical [Backup](#backup) includes the `audit_log` schema, the owner
@@ -907,7 +907,6 @@ configuration, and every component uses that name, so changing it takes effect o
 A value that is set but empty or whitespace-only makes the service refuse to start, with a
 `ServiceConfigurationError` that names `PS_FALKORDB_GRAPH`. The per-instrument
 `{short}_baseline` and `{short}_native` graphs are not affected by this setting.
-
 
 ### What `/ready` reveals
 
@@ -1256,9 +1255,57 @@ against the live database.
 
 `scripts/verify-backup-restore.sh backup [--out-dir DIR]` runs the same command, writes
 `ps-postgres-<UTC timestamp>.tar` into `DIR`, performs the checks below, prints the file path
-and logs the row counts of `audit_events` (read from `audit_log.audit_events`), `access_role_assignments` and `graph_log.entries`
-before and after. It refuses a context that is not `kind-*` unless `--allow-context <ctx>`
-names it.
+and logs the exact row count of every base table of the `ps_state` and `ps_signing` databases
+before and after, as `event=counts` entries keyed `<database>.<schema>.<table>` (for example
+`ps_state.audit_log.audit_events=7`). The tables are discovered from the Postgres catalog, so a
+table added by a migration is counted with no change to the script; the bookkeeping tables
+`ps_state.public.ps_schema_migrations` and `ps_signing.public.schema_migrations` are among
+them. The same keys appear in `scripts/verify-backup-restore.sh counts`, `restore` and `e2e`.
+The counts cover PS Postgres only: Authentik's database is a separate deployment and is not
+covered by this script (see [Authentik Backup](#authentik-backup)). The script refuses a
+context that is not `kind-*` unless `--allow-context <ctx>` names it.
+
+### What the verifier seeds
+
+`scripts/verify-backup-restore.sh seed` (also the first step of `e2e`) fills a running `kind-*`
+deployment so that every table the counts cover holds data worth restoring. It restores curated
+instruments through the restore path, grants access roles through the access-role store, and
+writes one synthetic row to each of these tables through the service's own stores:
+
+| Table | Seeded row |
+| --- | --- |
+| `ps_state.public.runtime_config` | the `curated_source.base_url` override, set to the service's configured catalog URL (kept if an override already exists) |
+| `ps_state.public.ingestion_runs` | one finished run with a fixed identifier |
+| `ps_signing.public.pending_approvals` | one pending approval, added on every `seed` run |
+| `ps_signing.public.signing_credentials` | one credential with fixed synthetic bytes |
+
+The values are synthetic and the base URL is only syntax-checked, so run `seed` against a
+throwaway `kind-*` cluster: its curated-source override names a placeholder host, not a real
+catalog. After seeding, the script logs the counts (`event=counts phase=seeded`) and exits 1,
+naming every table that still holds no row. `e2e` applies the same check to its counts before the backup and stops there.
+A table may be empty only as a listed exception: the `SEED_EMPTY_EXCEPTIONS` list at the top of
+the script names it with a reason. The exception list is empty: every table of `ps_state` and `ps_signing` is expected to hold
+at least one row after seeding.
+
+### What the verifier compares
+
+`scripts/verify-backup-restore.sh e2e` seeds the cluster, takes one backup, wipes both volumes,
+restores, and then compares the cluster with itself before the backup:
+
+- The canonical graph digest of every graph that `graph_log` has entries for. A differing graph
+  is named in the output.
+- The row count of every table the catalog lists in `ps_state` and `ps_signing`, including the
+  bookkeeping tables `ps_state.public.ps_schema_migrations` and
+  `ps_signing.public.schema_migrations`. Every table that differs is reported on its own line as
+  `Count differs for <database>.<schema>.<table>: before <n>, after <n>`; a table that exists on
+  one side only shows `absent` for the other.
+
+`e2e` exits 0 and logs `event=e2e_verified` only if every digest and every count is equal;
+otherwise it reports every difference it found, logs `event=e2e_failed` and exits 1. A table named
+in the `VOLATILE_COUNT_TABLES` list at the top of the script, with a reason, is not compared and
+is logged as `event=counts_volatile_skipped table=<database>.<schema>.<table>`. The list is empty:
+no table is known to change across a backup and restore. With `--skip-restore` the wiped volumes
+stay unrestored, so the comparison must fail and name the emptied tables.
 
 ### Check the backup
 
@@ -1429,8 +1476,9 @@ three `existingSecret` values are set on the release and those Secrets exist, th
 readable tar, and you type `yes` (or pass `--yes`). It then runs the steps below in order and
 stops at the first failure with `ps-service` still stopped. `--chart` defaults to the published
 OCI chart `oci://ghcr.io/mindovermachine-dev/charts/policy-system`; pass `--chart-version` to
-keep the version the release runs. The final lines log the row counts of `audit_events`,
-`access_role_assignments` and `graph_log.entries` (`event=counts phase=restored`).
+keep the version the release runs. The final line logs the row count of every table of
+`ps_state` and `ps_signing` (`event=counts phase=restored`), keyed
+`<database>.<schema>.<table>` as in [Backup](#backup).
 
 ### Restore by hand
 
@@ -1531,10 +1579,10 @@ keep the version the release runs. The final lines log the row counts of `audit_
    through its digest and count comparison. A gated graph is handled as described in
    [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph).
 7. Compare the counts with the system the backup was taken from:
-   `scripts/verify-backup-restore.sh counts` prints `audit_events`, `access_role_assignments` and
-   `graph_log_entries`. They equal the counts logged when the backup was taken; anything
-   recorded after the backup is gone, including audit events, role grants and logged graph
-   changes.
+   `scripts/verify-backup-restore.sh counts` prints the row count of every table of `ps_state`
+   and `ps_signing`, keyed `<database>.<schema>.<table>`. Every entry equals the count logged
+   when the backup was taken; anything recorded after the backup is gone, including audit
+   events, role grants, signing credentials and logged graph changes.
 
 ### If a credentials Secret is lost
 

@@ -26,7 +26,7 @@ testpaths = ["ps-service/tests", "ps-cli/tests", "ps-test-support/tests"]
 # via its full filesystem path without touching sys.path or requiring a unique basename --
 # pytest's own documented recommendation for exactly this multi-package-without-__init__.py
 # shape. No per-file renames needed as a workaround.
-# Default marker deselection: a bare `pytest` is the fast, hermetic suite. The six markers
+# Default marker deselection: a bare `pytest` is the fast, hermetic suite. The seven markers
 # below are environment-dependent (network, FalkorDB, LLM credentials, a container runtime)
 # and are not self-skipping -- without this, a bare run in an environment lacking them hangs
 # through ~100 tests' connection timeouts rather than failing fast. Explicit `-m` on the
@@ -61,7 +61,7 @@ addopts = [
     "-p",
     "ps_test_support.memory_aware_workers",
     "-m",
-    "not integration and not llm_live and not cellar_live and not falkordb_live and not postgres_live and not container_image",
+    "not integration and not llm_live and not cellar_live and not falkordb_live and not postgres_live and not container_image and not authentik_blueprint",
 ]
 markers = [
     "integration: subprocess-based tests that spawn a real process (slower, environment-dependent)",
@@ -70,6 +70,7 @@ markers = [
     "falkordb_live: requires a real, reachable FalkorDB instance (slow, environment-dependent)",
     "postgres_live: requires a real, reachable PostgreSQL instance (slow, environment-dependent)",
     "container_image: builds and runs the ps-service container image (slow, requires docker or podman)",
+    "authentik_blueprint: applies the chart's Authentik blueprint to the pinned Authentik image (slow, requires docker or podman and a public image pull)",
 ]
 
 [tool.ruff]

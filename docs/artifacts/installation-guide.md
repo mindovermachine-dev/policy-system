@@ -350,7 +350,11 @@ Things to know:
   - Three failed passkey assertions for a typed username lock that sign-in out (the fourth
     attempt is denied). Failed autofill sign-ins are not counted.
   - Authentik's shipped `default-authentication-flow` is not used by the brand but stays
-    reachable by its direct URL.
+    reachable by its direct URL. On an install upgraded from an earlier revision, a reputation
+    Deny binding left on that flow is not removed and has no effect on login through `ps-login`.
+  - The chart's blueprint is applied to the pinned Authentik image in CI. To run that check
+    locally, use `uv run pytest -m authentik_blueprint -q -n0` (needs podman or docker; the
+    first run pulls a 1.4 GB image).
 - This flow does not change production TLS termination (Let's Encrypt, cert-manager).
 
 ---

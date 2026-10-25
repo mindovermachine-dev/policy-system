@@ -151,7 +151,14 @@ password:
   A user with no registered passkey is denied, and an administrator-set password is not usable
   in this flow. Such a user (including the bundled `akadmin`) regains access through an admin
   recovery link. Authentik's shipped `default-authentication-flow` is not part of the brand
-  and is not modified, but it stays reachable by its direct URL.
+  and is not modified, but it stays reachable by its direct URL. On an install upgraded from an
+  earlier revision, a reputation Deny binding left on that flow is not removed and has no effect
+  on login through `ps-login`.
+
+  The blueprint is applied to the pinned Authentik image in CI. To run that check locally, use
+  `uv run pytest -m authentik_blueprint -q -n0` (needs podman or docker; the first run pulls a
+  1.4 GB image). `scripts/verify-authentik-blueprint.sh [--twice] [--upgrade-from REV]
+  [BLUEPRINT]` runs the same apply directly.
 
 ### Configuring PS Service manually (non-script Authentik instances)
 

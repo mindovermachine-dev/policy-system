@@ -66,11 +66,11 @@ tests:
           path: data["authentik-blueprint.yaml"]
           pattern: "negate: false"
 
-  - it: obsolete reputation deny binding on the shipped authentication flow is removed
+  - it: no entry deletes a row with state absent
     asserts:
-      - matchRegex:
+      - notMatchRegex:
           path: data["authentik-blueprint.yaml"]
-          pattern: "state: absent\\s*\\n\\s*identifiers:\\s*\\n\\s*target: !Find \\[authentik_flows\\.flow, \\[slug, default-authentication-flow\\]\\]\\s*\\n\\s*stage: !KeyOf ps-login-reputation-deny-stage\\s*\\n\\s*order: 25"
+          pattern: "state: absent"
 
   - it: login passkey validate stage is passkey-only, requires user verification and denies accounts without a passkey
     asserts:

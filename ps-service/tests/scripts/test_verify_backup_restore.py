@@ -1,8 +1,8 @@
 """Tests for `scripts/verify-backup-restore.sh backup`.
 
 The script runs for real against a fake `kubectl` on PATH (the external CLI is the process
-boundary). The fake records its argv, answers `psql` count queries from a counter file that
-advances after each `pg_basebackup`, and streams a real tar for `pg_basebackup`.
+boundary). The fake records its argv, answers each `psql` count query from the fixture file named
+after the `-d` database, and streams a real tar for `pg_basebackup`.
 """
 
 from __future__ import annotations
@@ -23,6 +23,14 @@ SCRIPT = REPO_ROOT / "scripts" / "verify-backup-restore.sh"
 
 SUBPROCESS_TIMEOUT_SECONDS = 30.0
 
+STATE_COUNTS = "audit_log.audit_events=7\npublic.runtime_config=2\n"
+SIGNING_COUNTS = "public.signing_credentials=3\n"
+EXPECTED_COUNTS = (
+    "ps_signing.public.signing_credentials=3 "
+    "ps_state.audit_log.audit_events=7 "
+    "ps_state.public.runtime_config=2"
+)
+
 EXPECTED_BACKUP_ARGS = "pg_basebackup -U postgres_admin -D - -Ft -X fetch -c fast"
 
 FAKE_KUBECTL = """#!/usr/bin/env bash
@@ -37,8 +45,8 @@ if [[ "$args" == *pg_basebackup* ]]; then
   exit "${FAKE_BACKUP_EXIT:-0}"
 fi
 if [[ "$args" == *psql* ]]; then
-  count="$(cat "$FAKE_COUNTER")"
-  printf '%s\\n' "$count"
+  [[ "$args" =~ -d\\ ([a-z_]+) ]]
+  cat "$FAKE_COUNTS_DIR/${BASH_REMATCH[1]}"
   exit 0
 fi
 exit 99
@@ -82,8 +90,10 @@ def _run_backup(
     _write_executable(bin_dir / "kubectl", FAKE_KUBECTL)
     log = tmp_path / "kubectl.log"
     log.write_text("")
-    counter = tmp_path / "counter"
-    counter.write_text("7")
+    counts_dir = tmp_path / "counts"
+    counts_dir.mkdir()
+    (counts_dir / "ps_state").write_text(STATE_COUNTS)
+    (counts_dir / "ps_signing").write_text(SIGNING_COUNTS)
     payload_file = tmp_path / "payload.tar"
     payload_file.write_bytes(_valid_tar() if payload is None else payload)
     out_dir = tmp_path / "out"
@@ -98,7 +108,7 @@ def _run_backup(
         "FAKE_KUBECTL_LOG": str(log),
         "FAKE_BACKUP_PAYLOAD": str(payload_file),
         "FAKE_BACKUP_EXIT": str(backup_exit),
-        "FAKE_COUNTER": str(counter),
+        "FAKE_COUNTS_DIR": str(counts_dir),
     }
     result = subprocess.run(  # noqa: S603 - bash is a shutil.which-resolved absolute path; args are literals
         [bash, str(SCRIPT), "backup", "--out-dir", str(out_dir), *extra_args],
@@ -128,21 +138,22 @@ def test_backup_runs_one_pg_basebackup_and_writes_one_verified_tar(tmp_path: Pat
     assert "event=backup_verified" in result.stderr
 
 
-def test_backup_logs_pre_and_post_counts(tmp_path: Path) -> None:
+def test_backup_logs_pre_and_post_counts_for_every_table_of_both_databases(
+    tmp_path: Path,
+) -> None:
     result = _run_backup(tmp_path)
 
     assert result.code == 0, result.stderr
-    assert "event=counts phase=pre audit_events=7" in result.stderr
-    assert "event=counts phase=post audit_events=7" in result.stderr
+    assert f"event=counts phase=pre {EXPECTED_COUNTS}\n" in result.stderr
+    assert f"event=counts phase=post {EXPECTED_COUNTS}\n" in result.stderr
 
 
 def test_backup_counts_the_audit_trail_from_its_audit_log_schema(tmp_path: Path) -> None:
     result = _run_backup(tmp_path)
 
     assert result.code == 0, result.stderr
-    count_queries = [call for call in result.kubectl_calls if "SELECT count(*)" in call]
-    assert any("FROM audit_log.audit_events" in call for call in count_queries)
-    assert not any(call.endswith("FROM audit_events") for call in count_queries)
+    assert "ps_state.audit_log.audit_events=7" in result.stderr
+    assert "ps_state.audit_events" not in result.stderr
 
 
 def test_backup_refuses_a_non_kind_context_without_allow_context(tmp_path: Path) -> None:
