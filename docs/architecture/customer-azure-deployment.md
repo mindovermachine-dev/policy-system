@@ -506,8 +506,9 @@ The logic is shared with `deploy-ps-eval.sh` through `scripts/lib/authentik-owne
   missing release or value, or an `--owner-email` that differs from the recorded subject, stops the
   mode with no change.
 - **Everything is read and checked before any change**: cluster reachability, the shared Authentik
-  token, the owner user, the owner's devices, and the owner's signing state in the PS Service pod.
-  Without `--yes` the operator confirms by typing the owner email.
+  token, the release's chart version against the VERSION file of the bundle in use (published
+  chart only), the owner user, the owner's devices, and the owner's signing state in the PS
+  Service pod. Without `--yes` the operator confirms by typing the owner email.
 - **Authentik side**, through the same temporary `kubectl port-forward` as owner creation: deletes
   every owner device of every type, every owner session, the owner's OAuth refresh then access
   tokens, and the owner's other tokens (app passwords, API tokens, old recovery links). Every

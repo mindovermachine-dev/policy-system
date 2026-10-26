@@ -199,7 +199,14 @@ needed):
 scripts/deploy-ps-prod.sh --reset-owner-passkey --owner-email <email>
 ```
 
-The email must be the owner recorded in the installed release. The mode takes no other deploy
+The email must be the owner recorded in the installed release. The release must be at the
+version of the bundle you run the script from (the number in the bundle's `VERSION` file): the
+reset does not upgrade the release, and an older release may not have the command that clears the
+signing passkeys. If the versions differ, the mode stops before it changes anything and prints
+both. Run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) from the same bundle (see
+[Updating to the latest version](#updating-to-the-latest-version)) or run the deploy script without --reset-owner-passkey, then run the reset again. The check runs only for a bundle
+with the published chart: with no `VERSION` file (a clone) or a chart given with `PS_CHART_REF`
+that is not the published one, the mode skips it. The mode takes no other deploy
 flag. Without `--yes` it shows the owner, the number of Authentik devices, signing credentials
 and pending approvals it removes, the kube context and the hostname, and asks for confirmation:
 `y` on the evaluator, the owner email typed in full on production. `--yes` skips the question and
@@ -244,7 +251,10 @@ printed line, as the kube context.
 
 **Failure.** If a step fails, no link is printed, the mode exits non-zero and states how many
 devices, sessions, OAuth tokens, app-password/API tokens, signing credentials and pending
-approvals remain. Running it again is safe and finishes the reset.
+approvals remain. Running it again is safe and finishes the reset. When the signing step in the
+PS Service pod fails without a reason code, the error shows the last line the command printed
+(for example `No module named ps_service.passkey_signing.revoke` when the release predates the
+command); read the version note above before you look at the pods.
 
 ### Upgrading an existing evaluator
 

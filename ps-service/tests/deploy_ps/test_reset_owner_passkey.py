@@ -96,7 +96,9 @@ def test_prod_reset_makes_no_az_call_and_no_helm_upgrade(
 
     assert deploy_ps_fixture.read_az_log() == []
     assert deploy_ps_fixture.read_helm_log()
-    assert all(c.startswith(("status ", "get values ")) for c in deploy_ps_fixture.read_helm_log())
+    assert all(
+        c.startswith(("status ", "get values ", "list ")) for c in deploy_ps_fixture.read_helm_log()
+    )
     assert "EXPERIMENTAL" not in run.stderr
     verbs = re.compile(r"\b(apply|delete|create|annotate|label|rollout)\b")
     assert not [c for c in deploy_ps_fixture.read_kubectl_log() if verbs.search(c)]
@@ -500,3 +502,118 @@ def test_prod_reset_changes_no_other_user_and_no_role_assignment(
     assert not [c for c in calls if "/rbac/" in str(c["url"]) or "/core/groups/" in str(c["url"])]
     assert deploy_ps_fixture.read_az_log() == []
     assert not [c for c in deploy_ps_fixture.read_kubectl_log() if "role" in c.lower()]
+
+
+def _count_change_surface(fixture: DeployPsFixture) -> str:
+    """Everything a reset could change: the fake Authentik state and the signing state."""
+    return fixture.curl_state.read_text(encoding="utf-8") + json.dumps(fixture.signing_state())
+
+
+def test_prod_reset_from_a_bundle_of_another_version_stops_before_any_change(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _installed(deploy_ps_fixture)
+    _seed_every_credential(deploy_ps_fixture)
+    deploy_ps_fixture.seed_helm_release(
+        deploy_ps_fixture.read_helm_release_values() or {}, chart_version="12.0.1"
+    )
+    deploy_ps_fixture.write_bundle_version("12.1.0")
+    before = _count_change_surface(deploy_ps_fixture)
+
+    run = deploy_ps_fixture.run_deploy(*RESET, expect=1)
+
+    assert "at chart version 12.0.1" in run.stderr
+    assert "this bundle is version 12.1.0" in run.stderr
+    assert "run the deploy script without --reset-owner-passkey" in run.stderr
+    assert not _link_lines(run)
+    assert _count_change_surface(deploy_ps_fixture) == before
+    assert deploy_ps_fixture.read_curl_calls() == []
+    assert not [c for c in deploy_ps_fixture.read_kubectl_log() if "exec " in c]
+
+
+def test_prod_reset_version_mismatch_is_reported_before_the_owner_email_is_asked(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _installed(deploy_ps_fixture)
+    deploy_ps_fixture.seed_helm_release(
+        deploy_ps_fixture.read_helm_release_values() or {}, chart_version="12.0.1"
+    )
+    deploy_ps_fixture.write_bundle_version("12.1.0")
+
+    run = deploy_ps_fixture.run_deploy("--reset-owner-passkey", expect=1)
+
+    assert "this bundle is version 12.1.0" in run.stderr
+    assert "owner email" not in run.output.lower()
+
+
+def test_prod_reset_from_a_bundle_at_the_deployed_version_reaches_the_signing_step(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _installed(deploy_ps_fixture)
+    deploy_ps_fixture.seed_helm_release(
+        deploy_ps_fixture.read_helm_release_values() or {}, chart_version="12.1.0"
+    )
+    deploy_ps_fixture.write_bundle_version("12.1.0")
+
+    run = deploy_ps_fixture.run_deploy(*RESET)
+
+    assert [c for c in deploy_ps_fixture.read_kubectl_log() if "passkey_signing.revoke" in c]
+    assert len(_link_lines(run)) == 1
+
+
+def test_prod_reset_without_a_version_file_never_asks_helm_for_the_chart_version(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _installed(deploy_ps_fixture)
+
+    run = deploy_ps_fixture.run_deploy(*RESET)
+
+    assert len(_link_lines(run)) == 1
+    assert not [c for c in deploy_ps_fixture.read_helm_log() if c.startswith("list ")]
+
+
+def test_prod_reset_with_an_unreadable_release_version_fails_closed(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _installed(deploy_ps_fixture)
+    deploy_ps_fixture.write_bundle_version("12.1.0")
+
+    run = deploy_ps_fixture.run_deploy(*RESET, expect=1)
+
+    assert "Could not read the chart version of Helm release policy-system" in run.stderr
+    assert deploy_ps_fixture.read_curl_calls() == []
+
+
+def test_prod_reset_with_a_local_chart_override_skips_the_version_check(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _installed(deploy_ps_fixture)
+    deploy_ps_fixture.seed_helm_release(
+        deploy_ps_fixture.read_helm_release_values() or {}, chart_version="0.0.0-dev"
+    )
+    deploy_ps_fixture.write_bundle_version("12.1.0")
+
+    run = deploy_ps_fixture.run_deploy(*RESET, extra_env={"PS_CHART_REF": "./charts/policy-system"})
+
+    assert len(_link_lines(run)) == 1
+    assert not [c for c in deploy_ps_fixture.read_helm_log() if c.startswith("list ")]
+
+
+def test_prod_reset_against_an_image_without_the_revoke_module_shows_the_pod_error(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    _installed(deploy_ps_fixture)
+    _seed_every_credential(deploy_ps_fixture)
+    deploy_ps_fixture.seed_signing(
+        stderr="python: No module named ps_service.passkey_signing.revoke\n"
+    )
+    before = deploy_ps_fixture.curl_state.read_text(encoding="utf-8")
+
+    run = deploy_ps_fixture.run_deploy(*RESET, expect=1)
+
+    assert "failed (python: No module named ps_service.passkey_signing.revoke)." in run.stderr
+    assert "no result" not in run.stderr
+    assert "nothing was changed" in run.stderr
+    assert not _link_lines(run)
+    assert deploy_ps_fixture.curl_state.read_text(encoding="utf-8") == before
+    assert not [c for c in deploy_ps_fixture.read_curl_calls() if _is_write(c)]

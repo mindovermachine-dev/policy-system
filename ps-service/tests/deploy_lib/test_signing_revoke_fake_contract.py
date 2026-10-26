@@ -118,3 +118,35 @@ def test_fake_and_real_entry_point_emit_the_same_keys(
     assert set(fake) == set(real)
     assert fake["status"] == real["status"]
     assert fake == real
+
+
+def _run_fake_with_state(
+    state: dict[str, object], tmp_path: Path
+) -> subprocess.CompletedProcess[str]:
+    path = tmp_path / "signing-state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+    argv = ["exec", "deploy/x", "--", "python", "-m", "ps_service.passkey_signing.revoke", *COMMAND]
+    return subprocess.run(  # noqa: S603 - the repo's own fake, fixed argv
+        [sys.executable, str(FAKE), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PS_TEST_SIGNING_STATE": str(path)},
+        timeout=30,
+    )
+
+
+def test_fake_stderr_state_prints_the_text_then_the_kubectl_trailer_and_no_stdout(
+    tmp_path: Path,
+) -> None:
+    proc = _run_fake_with_state({"stderr": "python: No module named x\n", "exit_code": 3}, tmp_path)
+
+    assert proc.returncode == 3
+    assert proc.stdout == ""
+    assert proc.stderr == "python: No module named x\ncommand terminated with exit code 3\n"
+
+
+def test_fake_exit_code_state_alone_exits_silently(tmp_path: Path) -> None:
+    proc = _run_fake_with_state({"exit_code": 4}, tmp_path)
+
+    assert (proc.returncode, proc.stdout, proc.stderr) == (4, "", "")

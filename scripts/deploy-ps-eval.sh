@@ -1067,8 +1067,12 @@ reset_owner_passkey_main() {
   owner_reset_kube_context || exit "$EXIT_FAILURE"
   require_kind_context
   trap stop_authentik_port_forward EXIT
+  # The bundle's VERSION describes the published chart only; a local chart is not checked.
+  local version_file="${SCRIPT_DIR}/../VERSION"
+  [[ "${PS_CHART_REF:-$DEFAULT_CHART_REF}" == oci://* ]] || version_file=""
   run_owner_passkey_reset eval "$namespace" "$HELM_RELEASE_NAME" "$API_TOKEN_SECRET_NAME" \
-    "$AUTHENTIK_SERVER_SERVICE" "${HELM_RELEASE_NAME}-ps-service" || exit "$EXIT_FAILURE"
+    "$AUTHENTIK_SERVER_SERVICE" "${HELM_RELEASE_NAME}-ps-service" "$version_file" \
+    || exit "$EXIT_FAILURE"
 }
 
 main() {

@@ -152,6 +152,15 @@ case "${1:-}" in
     ;;
   status) [[ -f "$state/values.json" ]] || exit 1 ;;
   get) cat "$state/values.json" ;;
+  list)
+    if [[ -f "$state/chart-version" ]]; then
+      version="$(cat "$state/chart-version")"
+      row='{"name":"policy-system","namespace":"policy-system","status":"deployed"'
+      printf '[%s,"chart":"policy-system-%s","app_version":"%s"}]\n' "$row" "$version" "$version"
+    else
+      echo '[]'
+    fi
+    ;;
 esac
 exit 0
 """
@@ -462,10 +471,19 @@ class EvalFixture:
     def helm_upgrades(self) -> list[str]:
         return [c for c in self.helm_calls() if c.startswith("upgrade")]
 
-    def seed_release(self, values: dict[str, Any]) -> None:
-        """Make the fake helm report an installed release whose `get values` is `values`."""
+    def seed_release(self, values: dict[str, Any], chart_version: str | None = None) -> None:
+        """Make the fake helm report an installed release whose `get values` is `values`.
+
+        With `chart_version`, `helm list` also reports the release at that chart version.
+        """
         self.helm_state.mkdir(parents=True, exist_ok=True)
         (self.helm_state / "values.json").write_text(json.dumps(values), encoding="utf-8")
+        if chart_version is not None:
+            (self.helm_state / "chart-version").write_text(chart_version, encoding="utf-8")
+
+    def write_bundle_version(self, version: str) -> None:
+        """Give the script copy a `VERSION` file beside `scripts/`, as a release bundle has."""
+        (self.root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
 
     @property
     def signing_state_path(self) -> Path:

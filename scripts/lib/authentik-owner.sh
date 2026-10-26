@@ -511,6 +511,41 @@ require_cluster_reachable() {
   fi
 }
 
+# require_reset_release_installed <release>: fails when the Helm release is not installed in the
+# current kube context.
+require_reset_release_installed() {
+  local release="$1"
+  if ! helm status "$release" >/dev/null 2>&1; then
+    print_error 'No Helm release %s in kube context %s. Fix: run the full deploy first (the deploy script without --reset-owner-passkey); nothing was changed.\n' \
+      "$release" "$RESET_KUBE_CONTEXT"
+    return 1
+  fi
+}
+
+# check_reset_release_version <release> <version-file>: the reset does not upgrade, so the
+# installed chart version must equal the version of the bundle in use (the VERSION file beside
+# scripts/). A blank argument or a missing file (a clone, or a chart that is not the published
+# one) skips the check. Reads only; an unreadable release version fails closed.
+check_reset_release_version() {
+  local release="$1" version_file="${2:-}" bundle deployed
+  [[ -n "$version_file" && -f "$version_file" ]] || return 0
+  bundle="$(tr -d '[:space:]' <"$version_file")"
+  deployed="$(helm list -f "^${release}\$" -o json 2>/dev/null |
+    jq -r --arg r "$release" '[.[] | select(.name == $r)][0].chart // empty
+      | capture("^.+?-(?<v>[0-9]+\\.[0-9]+\\.[0-9]+.*)$").v // empty' 2>/dev/null)" || deployed=""
+  deployed="$(printf '%s' "$deployed" | tr -d '[:space:]')"
+  if [[ -z "$deployed" ]]; then
+    print_error 'Could not read the chart version of Helm release %s. Fix: check helm access to the cluster and that the release exists; nothing was changed.\n' \
+      "$release"
+    return 1
+  fi
+  if [[ "$deployed" != "$bundle" ]]; then
+    print_error 'Helm release %s is at chart version %s but this bundle is version %s. Fix: run scripts/ps-upgrade.sh from this bundle to bring the release to the bundle version (or run the deploy script without --reset-owner-passkey), then re-run --reset-owner-passkey; nothing was changed.\n' \
+      "$release" "$deployed" "$bundle"
+    return 1
+  fi
+}
+
 # read_reset_release <release>: reads the installed release's owner identity and public Authentik
 # URL from its Helm values. Sets RESET_OWNER_SUBJECT, RESET_OWNER_ISSUER, RESET_LINK_BASE (the
 # publicUrl), RESET_WEB_PATH (its path, e.g. /auth) and RESET_HOSTNAME (its host, no port).
@@ -519,11 +554,7 @@ read_reset_release() {
   RESET_OWNER_SUBJECT=""
   RESET_OWNER_ISSUER=""
   RESET_LINK_BASE=""
-  if ! helm status "$release" >/dev/null 2>&1; then
-    print_error 'No Helm release %s in kube context %s. Fix: run the full deploy first (the deploy script without --reset-owner-passkey); nothing was changed.\n' \
-      "$release" "$RESET_KUBE_CONTEXT"
-    return 1
-  fi
+  require_reset_release_installed "$release" || return 1
   values="$(helm get values "$release" -o json 2>/dev/null || true)"
   RESET_OWNER_SUBJECT="$(printf '%s' "$values" | jq -r '.psService.authzBootstrapOwner.subject // empty' 2>/dev/null || true)"
   RESET_OWNER_ISSUER="$(printf '%s' "$values" | jq -r '.psService.authzBootstrapOwner.issuer // empty' 2>/dev/null || true)"
@@ -847,26 +878,55 @@ count_owner_oauth_tokens() {
   fi
 }
 
+# signing_stderr_summary <file>: the last non-empty line of the command's stderr, for the error
+# message. ANSI escapes and control characters are removed first, then kubectl's own trailer
+# lines are dropped, and the line is capped at 200 bytes. Prints nothing for an empty stream.
+signing_stderr_summary() {
+  local file="$1" line
+  [[ -s "$file" ]] || return 0
+  line=$(
+    LC_ALL=C sed -E $'s/\033\\[[0-9;?]*[ -\\/]*[@-~]//g' <"$file" |
+      LC_ALL=C tr '\t' ' ' |
+      LC_ALL=C tr -d '\000-\010\013-\037\177' |
+      LC_ALL=C grep -Ev '^[[:space:]]*$' |
+      LC_ALL=C grep -Ev '^[[:space:]]*(command terminated with exit code [0-9]+|Unable to use a TTY.*|Defaulted container .*)[[:space:]]*$' |
+      tail -n 1
+  )
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  (
+    LC_ALL=C
+    printf '%s' "${line:0:200}"
+  )
+}
+
 # ps_signing_exec <expected-status> [--count-only]: runs the signing revoke module for the
 # release's owner (RESET_OWNER_SUBJECT/RESET_OWNER_ISSUER) in the PS Service pod and sets
 # SIGNING_RESULT to its one JSON line. Anything but exactly one JSON line with the expected
-# status (revoked/counted) fails, naming the command's reason_code. The Authentik token never
-# reaches this command.
+# status (revoked/counted) fails, naming the command's reason_code, or its last stderr line when
+# it printed no reason_code. The Authentik token never reaches this command, so its stderr
+# carries no secret.
 ps_signing_exec() {
-  local expected="$1" output="" status="" reason="" rc=0
+  local expected="$1" output="" status="" reason="" rc=0 errfile
   shift
+  errfile="$(mktemp 2>/dev/null)" || errfile=/dev/null
   output="$(kubectl -n "$RESET_NAMESPACE" exec "deploy/${RESET_PS_DEPLOYMENT}" -c ps-service \
     --pod-running-timeout=60s -- python -m "$PS_SIGNING_REVOKE_MODULE" \
-    --subject "$RESET_OWNER_SUBJECT" --issuer "$RESET_OWNER_ISSUER" "$@" 2>/dev/null)" || rc=$?
+    --subject "$RESET_OWNER_SUBJECT" --issuer "$RESET_OWNER_ISSUER" "$@" 2>"$errfile")" || rc=$?
   if [[ "$output" != *$'\n'* ]]; then
     status="$(printf '%s' "$output" | jq -r '.status // empty' 2>/dev/null)" || status=""
     reason="$(printf '%s' "$output" | jq -r '.reason_code // empty' 2>/dev/null)" || reason=""
   fi
   if [[ "$rc" -eq 0 && -n "$status" && "$status" == "$expected" ]]; then
+    [[ "$errfile" == /dev/null ]] || rm -f "$errfile"
     SIGNING_RESULT="$output"
     return 0
   fi
-  [[ "$reason" =~ ^[a-z_]+$ ]] || reason="no result"
+  if [[ ! "$reason" =~ ^[a-z_]+$ ]]; then
+    reason="$(signing_stderr_summary "$errfile")"
+    [[ -n "$reason" ]] || reason="no result"
+  fi
+  [[ "$errfile" == /dev/null ]] || rm -f "$errfile"
   print_error 'The signing passkey step in the PS Service pod failed (%s). Fix: check the pod (kubectl -n %s get pods; kubectl -n %s logs deploy/%s), then re-run; %s.\n' \
     "$reason" "$RESET_NAMESPACE" "$RESET_NAMESPACE" "$RESET_PS_DEPLOYMENT" "$OWNER_API_FAILURE_NOTE"
   return 1
@@ -1001,9 +1061,10 @@ print_owner_reset_record() {
 }
 
 # run_owner_passkey_reset <profile> <namespace> <release> <token-secret> <authentik-service>
-#   <ps-deployment>: the owner passkey reset. Reads and checks everything before any change, then
-# issues one fresh single-use enrolment link on the release's public hostname and prints the
-# record line followed by the link, last. Returns 0 or 1. The caller sets OWNER_EMAIL and
+#   <ps-deployment> [<version-file>]: the owner passkey reset. Reads and checks everything before
+# any change (including that the installed chart version equals the one in <version-file>, when
+# given), then issues one fresh single-use enrolment link on the release's public hostname and
+# prints the record line followed by the link, last. Returns 0 or 1. The caller sets OWNER_EMAIL and
 # SKIP_OWNER_PROMPT and traps stop_authentik_port_forward on EXIT.
 run_owner_passkey_reset() {
   local profile="$1" namespace="$2" release="$3" token_secret="$4" authentik_service="$5"
@@ -1022,6 +1083,8 @@ run_owner_passkey_reset() {
 
   owner_reset_kube_context || return 1
   require_cluster_reachable "$namespace" || return 1
+  require_reset_release_installed "$release" || return 1
+  check_reset_release_version "$release" "${7:-}" || return 1
   prompt_owner_email || return 1
   read_reset_release "$release" || return 1
   check_reset_owner_matches_release "$OWNER_EMAIL" || return 1

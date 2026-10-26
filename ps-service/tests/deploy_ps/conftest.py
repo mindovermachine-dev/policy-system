@@ -823,6 +823,16 @@ case "$verb" in
       cp -R "$PS_TEST_CHART_DIR/." "$untardir/policy-system/"
     fi
     ;;
+  list)
+    # list -f <filter> -o json -- one release row at the seeded chart version, else an empty list.
+    if [[ -f "$state/chart-version" ]]; then
+      version="$(cat "$state/chart-version")"
+      row='{"name":"policy-system","namespace":"policy-system","status":"deployed"'
+      printf '[%s,"chart":"policy-system-%s","app_version":"%s"}]\n' "$row" "$version" "$version"
+    else
+      echo '[]'
+    fi
+    ;;
   status)
     # status <release> [--namespace <ns>] -- exit 0 if the release file exists, else 1.
     release="$2"
@@ -1645,8 +1655,15 @@ class DeployPsFixture:
         path = self.helm_state / "releases" / f"{release}.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
+    def write_bundle_version(self, version: str) -> None:
+        """Give the script copy a `VERSION` file beside `scripts/`, as a release bundle has."""
+        (self.root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+
     def seed_helm_release(
-        self, values: dict[str, object], release: str = HELM_RELEASE_NAME
+        self,
+        values: dict[str, object],
+        release: str = HELM_RELEASE_NAME,
+        chart_version: str | None = None,
     ) -> None:
         """Pre-populate an already-deployed Helm release's full `helm get values` shape --
         for idempotent-rerun tests, and for
@@ -1660,6 +1677,8 @@ class DeployPsFixture:
         directory = self.helm_state / "releases"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{release}.json").write_text(json.dumps(values), encoding="utf-8")
+        if chart_version is not None:
+            (self.helm_state / "chart-version").write_text(chart_version, encoding="utf-8")
 
 
 def _copy_deploy_ps_files(root: Path) -> None:

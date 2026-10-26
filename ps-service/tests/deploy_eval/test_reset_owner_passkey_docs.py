@@ -162,3 +162,41 @@ def test_azure_deployment_documents_the_reset_mode() -> None:
     assert "no Azure call" in section
     text = _collapsed(_AZURE.read_text(encoding="utf-8"))
     assert f"[`{_FLAG}`](#--reset-owner-passkey)" in text
+
+
+def test_reset_section_says_the_release_must_be_at_the_bundle_version_and_how_to_get_there() -> (
+    None
+):
+    """The reset section says the release must match the bundle version and how to upgrade."""
+    section = _collapsed(_section(_OPS, _RESET_HEADING))
+    assert "must be at the version of the bundle" in section
+    assert "`VERSION` file" in section
+    assert "`scripts/ps-upgrade.sh`" in section
+    assert "(#updating-to-the-latest-version)" in section
+    assert f"run the deploy script without {_FLAG}" in section
+    assert "does not upgrade the release" in section
+
+
+def test_reset_section_says_the_check_is_skipped_without_a_version_file_or_a_published_chart() -> (
+    None
+):
+    """The reset section says the version check only runs for a bundle and the published chart."""
+    section = _collapsed(_section(_OPS, _RESET_HEADING))
+    assert "no `VERSION` file" in section
+    assert "published chart" in section
+    assert "skips" in section
+
+
+def test_reset_section_failure_says_the_last_line_of_the_pod_error_is_shown() -> None:
+    """The reset section's failure paragraph says the pod command's last error line is printed."""
+    section = _collapsed(_section(_OPS, _RESET_HEADING))
+    assert "last line the command printed" in section
+
+
+def test_azure_deployment_lists_the_release_version_check_among_the_preflight_checks() -> None:
+    """The Azure deployment reset section lists the release version check before any change."""
+    section = _collapsed(_section(_AZURE, f"### `{_FLAG}`"))
+    assert (
+        "the release's chart version against the VERSION file of the bundle in use"
+        " (published chart only)," in section
+    )

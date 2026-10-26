@@ -13,6 +13,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from conftest import LibHarness
 
@@ -699,3 +701,188 @@ def test_only_the_token_functions_read_the_api_token_variable() -> None:
     assert {function for _, function in uses} == TOKEN_FUNCTIONS
     for script in DEPLOY_SCRIPTS:
         assert _token_uses_by_function(script.read_text(encoding="utf-8")) == [], script.name
+
+
+def _version_file(lib_harness: LibHarness, content: str) -> Path:
+    path = lib_harness.root / "VERSION"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def test_a_release_at_another_version_than_the_bundle_fails_naming_both_and_the_fix(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_helm_chart_version("12.0.1")
+    version_file = _version_file(lib_harness, "12.1.0\n")
+
+    proc = lib_harness.run(
+        PRELUDE + f'check_reset_release_version policy-system "{version_file}"; exit $?'
+    )
+
+    assert proc.returncode == 1
+    assert "Helm release policy-system is at chart version 12.0.1" in proc.stderr
+    assert "this bundle is version 12.1.0" in proc.stderr
+    assert "scripts/ps-upgrade.sh" in proc.stderr
+    assert "run the deploy script without --reset-owner-passkey" in proc.stderr
+    assert "nothing was changed" in proc.stderr
+    assert lib_harness.curl_calls() == []
+    assert not [c for c in lib_harness.kubectl_calls() if " exec " in c]
+
+
+def test_a_release_at_the_bundle_version_passes_ignoring_whitespace(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_helm_chart_version("12.1.0")
+    version_file = _version_file(lib_harness, "  12.1.0 \n\n")
+
+    proc = lib_harness.run(
+        PRELUDE + f'check_reset_release_version policy-system "{version_file}"; exit $?'
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
+def test_a_prerelease_chart_version_is_compared_whole(lib_harness: LibHarness) -> None:
+    lib_harness.seed_helm_chart_version("12.1.0-rc.1")
+    version_file = _version_file(lib_harness, "12.1.0-rc.1")
+
+    proc = lib_harness.run(
+        PRELUDE + f'check_reset_release_version policy-system "{version_file}"; exit $?'
+    )
+
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("version_file", ["", "{root}/no-such-VERSION"], ids=["blank", "missing"])
+def test_without_a_version_file_the_check_is_skipped_and_asks_helm_nothing(
+    lib_harness: LibHarness, version_file: str
+) -> None:
+    target = version_file.format(root=lib_harness.root)
+
+    proc = lib_harness.run(
+        PRELUDE + f'check_reset_release_version policy-system "{target}"; exit $?'
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert lib_harness.helm_calls() == []
+
+
+@pytest.mark.parametrize("failure", ["no-row", "helm-error"])
+def test_an_unreadable_deployed_version_fails_closed_before_any_change(
+    lib_harness: LibHarness, failure: str
+) -> None:
+    version_file = _version_file(lib_harness, "12.1.0")
+    env = {"PS_TEST_HELM_FAIL": "1"} if failure == "helm-error" else {}
+
+    proc = lib_harness.run(
+        PRELUDE + f'check_reset_release_version policy-system "{version_file}"; exit $?', **env
+    )
+
+    assert proc.returncode == 1
+    assert "Could not read the chart version of Helm release policy-system" in proc.stderr
+    assert "nothing was changed" in proc.stderr
+    assert lib_harness.curl_calls() == []
+
+
+MISSING_MODULE = "python: No module named ps_service.passkey_signing.revoke"
+
+
+def _count_failure(lib_harness: LibHarness, **env: str) -> str:
+    """Run the pod's count step against the seeded signing fake; returns its stderr."""
+    proc = lib_harness.run(
+        PRELUDE + 'OWNER_API_FAILURE_NOTE="nothing was changed"\nread_signing_state; exit $?',
+        **env,
+    )
+    assert proc.returncode == 1
+    return proc.stderr
+
+
+def _reported_reason(stderr: str) -> str:
+    match = re.search(r"in the PS Service pod failed \((.*)\)\. Fix: check the pod", stderr)
+    assert match, stderr
+    return match.group(1)
+
+
+def test_a_command_without_a_json_line_reports_its_last_stderr_line(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_signing(stderr=f"{MISSING_MODULE}\n")
+
+    stderr = _count_failure(lib_harness)
+
+    assert _reported_reason(stderr) == MISSING_MODULE
+    assert "no result" not in stderr
+    assert "kubectl -n policy-system logs deploy/policy-system-ps-service" in stderr
+    assert "nothing was changed" in stderr
+
+
+def test_the_last_non_empty_stderr_line_wins_over_earlier_and_trailing_blank_lines(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_signing(stderr="first line\nsecond line\n\n   \n")
+
+    assert _reported_reason(_count_failure(lib_harness)) == "second line"
+
+
+def test_the_kubectl_exit_trailer_is_not_taken_for_the_error(lib_harness: LibHarness) -> None:
+    lib_harness.seed_signing(stderr=f"{MISSING_MODULE}\n", exit_code=1)
+
+    stderr = _count_failure(lib_harness)
+
+    assert _reported_reason(stderr) == MISSING_MODULE
+    assert "command terminated with exit code" not in stderr
+
+
+def test_a_stream_of_only_the_kubectl_trailer_falls_back_to_no_result(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_signing(stderr="", exit_code=137)
+
+    assert _reported_reason(_count_failure(lib_harness)) == "no result"
+
+
+def test_a_silent_failure_falls_back_to_no_result(lib_harness: LibHarness) -> None:
+    lib_harness.seed_signing(exit_code=2)
+
+    assert _reported_reason(_count_failure(lib_harness)) == "no result"
+
+
+def test_a_reported_line_is_capped_at_200_bytes(lib_harness: LibHarness) -> None:
+    lib_harness.seed_signing(stderr="x" * 500 + "\n")
+
+    assert _reported_reason(_count_failure(lib_harness)) == "x" * 200
+
+
+def test_the_cap_counts_bytes_for_multibyte_text_under_a_utf8_locale(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_signing(stderr="\u00e9" * 150 + "\n")
+
+    reason = _reported_reason(_count_failure(lib_harness, LANG="en_US.UTF-8"))
+
+    assert reason.startswith("\u00e9")
+    assert len(reason.encode()) <= 200
+
+
+def test_control_characters_and_ansi_escapes_are_removed_before_printing(
+    lib_harness: LibHarness,
+) -> None:
+    lib_harness.seed_signing(stderr="\x1b[31;1mboom\x1b[0m\x07\x00\tdone\r\n")
+
+    stderr = _count_failure(lib_harness)
+
+    assert _reported_reason(stderr) == "boom done"
+    assert not re.search(r"[\x00-\x08\x0b-\x1f\x7f]", stderr.replace("\n", ""))
+
+
+def test_a_line_of_only_escapes_is_treated_as_empty(lib_harness: LibHarness) -> None:
+    lib_harness.seed_signing(stderr="the real error\n\x1b[0m\n")
+
+    assert _reported_reason(_count_failure(lib_harness)) == "the real error"
+
+
+def test_a_percent_sign_in_the_stderr_line_is_printed_literally(lib_harness: LibHarness) -> None:
+    lib_harness.seed_signing(stderr="disk 100%s full %d\n")
+
+    assert _reported_reason(_count_failure(lib_harness)) == "disk 100%s full %d"

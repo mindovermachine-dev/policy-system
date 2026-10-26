@@ -63,6 +63,28 @@ fi
 exit "${PS_TEST_KUBECTL_EXIT:-0}"
 """
 
+FAKE_HELM = r"""#!/usr/bin/env bash
+# Recording fake helm: logs argv. `list` answers from $PS_TEST_HELM_CHART_FILE: one release row
+# whose chart carries the seeded version, or an empty list when nothing is seeded.
+printf '%s\n' "$*" >> "$PS_TEST_HELM_LOG"
+if [[ -n "${PS_TEST_HELM_FAIL:-}" ]]; then
+  echo 'Error: Kubernetes cluster unreachable' >&2
+  exit 1
+fi
+case "${1:-}" in
+  list)
+    if [[ -f "$PS_TEST_HELM_CHART_FILE" ]]; then
+      version="$(cat "$PS_TEST_HELM_CHART_FILE")"
+      row='{"name":"policy-system","namespace":"policy-system","status":"deployed"'
+      printf '[%s,"chart":"policy-system-%s","app_version":"%s"}]\n' "$row" "$version" "$version"
+    else
+      echo '[]'
+    fi
+    ;;
+esac
+exit 0
+"""
+
 
 @dataclass
 class LibHarness:
@@ -126,6 +148,17 @@ class LibHarness:
         state: dict[str, Any] = json.loads(self.signing_state_path.read_text())
         return state
 
+    @property
+    def helm_log(self) -> Path:
+        return self.root / "helm.log"
+
+    def seed_helm_chart_version(self, version: str) -> None:
+        """Make the fake `helm list` report the release at chart version `version`."""
+        (self.root / "helm-chart-version.txt").write_text(version, encoding="utf-8")
+
+    def helm_calls(self) -> list[str]:
+        return self.helm_log.read_text().splitlines() if self.helm_log.exists() else []
+
     def kubectl_calls(self) -> list[str]:
         if not self.kubectl_log.exists():
             return []
@@ -157,6 +190,8 @@ class LibHarness:
             "PS_TEST_KUBECTL_APPLIED": str(self.root / "kubectl-applied.yaml"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
             "PS_EVAL_STATE_DIR": str(self.root / "state"),
+            "PS_TEST_HELM_LOG": str(self.helm_log),
+            "PS_TEST_HELM_CHART_FILE": str(self.root / "helm-chart-version.txt"),
             "PS_TEST_SIGNING_FAKE": str(self.bin_dir / "ps-signing-revoke"),
             "PS_TEST_SIGNING_STATE": str(self.signing_state_path),
             **self.env_extra,
@@ -191,6 +226,9 @@ def lib_harness(tmp_path: Path) -> LibHarness:
     kubectl = harness.bin_dir / "kubectl"
     kubectl.write_text(FAKE_KUBECTL, encoding="utf-8")
     kubectl.chmod(0o755)
+    helm = harness.bin_dir / "helm"
+    helm.write_text(FAKE_HELM, encoding="utf-8")
+    helm.chmod(0o755)
     shutil.copytree(FAKES_DIR / "authentik", tmp_path / "authentik-fixtures")
     for tool in ("jq",):
         found = shutil.which(tool)

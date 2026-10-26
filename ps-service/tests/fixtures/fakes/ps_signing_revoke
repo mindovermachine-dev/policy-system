@@ -18,6 +18,10 @@ State keys (all optional, tests seed them):
                 enrolled while the reset ran)
   pending_after_revoke  pending approval ids the actor holds right after a revoke (an approval
                 requested while the reset ran)
+  stderr        written verbatim to stderr, followed by the line `kubectl exec` appends when the
+                command exits non-zero (`command terminated with exit code N`, N = exit_code,
+                default 1); no stdout, exit code `exit_code` (default 1)
+  exit_code     exit code with no stdout and no stderr (a command that dies silently)
   audit         appended by every revoke: {"subject", "issuer", "credentials_deleted",
                 "voided_approval_ids"}
 """
@@ -80,6 +84,12 @@ def main() -> int:
     if "raw_stdout" in state:
         sys.stdout.write(str(state["raw_stdout"]))
         return 0
+    if "stderr" in state or "exit_code" in state:
+        code = int(str(state.get("exit_code", 1)))
+        if "stderr" in state:
+            sys.stderr.write(str(state["stderr"]))
+            sys.stderr.write(f"command terminated with exit code {code}\n")
+        return code
     if state.get("fail") == mode:
         _line(
             {

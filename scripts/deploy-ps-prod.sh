@@ -1519,9 +1519,12 @@ reset_owner_passkey_main() {
   owner_reset_require_tools || exit "$EXIT_FAILURE"
   SKIP_OWNER_PROMPT="$skip_confirmation"
   trap stop_authentik_port_forward EXIT
+  # The bundle's VERSION describes the published chart only; a local chart is not checked.
+  local version_file="${SCRIPT_DIR}/../VERSION"
+  [[ "$CHART_REF" == oci://* ]] || version_file=""
   run_owner_passkey_reset prod "$(current_kube_namespace)" "$HELM_RELEASE_NAME" \
     "$AUTHENTIK_API_TOKEN_SECRET_NAME" "$AUTHENTIK_SERVICE_NAME" "$PS_SERVICE_NAME" \
-    || exit "$EXIT_FAILURE"
+    "$version_file" || exit "$EXIT_FAILURE"
 }
 
 main() {

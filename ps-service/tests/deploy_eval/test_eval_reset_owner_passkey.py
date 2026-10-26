@@ -111,7 +111,7 @@ def test_reset_never_upgrades_helm_or_applies_or_touches_tls_and_hosts(
 
     eval_fixture.run(*RESET, PS_HOSTS_FILE=str(hosts))
 
-    assert all(c.startswith(("status ", "get values ")) for c in eval_fixture.helm_calls())
+    assert all(c.startswith(("status ", "get values ", "list ")) for c in eval_fixture.helm_calls())
     verbs = re.compile(r"\b(apply|delete|create|annotate|label|rollout)\b")
     assert not [c for c in eval_fixture.kubectl_calls() if verbs.search(c)]
     assert not eval_fixture.state_dir.exists()
@@ -924,3 +924,105 @@ def test_eval_help_lists_reset_owner_passkey(eval_fixture: EvalFixture) -> None:
     assert "lost or stolen" in run.stdout
     assert "single-use enrolment link" in run.stdout
     assert eval_fixture.curl_calls() == []
+
+
+PUBLISHED_CHART_REF = "oci://ghcr.io/mindovermachine-dev/charts/policy-system"
+
+
+def test_reset_from_a_bundle_of_another_version_stops_before_any_change(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.seed_release(_release_values(), chart_version="12.0.1")
+    eval_fixture.seed_curl(users={str(OWNER_PK): _owner_user()})
+    eval_fixture.write_bundle_version("12.1.0")
+    before = eval_fixture.curl_state.read_text(encoding="utf-8")
+
+    run = eval_fixture.run(*RESET, expect=1, PS_CHART_REF=PUBLISHED_CHART_REF)
+
+    assert "at chart version 12.0.1" in run.stderr
+    assert "this bundle is version 12.1.0" in run.stderr
+    assert "run the deploy script without --reset-owner-passkey" in run.stderr
+    assert not _link_lines(run)
+    assert eval_fixture.curl_state.read_text(encoding="utf-8") == before
+    assert eval_fixture.curl_calls() == []
+    assert not [c for c in eval_fixture.kubectl_calls() if "exec " in c]
+    assert eval_fixture.signing_state().get("audit", []) == []
+    _nothing_changed(eval_fixture)
+
+
+def test_reset_version_mismatch_is_reported_before_the_owner_email_is_asked(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.seed_release(_release_values(), chart_version="12.0.1")
+    eval_fixture.write_bundle_version("12.1.0")
+
+    run = eval_fixture.run("--reset-owner-passkey", expect=1, PS_CHART_REF=PUBLISHED_CHART_REF)
+
+    assert "this bundle is version 12.1.0" in run.stderr
+    assert "owner email" not in run.output.lower()
+
+
+def test_reset_from_a_bundle_at_the_deployed_version_reaches_the_signing_step(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.seed_release(_release_values(), chart_version="12.1.0")
+    eval_fixture.seed_curl(users={str(OWNER_PK): _owner_user()})
+    eval_fixture.write_bundle_version("12.1.0")
+
+    run = eval_fixture.run(*RESET, PS_CHART_REF=PUBLISHED_CHART_REF)
+
+    assert [c for c in eval_fixture.kubectl_calls() if "passkey_signing.revoke" in c]
+    assert len(_link_lines(run)) == 1
+
+
+def test_reset_without_a_version_file_never_asks_helm_for_the_chart_version(
+    eval_fixture: EvalFixture,
+) -> None:
+    _installed(eval_fixture)
+
+    run = eval_fixture.run(*RESET, PS_CHART_REF=PUBLISHED_CHART_REF)
+
+    assert len(_link_lines(run)) == 1
+    assert not [c for c in eval_fixture.helm_calls() if c.startswith("list ")]
+
+
+def test_reset_with_an_unreadable_release_version_fails_closed(
+    eval_fixture: EvalFixture,
+) -> None:
+    _installed(eval_fixture)
+    eval_fixture.write_bundle_version("12.1.0")
+
+    run = eval_fixture.run(*RESET, expect=1, PS_CHART_REF=PUBLISHED_CHART_REF)
+
+    assert "Could not read the chart version of Helm release policy-system" in run.stderr
+    assert eval_fixture.curl_calls() == []
+
+
+def test_reset_with_a_local_chart_override_skips_the_version_check(
+    eval_fixture: EvalFixture,
+) -> None:
+    eval_fixture.seed_release(_release_values(), chart_version="0.0.0-dev")
+    eval_fixture.seed_curl(users={str(OWNER_PK): _owner_user()})
+    eval_fixture.write_bundle_version("12.1.0")
+
+    run = eval_fixture.run(*RESET, PS_CHART_REF="./charts/policy-system")
+
+    assert len(_link_lines(run)) == 1
+    assert not [c for c in eval_fixture.helm_calls() if c.startswith("list ")]
+
+
+def test_reset_against_an_image_without_the_revoke_module_shows_the_pod_error(
+    eval_fixture: EvalFixture,
+) -> None:
+    _installed(eval_fixture)
+    eval_fixture.seed_signing(stderr="python: No module named ps_service.passkey_signing.revoke\n")
+
+    run = eval_fixture.run(*RESET, expect=1)
+
+    assert "failed (python: No module named ps_service.passkey_signing.revoke)." in run.stderr
+    assert "no result" not in run.stderr
+    assert "nothing was changed" in run.stderr
+    assert not _link_lines(run)
+    writes = ("'POST'", "'PUT'", "'PATCH'", "'DELETE'")
+    assert not [c for c in eval_fixture.curl_calls() if any(w in str(c["argv"]) for w in writes)]
+    _nothing_changed(eval_fixture)
