@@ -17,9 +17,9 @@ tests:
           value:
             requests:
               cpu: 100m
-              memory: 512Mi
+              memory: 768Mi
             limits:
-              memory: 512Mi
+              memory: 1Gi
       - notExists:
           path: spec.template.spec.containers[0].resources.limits.cpu
   - it: renders requests cpu and memory and a memory-only limit on the worker by default
@@ -37,11 +37,11 @@ tests:
           path: spec.template.spec.containers[0].resources.limits.cpu
   - it: renders an overridden server memory limit and leaves the worker at its default
     set:
-      authentik.server.resources.limits.memory: 1Gi
+      authentik.server.resources.limits.memory: 2Gi
     asserts:
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
-          value: 1Gi
+          value: 2Gi
         template: charts/authentik/templates/server/deployment.yaml
       - equal:
           path: spec.template.spec.containers[0].resources.requests.cpu
@@ -61,7 +61,7 @@ tests:
         template: charts/authentik/templates/worker/deployment.yaml
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
-          value: 512Mi
+          value: 1Gi
         template: charts/authentik/templates/server/deployment.yaml
   - it: renders no requests or limits on the server when the value is null
     template: charts/authentik/templates/server/deployment.yaml

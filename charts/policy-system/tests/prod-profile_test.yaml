@@ -164,9 +164,9 @@ tests:
           value:
             requests:
               cpu: 50m
-              memory: 128Mi
-            limits:
               memory: 256Mi
+            limits:
+              memory: 512Mi
 
   - it: provision job keeps its default resources under prod values
     template: ps-state-provision-job.yaml
@@ -190,9 +190,9 @@ tests:
           value:
             requests:
               cpu: 100m
-              memory: 512Mi
+              memory: 768Mi
             limits:
-              memory: 512Mi
+              memory: 1Gi
 
   - it: authentik worker keeps its default resources under prod values
     template: charts/authentik/templates/worker/deployment.yaml

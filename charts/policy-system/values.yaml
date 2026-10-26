@@ -403,15 +403,17 @@ authentik:
         timeoutSeconds: 5
         periodSeconds: 5
         failureThreshold: 6
-    # Starting point, not measured. The memory limit bounds a runaway server; there is no CPU
-    # limit, to avoid throttling. Set to null to omit resources entirely (an empty map is
-    # merged with this default and does not opt out).
+    # Sized from a measured peak of 239Mi against the previous 256Mi limit (93%) over about
+    # 3 hours, so the limit is doubled to 512Mi with requests of 256Mi for headroom. The
+    # memory limit bounds a runaway server; there is no CPU limit, to avoid throttling. Set to
+    # null to omit resources entirely (an empty map is merged with this default and does not
+    # opt out).
     resources:
       requests:
         cpu: 50m
-        memory: 128Mi
-      limits:
         memory: 256Mi
+      limits:
+        memory: 512Mi
     persistence:
       size: 10Gi
       storageClassName: ""
@@ -477,16 +479,19 @@ authentik:
           secretKeyRef:
             name: policy-system-authentik-api-token
             key: PS_AUTHENTIK_API_TOKEN
-    # Starting point, not measured: the upstream chart's own suggested values.
+    # Sized from a measurement: at the previous 512Mi limit the server was OOMKilled 8 times
+    # in about 3 hours, and 14 minutes after a restart it had peaked at about 476MB (89% of
+    # the limit) and was still rising. The limit is now 1Gi with requests of 768Mi for
+    # headroom; the true plateau is not yet observed, so re-check against memory.peak.
     # Memory-only limit (no CPU limit) to avoid throttling. The upstream chart
     # ships an empty map; setting this to null renders an empty resources
     # field (no requests or limits), the key itself is not removed.
     resources:
       requests:
         cpu: 100m
-        memory: 512Mi
+        memory: 768Mi
       limits:
-        memory: 512Mi
+        memory: 1Gi
     # ClusterIP in every profile: clients reach Authentik through the chart Ingress, never a node port of its own.
     service:
       type: ClusterIP
