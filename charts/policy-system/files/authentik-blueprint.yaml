@@ -283,6 +283,15 @@ entries:
     identifiers:
       name: ps-enrollment-user-login
 
+  # Final stage after sign-in: ends the flow on a page that shows its message with no
+  # redirect; the session opened by the user-login stage stays authenticated.
+  - model: authentik_stages_deny.denystage
+    id: ps-enrollment-confirmation-stage
+    identifiers:
+      name: ps-enrollment-confirmation
+    attrs:
+      deny_message: "Passkey registered and you are signed in. You can close this tab and run ps-cli login."
+
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf ps-enrollment-flow
@@ -316,6 +325,12 @@ entries:
       stage: !KeyOf ps-enrollment-user-login-stage
       order: 100
 
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-enrollment-flow
+      stage: !KeyOf ps-enrollment-confirmation-stage
+      order: 110
+
   # --- 4b. Passkey-only Recovery flow. The owner link the
   # deploy scripts issue (`POST /api/v3/core/users/{pk}/recovery/`) needs the brand's
   # `flow_recovery` set: on a fresh install it is null and Authentik answers 400 "No
@@ -347,6 +362,16 @@ entries:
     identifiers:
       name: ps-recovery-user-login
 
+  # Final stage after sign-in. A deny stage ends the flow on a page that shows its message
+  # and issues no redirect, so the browser never lands on an unrouted path; the session
+  # opened by the user-login stage stays authenticated.
+  - model: authentik_stages_deny.denystage
+    id: ps-recovery-confirmation-stage
+    identifiers:
+      name: ps-recovery-confirmation
+    attrs:
+      deny_message: "Passkey registered and you are signed in. You can close this tab and run ps-cli login."
+
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf ps-recovery-flow
@@ -358,6 +383,12 @@ entries:
       target: !KeyOf ps-recovery-flow
       stage: !KeyOf ps-recovery-user-login-stage
       order: 100
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-recovery-flow
+      stage: !KeyOf ps-recovery-confirmation-stage
+      order: 110
 
   # --- 5. Reputation Policy, enforced via a dedicated DenyStage in the login flow.
   # A FlowStageBinding whose bound policies fail is not "denied": the planner leaves the

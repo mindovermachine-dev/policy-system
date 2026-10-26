@@ -247,9 +247,9 @@ minutes.
 A Let's Encrypt certificate serves the host. You do not need to trust a CA in the browser or
 for `ps-cli`.
 
-After enrolment, the browser ends on `https://<host>/auth/`. The Authentik public allowlist
-does not serve this path, so PS Service answers it. An error or "not found" page is
-expected. You are enrolled and signed in.
+After enrolment, the browser ends on a confirmation page served by Authentik. It says the
+passkey is registered and you are signed in, and names `ps-cli login`. Close the tab. You are
+enrolled and signed in.
 
 #### Recover the owner
 

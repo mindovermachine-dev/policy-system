@@ -74,6 +74,7 @@ def test_chart_blueprint_applies_and_leaves_the_passkey_login_chain() -> None:
 
     assert completed.returncode == 0, completed.stdout[-4000:] + completed.stderr[-2000:]
     assert "PASS ps-login chain, brand pointers and ps-cli application" in completed.stdout
+    assert "PASS recovery and enrollment flows end on the confirmation stage" in completed.stdout
 
 
 def test_chart_blueprint_reapplies_with_unchanged_row_counts() -> None:

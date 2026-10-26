@@ -111,6 +111,7 @@ from authentik.blueprints.v1.importer import Importer
 from authentik.brands.models import Brand
 from authentik.core.models import Application
 from authentik.flows.models import Flow, FlowStageBinding, Stage
+from authentik.stages.deny.models import DenyStage
 from authentik.policies.models import PolicyBinding
 from authentik.providers.oauth2.models import OAuth2Provider
 
@@ -179,6 +180,20 @@ application = Application.objects.filter(slug="ps-cli").first()
 if application is None or not OAuth2Provider.objects.filter(client_id="ps-cli").exists():
     fail("the ps-cli application or its provider is missing")
 print("PASS ps-login chain, brand pointers and ps-cli application")
+for slug, orders in (
+    ("ps-passkey-recovery", [10, 100, 110]),
+    ("ps-invite-enrollment", [5, 10, 20, 30, 100, 110]),
+):
+    target = Flow.objects.filter(slug=slug).first()
+    if target is None:
+        fail(f"flow {slug} is missing")
+    chain = list(FlowStageBinding.objects.filter(target=target).order_by("order"))
+    if [b.order for b in chain] != orders:
+        fail(f"{slug} binding orders are {[b.order for b in chain]}, expected {orders}")
+    confirmation = DenyStage.objects.filter(pk=chain[-1].stage_id).first()
+    if confirmation is None or "ps-cli login" not in confirmation.deny_message:
+        fail(f"{slug} does not end on the confirmation deny stage")
+print("PASS recovery and enrollment flows end on the confirmation stage")
 PY
 
 "$CLI" network create "$NETWORK" >/dev/null

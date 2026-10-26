@@ -136,7 +136,7 @@ def test_recovery_flow_is_passkey_only_recovery_designation(
     assert flow["attrs"]["authentication"] == "none"
 
 
-def test_recovery_flow_binds_webauthn_setup_then_user_login_only(
+def test_recovery_flow_binds_webauthn_setup_then_user_login_then_confirmation(
     main_entries: list[dict[str, Any]],
 ) -> None:
     models = _bound_stage_models(main_entries, "ps-recovery-flow")
@@ -144,7 +144,30 @@ def test_recovery_flow_binds_webauthn_setup_then_user_login_only(
     assert models == [
         "authentik_stages_authenticator_webauthn.authenticatorwebauthnstage",
         "authentik_stages_user_login.userloginstage",
+        "authentik_stages_deny.denystage",
     ]
+
+
+CONFIRMATION_FLOW_IDS = ["ps-recovery-flow", "ps-enrollment-flow"]
+
+
+@pytest.mark.parametrize("flow_id", CONFIRMATION_FLOW_IDS)
+def test_flow_ends_on_a_deny_confirmation_bound_after_user_login(
+    main_entries: list[dict[str, Any]], flow_id: str
+) -> None:
+    bindings = _bindings_for(main_entries, flow_id)
+    login_order = next(
+        b["identifiers"]["order"]
+        for b in bindings
+        if _by_id(main_entries, _keyof_target(b["identifiers"]["stage"]))["model"]
+        == "authentik_stages_user_login.userloginstage"
+    )
+    final = bindings[-1]
+    final_stage = _by_id(main_entries, _keyof_target(final["identifiers"]["stage"]))
+
+    assert final["identifiers"]["order"] > login_order
+    assert final_stage["model"] == "authentik_stages_deny.denystage"
+    assert "ps-cli login" in final_stage["attrs"]["deny_message"]
 
 
 def test_recovery_flow_has_no_password_or_identification_stage(
@@ -212,18 +235,19 @@ def test_no_password_prompt_exists_anywhere_in_the_blueprint(
     )
 
 
-def test_enrollment_binding_chain_is_invitation_prompt_write_webauthn_login(
+def test_enrollment_binding_chain_is_invitation_prompt_write_webauthn_login_confirmation(
     main_entries: list[dict[str, Any]],
 ) -> None:
     bindings = _bindings_for(main_entries, "ps-enrollment-flow")
 
-    assert [b["identifiers"]["order"] for b in bindings] == [5, 10, 20, 30, 100]
+    assert [b["identifiers"]["order"] for b in bindings] == [5, 10, 20, 30, 100, 110]
     assert _bound_stage_models(main_entries, "ps-enrollment-flow") == [
         "authentik_stages_invitation.invitationstage",
         "authentik_stages_prompt.promptstage",
         "authentik_stages_user_write.userwritestage",
         "authentik_stages_authenticator_webauthn.authenticatorwebauthnstage",
         "authentik_stages_user_login.userloginstage",
+        "authentik_stages_deny.denystage",
     ]
 
 

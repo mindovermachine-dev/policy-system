@@ -137,10 +137,10 @@ For every user of the bundled Authentik, enrolment and recovery ask for a passke
 password:
 
 - **Invitation enrolment** (`ps-invite-enrollment`): Invitation stage → Prompt
-  (username/name/email) → User Write → WebAuthn passkey setup → User Login. The prompt has no
+  (username/name/email) → User Write → WebAuthn passkey setup → User Login → confirmation page. The prompt has no
   password field, so an invitee's account has **no password set**.
 - **Recovery** (`ps-passkey-recovery`, set as the brand's `flow_recovery`): WebAuthn setup →
-  User Login, with no password stage. The deploy scripts issue the owner's single-use,
+  User Login → confirmation page, with no password stage. The deploy scripts issue the owner's single-use,
   time-limited link from it. Authentik cannot issue a recovery link unless the brand has a
   recovery flow, which is why the blueprint sets one.
 - **Login** (`ps-login`, set as the brand's `flow_authentication` and `flow_device_code`):
@@ -233,7 +233,7 @@ $ curl -X POST http://localhost:9080/api/v3/stages/invitation/invitations/ \
 
 # 2. Redeem it at /if/flow/ps-invite-enrollment/?itoken=<pk> -- Prompt (username/
 #    name/email; no password field) -> User Write -> WebAuthn passkey
-#    enrollment -> logged in.
+#    enrollment -> logged in -> confirmation page naming `ps-cli login`.
 #    (server-side confirmation a real credential was persisted:)
 $ ak shell -c "WebAuthnDevice.objects.filter(user__username='combined-user-1')"
 device 'WebAuthn Device' created 2026-09-26 12:08:...
