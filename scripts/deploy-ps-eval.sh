@@ -728,12 +728,14 @@ assert_bypass_disabled() {
 # ensure_release <values-json>: write-if-changed. Plain `helm upgrade --install` always creates a
 # new revision, so the desired values are compared with `helm get values` first; the script
 # passes every value it sets in one file and no other, so the comparison is on the whole object.
+# A bundle chart version newer than the installed one (chart_version_action, planned before any
+# cluster change) upgrades the release without comparing values.
 ensure_release() {
   local desired_json="$1" chart_ref="${PS_CHART_REF:-$DEFAULT_CHART_REF}"
   local values_file current_json
   assert_bypass_disabled "$desired_json"
   set_chart_version_args "$SCRIPT_DIR" "$chart_ref"
-  if helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
+  if [[ "$chart_version_action" != upgrade ]] && helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
     current_json="$(helm get values "$HELM_RELEASE_NAME" -o json)"
     if [[ "$(jq -S . <<<"$current_json")" == "$(jq -S . <<<"$desired_json")" ]]; then
       printf 'Helm release %s unchanged.\n' "$HELM_RELEASE_NAME" >&2
@@ -1086,8 +1088,10 @@ main() {
   check_host_exposure
   [[ "$check_exposure_only" == true ]] && exit 0
   check_required_tools
+  read_bundle_version "$SCRIPT_DIR" "${PS_CHART_REF:-$DEFAULT_CHART_REF}" || exit "$EXIT_FAILURE"
   detect_lan_address
   require_kind_context
+  plan_chart_version_action "$HELM_RELEASE_NAME" || exit "$EXIT_FAILURE"
   free_ingress_node_port
   require_ingress_controller
   require_llm_secret

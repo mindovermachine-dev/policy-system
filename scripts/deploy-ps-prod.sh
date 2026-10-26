@@ -1140,6 +1140,7 @@ ensure_release() {
   local owner_subject="$5" owner_issuer="$6" authentik_base_url="$7" authentik_public_url="$8"
   local public_url="$9"
   local desired_json
+  local -a reuse_args=()
   set_chart_version_args "$SCRIPT_DIR" "$CHART_REF"
   desired_json="$(release_values_json "$issuer" "$audience" "$cli_client_id" "$scopes" \
     "$owner_subject" "$owner_issuer" "$authentik_base_url" "$authentik_public_url" "$public_url")"
@@ -1161,11 +1162,14 @@ ensure_release() {
           tls: {secretName: .ingress.tls.secretName}}}' \
       <<< "$current_json")"
     if [[ "$(jq -S . <<< "$current_subset_json")" == "$(jq -S . <<< "$desired_json")" ]]; then
-      return 0
+      [[ "$chart_version_action" == upgrade ]] || return 0
+      # Only the chart version differs: keep the values the release holds beyond the ones set here.
+      reuse_args=(--reset-then-reuse-values)
     fi
   fi
   helm upgrade --install "$HELM_RELEASE_NAME" "$CHART_REF" \
-    ${chart_version_args[@]+"${chart_version_args[@]}"} -f "$VALUES_PROD_FILE" \
+    ${chart_version_args[@]+"${chart_version_args[@]}"} \
+    ${reuse_args[@]+"${reuse_args[@]}"} -f "$VALUES_PROD_FILE" \
     --set llm.existingSecret="$LLM_SECRET_NAME" \
     --set psService.auth.issuer="$issuer" \
     --set psService.auth.audience="$audience" \
@@ -1545,6 +1549,7 @@ main() {
   print_experimental_notice
 
   check_required_tools kubectl helm curl
+  read_bundle_version "$SCRIPT_DIR" "$CHART_REF" || exit "$EXIT_FAILURE"
 
   log_step "Loading and validating $CONFIG_FILE_DISPLAY_PATH"
   load_config
@@ -1615,6 +1620,7 @@ main() {
   grant_aks_rbac_access "$cluster_name"
   log_step "Fetching AKS credentials for $cluster_name"
   ensure_aks_credentials "$cluster_name"
+  plan_chart_version_action "$HELM_RELEASE_NAME" || exit "$EXIT_FAILURE"
 
   log_step "Syncing LLM credentials into the cluster"
   ensure_llm_secret "$vault_name"

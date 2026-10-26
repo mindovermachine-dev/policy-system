@@ -101,8 +101,10 @@ Then run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh). It upgrades the
 scripts/ps-upgrade.sh
 ```
 
-`scripts/deploy-ps-eval.sh` re-applies its values only when they changed, so it does not pick
-up a newer chart version by itself.
+Re-running `scripts/deploy-ps-eval.sh` from a newer bundle also upgrades the release to the
+bundle's chart version, even when its values did not change. From an older bundle it refuses and
+names both versions. A clone, or a local chart path, has no bundle version, so the script
+re-applies its values only when they changed.
 
 The upgrade also runs a provisioning Job for the graph mutation log; see
 [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log).
@@ -681,12 +683,27 @@ curl -fsSL https://github.com/mindovermachine-dev/policy-system/releases/latest/
 cd policy-system-deploy
 ```
 
-`scripts/deploy-ps-prod.sh`'s Helm reconciliation (`ensure_release`) only calls `helm upgrade
+`scripts/deploy-ps-prod.sh`'s Helm reconciliation (`ensure_release`) calls `helm upgrade
 --install` when one of the 9 script-managed fields (`llm.existingSecret`,
 `psService.auth.{issuer,audience,cliClientId,scopes}`,
 `psService.authzBootstrapOwner.{subject,issuer}`, `psService.authentik.{baseUrl,publicUrl}`)
-differs from what's already deployed. If none of those changed, re-running
-`scripts/deploy-ps-prod.sh` is a no-op and will **not** pick up a new chart version.
+differs from what's already deployed, or when the bundle's chart version (the `VERSION` file) is
+newer than the deployed one. Re-running `scripts/deploy-ps-prod.sh` from a newer bundle therefore
+upgrades the release to that chart version.
+
+- When only the chart version differs, the upgrade uses `--reset-then-reuse-values`, so the values
+  the release already holds beyond the script-managed ones are kept. The values the script sets
+  and the values in `values-prod.yaml` are always re-applied, so a value on the
+  release that `values-prod.yaml` also defines is reset to the file's value.
+- When a script-managed field also differs, the upgrade does not use `--reset-then-reuse-values`,
+  so values the script does not set can be dropped, as for any values change.
+- A bundle older than the deployed chart is refused, naming both versions. So is a `VERSION` that
+  is not `X.Y.Z`, and a deployed chart version that cannot be read with
+  `helm list -f ^policy-system$ -o json`; for the last, reinstall the matching release with
+  `scripts/ps-upgrade.sh`. These checks run after the Azure credentials are fetched and before
+  any change to the cluster, so the run stops without touching the release.
+- A clone, or a local chart path, has no bundle version, so the decision rests on the values
+  alone.
 
 Use [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh): it upgrades with
 `--reset-then-reuse-values`, so the values the release already has (`psService.auth.*`, the

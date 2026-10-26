@@ -768,6 +768,9 @@ case "$verb" in
       shift
     fi
     acc="{}"
+    reuse=false
+    version=""
+    file_json="{}"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --set)
@@ -781,7 +784,21 @@ case "$verb" in
               (if $val == "true" then true elif $val == "false" then false else $val end))')"
           shift 2
           ;;
-        -f|--values|--namespace)
+        --version)
+          version="$2"
+          shift 2
+          ;;
+        --reset-then-reuse-values)
+          reuse=true
+          shift
+          ;;
+        -f|--values)
+          if [[ -n "${PS_TEST_HELM_FILE_VALUES_JSON:-}" ]]; then
+            file_json="$(cat "$PS_TEST_HELM_FILE_VALUES_JSON")"
+          fi
+          shift 2
+          ;;
+        --namespace)
           shift 2
           ;;
         --create-namespace)
@@ -792,7 +809,15 @@ case "$verb" in
           ;;
       esac
     done
-    printf '%s' "$acc" > "$state/releases/${release}.json"
+    # Helm precedence: reused release values < -f file < --set. Without the reuse flag the
+    # prior values are dropped.
+    release_json="$state/releases/${release}.json"
+    prior="{}"
+    if [[ "$reuse" == true && -f "$release_json" ]]; then prior="$(cat "$release_json")"; fi
+    jq -n --argjson p "$prior" --argjson f "$file_json" --argjson s "$acc" \
+      '$p * $f * $s' > "$release_json.new"
+    mv "$release_json.new" "$release_json"
+    if [[ -n "$version" ]]; then printf '%s' "$version" > "$state/chart-version"; fi
     ;;
   get)
     # get values <release> -o json
@@ -824,8 +849,19 @@ case "$verb" in
     fi
     ;;
   list)
-    # list -f <filter> -o json -- one release row at the seeded chart version, else an empty list.
-    if [[ -f "$state/chart-version" ]]; then
+    # list -f <filter> -o json -- one release row at the seeded chart version when the filter
+    # selects the release, else an empty list. PS_TEST_HELM_LIST_FAIL makes the call fail.
+    if [[ -n "${PS_TEST_HELM_LIST_FAIL:-}" ]]; then
+      echo 'Error: simulated helm list failure' >&2
+      exit 1
+    fi
+    filter=""
+    shift
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-f" ]]; then filter="${2:-}"; fi
+      shift
+    done
+    if [[ "$filter" == '^policy-system$' && -f "$state/chart-version" ]]; then
       version="$(cat "$state/chart-version")"
       row='{"name":"policy-system","namespace":"policy-system","status":"deployed"'
       printf '[%s,"chart":"policy-system-%s","app_version":"%s"}]\n' "$row" "$version" "$version"

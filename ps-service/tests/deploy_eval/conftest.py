@@ -142,18 +142,31 @@ case "${1:-}" in
   upgrade)
     shift
     file=""
+    version=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         -f|--values) file="$2"; shift 2 ;;
+        --version) version="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
     [[ -n "$file" ]] && cp "$file" "$state/values.json"
+    [[ -n "$version" ]] && printf '%s' "$version" > "$state/chart-version"
     ;;
   status) [[ -f "$state/values.json" ]] || exit 1 ;;
   get) cat "$state/values.json" ;;
   list)
-    if [[ -f "$state/chart-version" ]]; then
+    if [[ -n "${PS_TEST_HELM_LIST_FAIL:-}" ]]; then
+      echo "Error: simulated helm list failure" >&2
+      exit 1
+    fi
+    filter=""
+    shift
+    while [[ $# -gt 0 ]]; do
+      [[ "$1" == "-f" ]] && filter="${2:-}"
+      shift
+    done
+    if [[ "$filter" == '^policy-system$' && -f "$state/chart-version" ]]; then
       version="$(cat "$state/chart-version")"
       row='{"name":"policy-system","namespace":"policy-system","status":"deployed"'
       printf '[%s,"chart":"policy-system-%s","app_version":"%s"}]\n' "$row" "$version" "$version"
