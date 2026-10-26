@@ -309,3 +309,36 @@ def test_the_module_run_logs_to_the_service_log_and_stderr_and_keeps_stdout_one_
     logged = completed.stdout + completed.stderr + (log_dir / "ps-service.jsonl").read_text()
     assert SUBJECT not in logged
     assert ISSUER not in logged
+
+
+def test_a_logging_setup_failure_names_its_class_on_stderr_and_keeps_stdout_one_line(
+    tmp_path: Path,
+) -> None:
+    blocking_file = tmp_path / "blocked"
+    blocking_file.write_text("x")
+    log_dir = blocking_file / "pod-logs"  # parent is a file -> the log directory cannot be made
+    environ = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(DATABASE_ENV_PREFIXES)
+    }
+    environ |= {"PS_LOGGING_DIR": str(log_dir), **_unreachable_database_env()}
+
+    completed = subprocess.run(  # noqa: S603 -- fixed interpreter and module, literal arguments
+        [sys.executable, "-m", "ps_service.passkey_signing.revoke", *ARGS, "--count-only"],
+        env=environ,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 1, completed.stderr
+    assert completed.stdout.count("\n") == 1, completed.stdout
+    assert json.loads(completed.stdout) == {
+        "status": "failed",
+        "reason_code": "configuration_invalid",
+    }
+    assert "LoggingConfigurationError" in completed.stderr
+    for secret in (SUBJECT, ISSUER, str(log_dir), "127.0.0.1"):
+        assert secret not in completed.stderr

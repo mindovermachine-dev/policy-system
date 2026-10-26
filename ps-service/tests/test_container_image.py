@@ -261,6 +261,59 @@ def test_runtime_image_contains_no_test_modules_or_fixtures(
     )
 
 
+# Both databases the revoke command opens, pointed at a closed port inside the container, so the
+# command gets past its logging and configuration setup and fails only on the store.
+_UNREACHABLE_REVOKE_DATABASES = [
+    flag
+    for prefix in ("PS_PASSKEYSIGNING_POSTGRES_", "PS_STATE_POSTGRES_")
+    for name, value in (
+        ("HOST", "127.0.0.1"),
+        ("PORT", "1"),
+        ("DATABASE", "ps"),
+        ("USER", "ps"),
+        ("PASSWORD", "example-password"),
+        ("CONNECT_TIMEOUT_SECONDS", "2"),
+    )
+    for flag in ("-e", f"{prefix}{name}={value}")
+]
+
+
+def test_passkey_revoke_command_sets_up_logging_inside_the_image(
+    container_cli: str, image_ref: str
+) -> None:
+    """The deploy scripts' reset runs this command via `kubectl exec`; it must log in the image.
+
+    The image has no `.git`, so a default log path that still looks for a repo root fails
+    every run with `configuration_invalid` before a database is touched. Reaching
+    `signing_store_unavailable` proves logging and configuration were set up.
+    """
+    result = _run_container_cli(
+        container_cli,
+        [
+            "run",
+            "--rm",
+            *_UNREACHABLE_REVOKE_DATABASES,
+            image_ref,
+            "python",
+            "-m",
+            "ps_service.passkey_signing.revoke",
+            "--subject",
+            "owner@example.com",
+            "--issuer",
+            "https://auth.example.test/application/o/ps/",
+            "--count-only",
+        ],
+        timeout=_RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert result.returncode == 1, f"{result.stdout}\n{result.stderr}"
+    assert json.loads(result.stdout) == {
+        "status": "failed",
+        "reason_code": "signing_store_unavailable",
+    }, result.stderr
+
+
 # --- the smoke test that gates the push ----------------------------------------------------
 #
 # `on_semver.yml`'s build job runs this module against the image it just built, and only a

@@ -63,13 +63,12 @@ def resolve_default_log_path(*, repo_root: Path | None = None) -> Path:
         Reads the `PS_LOGGING_DIR` environment variable and creates the log directory
         (including parents) if absent.
     """
-    base = repo_root if repo_root is not None else _find_repo_root(Path(__file__))
     override = os.environ.get(_LOGGING_DIR_ENV_VAR)
-    log_dir = (
-        Path(override).expanduser().resolve()
-        if override
-        else (base / _DEFAULT_LOG_DIRNAME).resolve()
-    )
+    if override:
+        log_dir = Path(override).expanduser().resolve()
+    else:
+        base = repo_root if repo_root is not None else _find_repo_root(Path(__file__))
+        log_dir = (base / _DEFAULT_LOG_DIRNAME).resolve()
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

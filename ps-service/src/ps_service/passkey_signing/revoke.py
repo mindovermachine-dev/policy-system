@@ -25,7 +25,8 @@ Logging: run as a module, the command installs the service's process-wide emitte
 service does at startup, so its `passkey_revoke` entry is appended to `ps-service.jsonl` in
 `PS_LOGGING_DIR` next to the service's own entries, and a failed entry is also mirrored to
 stderr. Nothing but the JSON line is written to stdout. A log directory that cannot be set up is
-`configuration_invalid`, as it stops the service from starting.
+`configuration_invalid`, as it stops the service from starting; with no emitter to mirror it, one
+stderr line names the error's class (never its message, which carries the path).
 
 Environment: the service's own (`PS_PASSKEYSIGNING_POSTGRES_*` for the credentials,
 `PS_STATE_POSTGRES_*` for the audit row), as the pod already has it.
@@ -132,11 +133,14 @@ def _environment_collaborators(mode: str) -> RevokeCollaborators | int:
 
     Side Effects:
         Replaces the process-wide default emitter (`ps-service.jsonl` in `PS_LOGGING_DIR`,
-        failed entries mirrored to stderr) and may create the log directory.
+        failed entries mirrored to stderr) and may create the log directory. When no emitter
+        can be installed, writes one line naming the error's class to stderr instead.
     """
     try:
         emitter = configure(mirror_failures_to_stderr=True)
     except LoggingConfigurationError as exc:
+        # No emitter exists to mirror the failure, so name its class on stderr directly.
+        sys.stderr.write(f"{_PROG}: logging could not be set up ({type(exc).__name__})\n")
         return _fail(None, mode=mode, reason_code="configuration_invalid", error=exc)
     try:
         return _collaborators_from_environment(emitter)
