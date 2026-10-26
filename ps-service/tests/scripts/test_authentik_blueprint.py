@@ -437,9 +437,6 @@ def test_login_validate_binding_is_skipped_only_after_a_verified_passkey_identif
     assert attrs.get("negate", False) is False
     policy = _by_id(main_entries, _keyof_target(attrs["policy"]))
     assert policy["model"] == "authentik_policies_expression.expressionpolicy"
-    expression = policy["attrs"]["expression"]
-    assert "auth_webauthn_pwl" in expression
-    assert "not" in expression
 
 
 # --- 2C: sub_mode -------------------------------------------------------------------

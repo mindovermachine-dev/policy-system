@@ -511,8 +511,9 @@ entries:
 
   # After a passkey autofill sign-in the identification stage has already verified an
   # assertion, so the validate stage must not ask for a second one. The stage itself never
-  # reads `auth_method`, so the skip is a policy on its binding: the policy passes unless the
-  # plan records a passkey identification, and `failure_result: true` keeps the stage
+  # reads `auth_method`, so the skip is a policy on its binding. On re-evaluation authentik
+  # merges the flow plan's context into the policy context, and the policy passes unless that
+  # context records a passkey identification. `failure_result: true` keeps the stage
   # included when the policy cannot be evaluated. The marker is set only after a verified
   # assertion, and that assertion was verified by this same validate stage (user verification
   # required), so skipping cannot be used to bypass the passkey check.
@@ -522,7 +523,7 @@ entries:
       name: ps-login-skip-validate-after-passkey
     attrs:
       expression: |
-        return not (flow_plan.context.get("auth_method") == "auth_webauthn_pwl")
+        return context.get("auth_method") != "auth_webauthn_pwl"
 
   - model: authentik_policies.policybinding
     identifiers:

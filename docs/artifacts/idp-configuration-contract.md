@@ -158,7 +158,10 @@ password:
   The blueprint is applied to the pinned Authentik image in CI. To run that check locally, use
   `uv run pytest -m authentik_blueprint -q -n0` (needs podman or docker; the first run pulls a
   1.4 GB image). `scripts/verify-authentik-blueprint.sh [--twice] [--upgrade-from REV]
-  [BLUEPRINT]` runs the same apply directly.
+  [BLUEPRINT]` runs the same apply directly. The check also plans the login flow with and
+  without the passkey `auth_method` and requires the validation stage to be skipped only after a
+  passkey sign-in, and it fails on any blueprint expression policy that reads a name the pinned
+  Authentik does not provide.
 
 ### Configuring PS Service manually (non-script Authentik instances)
 

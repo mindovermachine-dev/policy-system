@@ -48,6 +48,20 @@ entries:
       order: 987
 """
 
+# An expression policy whose body reads a name the policy evaluator does not provide.
+EXPRESSION_POLICY_READING_AN_UNDEFINED_NAME = """\
+version: 1
+metadata:
+  name: expression-policy-reading-an-undefined-name
+entries:
+  - model: authentik_policies_expression.expressionpolicy
+    identifiers:
+      name: reads-an-undefined-name
+    attrs:
+      expression: |
+        return flow_plan.context.get("auth_method") == "auth_webauthn_pwl"
+"""
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _require_container_cli() -> None:  # pyright: ignore[reportUnusedFunction]  # autouse fixture
@@ -69,11 +83,17 @@ def _verify(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_chart_blueprint_applies_and_leaves_the_passkey_login_chain() -> None:
+def test_chart_blueprint_applies_and_passes_every_guard_check() -> None:
     completed = _verify(str(CHART_BLUEPRINT))
 
     assert completed.returncode == 0, completed.stdout[-4000:] + completed.stderr[-2000:]
+    assert "PASS shipped expression policies read only names authentik provides" in completed.stdout
+    assert "PASS expression policies read only names authentik provides" in completed.stdout
     assert "PASS ps-login chain, brand pointers and ps-cli application" in completed.stdout
+    assert (
+        "PASS ps-login validate stage is skipped only after a passkey identification"
+        in completed.stdout
+    )
     assert "PASS recovery and enrollment flows end on the confirmation stage" in completed.stdout
 
 
@@ -105,3 +125,17 @@ def test_guard_fails_on_a_blueprint_the_importer_cannot_apply(tmp_path: Path) ->
 
     assert completed.returncode != 0
     assert "policybindingmodel_ptr" in completed.stdout + completed.stderr
+
+
+def test_guard_fails_on_an_expression_policy_that_reads_an_undefined_name(tmp_path: Path) -> None:
+    blueprint = tmp_path / "undefined-name.yaml"
+    blueprint.write_text(EXPRESSION_POLICY_READING_AN_UNDEFINED_NAME, encoding="utf-8")
+
+    completed = _verify(str(blueprint))
+
+    output_tail = completed.stdout[-4000:] + completed.stderr[-2000:]
+    fail_lines = [line for line in completed.stdout.splitlines() if line.startswith("FAIL ")]
+    naming_lines = [line for line in fail_lines if "reads-an-undefined-name" in line]
+    assert completed.returncode == 1, output_tail
+    assert any("flow_plan" in line for line in naming_lines), output_tail
+    assert "PASS shipped expression policies read only names authentik provides" in completed.stdout

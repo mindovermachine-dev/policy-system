@@ -20,7 +20,10 @@
 # first (the chart blueprint patches objects they create), then the chart blueprint. Both
 # `validate()` and `apply()` must succeed and `validate()` must log no error, so a failure the
 # worker would only log is a failure here. After the last pass the script asserts the ps-login flow
-# chain, the brand pointers and the ps-cli application. Exit 0 means the blueprint applies; any
+# chain, the brand pointers and the ps-cli application, and plans ps-login through Authentik's
+# FlowPlanner to require that the validate stage is skipped only when the plan records a passkey
+# identification. Every expression policy in the shipped blueprints and in BLUEPRINT must read
+# only names that Authentik's policy evaluator provides. Exit 0 means the blueprint applies; any
 # other exit status is a failure and the output names the entry. Containers and the network are
 # removed on every exit path. No credentials are needed and the image is a public pull.
 set -euo pipefail
@@ -57,7 +60,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --print-image) PRINT_IMAGE=1 ;;
     -h | --help)
-      sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     -*) die "unknown option: $1" ;;
@@ -104,20 +107,59 @@ if [ -n "$UPGRADE_FROM" ]; then
 fi
 
 cat >"$WORKDIR/guard.py" <<'PY'
+import builtins
 import os
+import symtable
 import sys
 
+from django.contrib.messages import get_messages
+from django.contrib.messages.storage.cookie import CookieStorage
+from django.test import RequestFactory
+
+from authentik.blueprints.v1.common import BlueprintEntryDesiredState
 from authentik.blueprints.v1.importer import Importer
 from authentik.brands.models import Brand
-from authentik.core.models import Application
+from authentik.core.models import Application, User
+from authentik.flows.markers import ReevaluateMarker
 from authentik.flows.models import Flow, FlowStageBinding, Stage
-from authentik.stages.deny.models import DenyStage
+from authentik.flows.planner import PLAN_CONTEXT_PENDING_USER, FlowPlanner
+from authentik.lib.expression.evaluator import sanitize_arg
+from authentik.policies.expression.evaluator import PolicyEvaluator
+from authentik.policies.expression.models import ExpressionPolicy
 from authentik.policies.models import PolicyBinding
+from authentik.policies.types import PolicyRequest
 from authentik.providers.oauth2.models import OAuth2Provider
+from authentik.stages.deny.models import DenyStage
+from authentik.stages.password.stage import PLAN_CONTEXT_METHOD
 
 TWICE = os.environ["GUARD_TWICE"] == "1"
 SEED = "/blueprints/custom/seed.yaml" if os.environ["GUARD_SEED"] == "1" else None
 TARGET = "/blueprints/custom/target.yaml"
+
+VALIDATE_ORDER = 30
+PASSKEY_AUTH_METHOD = "auth_webauthn_pwl"
+NO_AUTH_METHOD = object()
+# Every value here must leave the validate stage in the plan: no value at all, empty values, the
+# "auth_password" literal, every other value authentik's backends, stages and token endpoints
+# write, and a near miss of the passkey value.
+AUTH_METHODS_THAT_KEEP_VALIDATION = (
+    NO_AUTH_METHOD,
+    None,
+    "",
+    "auth_password",
+    "password",
+    "auth_mfa",
+    "ldap",
+    "kerberos",
+    "mtls",
+    "trusted_endpoint",
+    "token",
+    "jwt",
+    "oauth_client_secret",
+    "token_exchange",
+    "AUTH_WEBAUTHN_PWL",
+)
+EXPRESSION_POLICY_MODEL = "authentik_policies_expression.expressionpolicy"
 
 
 def fail(message):
@@ -147,6 +189,152 @@ def counts():
     }
 
 
+def http_request_for(user):
+    request = RequestFactory().get("/if/flow/ps-login/")
+    request.user = user
+    # Policy results are reported as django messages; without a message storage on the request,
+    # add_message raises as soon as a policy emits one. The cookie backend needs no session.
+    request._messages = CookieStorage(request)
+    return request
+
+
+def plan_from_validate_stage(login_flow, user, request):
+    planner = FlowPlanner(login_flow)
+    planner.use_cache = False
+    plan = planner.plan(request, {PLAN_CONTEXT_PENDING_USER: user})
+    while plan.bindings and plan.bindings[0].order < VALIDATE_ORDER:
+        plan.pop()
+    if not plan.bindings or plan.bindings[0].order != VALIDATE_ORDER:
+        fail(f"the ps-login plan has no validate stage at order {VALIDATE_ORDER}")
+    if not isinstance(plan.markers[0], ReevaluateMarker):
+        fail("the ps-login validate stage is planned without re-evaluation, so its skip policy never runs")
+    return plan
+
+
+def describe_auth_method(auth_method):
+    return "absent" if auth_method is NO_AUTH_METHOD else repr(auth_method)
+
+
+def describe_validate_stage(shown):
+    return "shown" if shown else "skipped"
+
+
+def validate_stage_after_identification(login_flow, user, auth_method):
+    request = http_request_for(user)
+    plan = plan_from_validate_stage(login_flow, user, request)
+    if auth_method is not NO_AUTH_METHOD:
+        plan.context[PLAN_CONTEXT_METHOD] = auth_method
+    next_binding = plan.next(request)
+    shown = next_binding is not None and next_binding.order == VALIDATE_ORDER
+    return shown, [str(message) for message in get_messages(request)]
+
+
+def check_validate_skip(login_flow, user):
+    cases = [(PASSKEY_AUTH_METHOD, False)] + [(method, True) for method in AUTH_METHODS_THAT_KEEP_VALIDATION]
+    for auth_method, expected_shown in cases:
+        shown, messages = validate_stage_after_identification(login_flow, user, auth_method)
+        method = describe_auth_method(auth_method)
+        if shown != expected_shown:
+            fail(
+                f"ps-login validate stage {describe_validate_stage(shown)} with auth_method={method}, "
+                f"expected {describe_validate_stage(expected_shown)}; policy messages: {messages}"
+            )
+        if messages:
+            fail(f"ps-login validate-stage policy emitted messages with auth_method={method}: {messages}")
+    print("PASS ps-login validate stage is skipped only after a passkey identification")
+
+
+def expression_policies_defined_by(path):
+    with open(path, encoding="utf-8") as handle:
+        blueprint = Importer.from_string(handle.read()).blueprint
+    policies = []
+    for entry in blueprint.iter_entries():
+        if entry.get_model(blueprint) != EXPRESSION_POLICY_MODEL:
+            continue
+        if entry.get_state(blueprint) == BlueprintEntryDesiredState.ABSENT:
+            continue
+        if not entry.check_all_conditions_match(blueprint):
+            continue
+        identifiers = entry.get_identifiers(blueprint)
+        policy = ExpressionPolicy.objects.filter(**identifiers).first()
+        if policy is None:
+            fail(f"{path} defines expression policy {identifiers} but no applied row matches it")
+        policies.append(policy)
+    return policies
+
+
+def evaluator_for(policy, user):
+    # Built the way ExpressionPolicy.passes builds it, for a policy evaluated inside a flow: the
+    # HTTP request is set, which adds http_request and ak_client_ip. Flow and stage bindings
+    # always carry it, and ak_call_policy copies the caller's request; a policy evaluated with no
+    # HTTP request (for example from an event rule) lacks those two names.
+    evaluator = PolicyEvaluator(policy.name)
+    evaluator.policy = policy
+    request = PolicyRequest(user)
+    request.set_http_request(http_request_for(user))
+    evaluator.set_policy_request(request)
+    return evaluator
+
+
+def names_the_evaluator_provides(evaluator):
+    # _globals and _context are the evaluator's own name tables; reading them keeps the check in
+    # step with the pinned authentik instead of a hand-written list.
+    context_names = {sanitize_arg(key) for key in evaluator._context}
+    return set(evaluator._globals) | context_names | set(vars(builtins))
+
+
+def global_names_referenced_in(table):
+    names = {symbol.get_name() for symbol in table.get_symbols() if symbol.is_global() and symbol.is_referenced()}
+    for child in table.get_children():
+        names |= global_names_referenced_in(child)
+    return names
+
+
+def names_read_by(evaluator, policy):
+    # Free names are read from the compiled scopes rather than found by evaluating the policy,
+    # because a name in a branch that does not run never raises.
+    module = symtable.symtable(evaluator.wrap_expression(policy.expression), policy.name, "exec")
+    (handler_scope,) = [child for child in module.get_children() if child.get_name() == "handler"]
+    return global_names_referenced_in(handler_scope)
+
+
+def undefined_names_by_policy(policies, user):
+    found = []
+    for policy in policies:
+        evaluator = evaluator_for(policy, user)
+        undefined = sorted(names_read_by(evaluator, policy) - names_the_evaluator_provides(evaluator))
+        if undefined:
+            found.append((policy.name, undefined))
+    return found
+
+
+def describe_undefined_names(found):
+    return "; ".join(f"{name}: {', '.join(names)}" for name, names in found)
+
+
+def check_shipped_expression_policy_names(paths, user):
+    policies = [policy for path in paths for policy in expression_policies_defined_by(path)]
+    if not policies:
+        fail("no shipped expression policies to check the name check against")
+    flagged = undefined_names_by_policy(policies, user)
+    if flagged:
+        fail(f"the name check flags shipped expression policies: {describe_undefined_names(flagged)}")
+    print(f"PASS shipped expression policies read only names authentik provides ({len(policies)} checked)")
+
+
+def check_expression_policy_names(path, user):
+    policies = expression_policies_defined_by(path)
+    flagged = undefined_names_by_policy(policies, user)
+    if flagged:
+        fail(
+            "; ".join(
+                f"expression policy {name} reads names authentik does not provide: {', '.join(names)}"
+                for name, names in flagged
+            )
+        )
+    print(f"PASS expression policies read only names authentik provides ({len(policies)} checked)")
+
+
 shipped = []
 for directory in ("/blueprints/system", "/blueprints/default"):
     shipped += [os.path.join(directory, name) for name in sorted(os.listdir(directory)) if name.endswith(".yaml")]
@@ -163,6 +351,9 @@ if TWICE:
     print(f"COUNTS {second}")
     if second != first:
         fail(f"row counts changed on re-apply: {first} -> {second}")
+pending_user = User.objects.create(username="guard-pending-user")
+check_shipped_expression_policy_names(shipped, pending_user)
+check_expression_policy_names(TARGET, pending_user)
 
 flow = Flow.objects.filter(slug="ps-login").first()
 if flow is None:
@@ -180,6 +371,7 @@ application = Application.objects.filter(slug="ps-cli").first()
 if application is None or not OAuth2Provider.objects.filter(client_id="ps-cli").exists():
     fail("the ps-cli application or its provider is missing")
 print("PASS ps-login chain, brand pointers and ps-cli application")
+check_validate_skip(flow, pending_user)
 for slug, orders in (
     ("ps-passkey-recovery", [10, 100, 110]),
     ("ps-invite-enrollment", [5, 10, 20, 30, 100, 110]),
