@@ -1,11 +1,13 @@
-# PS Service paths the PS Service Ingress forwards: the client status endpoint /status, the OAuth
-# protected-resource metadata under /.well-known/, the REST API and the MCP endpoint. One path per
-# line; each entry matches that path and everything below it. There is no catch-all "/" entry. The
-# orchestrator's liveness and readiness probes, /metrics (anonymous Prometheus metrics) and the
-# interactive API documentation are in-cluster only and not listed, so the Ingress does not
-# forward them. Every route of the app must be covered by an entry here or be on the
-# internal-only list of ps-service/tests/api/test_public_path_allowlist.py.
+# PS Service paths the PS Service Ingress forwards: the client status endpoint /status, the page
+# /enrolled a browser lands on after passkey enrolment, the OAuth protected-resource metadata
+# under /.well-known/, the REST API and the MCP endpoint. One path per line; each entry matches
+# that path and everything below it. There is no catch-all "/" entry. The orchestrator's liveness
+# and readiness probes, /metrics (anonymous Prometheus metrics) and the interactive API
+# documentation are in-cluster only and not listed, so the Ingress does not forward them. Every
+# route of the app must be covered by an entry here or be on the internal-only list of
+# ps-service/tests/api/test_public_path_allowlist.py.
 /status
+/enrolled
 /.well-known/
 /catalog
 /ingestions

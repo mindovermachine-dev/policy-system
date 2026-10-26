@@ -661,8 +661,8 @@ sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/Syst
 
 Open the enrolment link in a browser on this machine and register a passkey. A security key, the
 platform authenticator or a phone all work. There is no password. Registration also logs you in
-and ends on a confirmation page that says the passkey is registered and you are signed in, and
-names `ps-cli login`. Close the tab. Everyone else
+and ends on a PS Service page at `https://<host>/enrolled` that says the passkey is registered and
+you are signed in, and names `ps-cli auth login`. Close the tab. Everyone else
 registers from an invitation the owner sends. If you are not the owner, skip this step.
 
 #### Step 4: Install the Claude Code CLI
@@ -766,8 +766,8 @@ certutil -addstore -f Root $HOME\ca.pem
 
 Open the enrolment link in a browser on this machine and register a passkey. A security key, the
 platform authenticator or a phone all work. There is no password. Registration also logs you in
-and ends on a confirmation page that says the passkey is registered and you are signed in, and
-names `ps-cli login`. Close the tab. Everyone else
+and ends on a PS Service page at `https://<host>/enrolled` that says the passkey is registered and
+you are signed in, and names `ps-cli auth login`. Close the tab. Everyone else
 registers from an invitation the owner sends. If you are not the owner, skip this step.
 
 #### Step 4: Install the Claude Code CLI

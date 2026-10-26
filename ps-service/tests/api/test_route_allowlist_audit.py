@@ -1,8 +1,8 @@
 """Route allow-list default-deny audit.
 
 Any route not in the explicit open-route allow-list
-(``/livez``, ``/readyz``, ``/status``, ``/.well-known/*``) requires a token; this test
-enumerates the app's routes and asserts it.
+(``/livez``, ``/readyz``, ``/status``, ``/enrolled``, ``/.well-known/*``) requires a token; this
+test enumerates the app's routes and asserts it.
 
 One more deliberate exemption exists, ``/approvals/*``
 -- the companion-browser signing-ceremony router. It is a bare capability
@@ -101,7 +101,7 @@ _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 # silently passing) if a future edit to that module's private constants ever drifts
 # from the documented allow-list. `_APPROVALS_PREFIX` is a separate deliberate
 # addition -- see this file's module docstring.
-_EXEMPT_PATHS = frozenset({"/livez", "/readyz", "/status"})
+_EXEMPT_PATHS = frozenset({"/livez", "/readyz", "/status", "/enrolled"})
 _EXEMPT_PREFIX = "/.well-known/"
 _APPROVALS_PREFIX = "/approvals/"
 # `/mcp` is a `Mount` the middleware exempts (see this file's module docstring);

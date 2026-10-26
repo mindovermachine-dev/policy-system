@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse
 
 from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
@@ -36,6 +37,7 @@ from ps_service.api.dependencies import (
     public_route,
     require_access_role,
 )
+from ps_service.api.enrolment_done import ENROLMENT_DONE_PATH, get_enrolment_done_page
 from ps_service.api.errors import (
     CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
@@ -658,14 +660,16 @@ def build_api_router() -> APIRouter:
     """Build the REST ``APIRouter`` that serves the PS Service API.
 
     A fresh router is returned on every call, so each application instance owns its own routes.
-    Routes: ``GET /status``, ``GET /catalog``, ``POST /ingestions``, ``GET
+    Routes: ``GET /status``, ``GET /enrolled``, ``GET /catalog``, ``POST /ingestions``, ``GET
     /ingestions/{run_id}``, ``POST /restorations``, ``POST /restorations/from-catalog``, ``POST
     /exports``, ``POST /change-checks``, ``GET /near-misses`` and ``POST
     /near-misses/{review_id}/resolve``. The
     ingestion (either source), restore, export
     and change-check routes require the ``ComplianceOfficer`` access role through a route-level
     dependency. ``GET /status`` is on ``RestAuthMiddleware``'s open list and is declared a public
-    route: it needs no token, and its handler checks an optional bearer token itself.
+    route: it needs no token, and its handler checks an optional bearer token itself. ``GET
+    /enrolled`` is the fixed page a browser lands on after passkey enrolment; it is on the same
+    open list, declared a public route, and reads no request input.
 
     Returns:
         An ``APIRouter`` holding all of the routes above, ready for ``include_router``.
@@ -682,6 +686,20 @@ def build_api_router() -> APIRouter:
                 public_route(
                     "the client status endpoint answers every caller; its handler gates the"
                     " detail on an optional verified token"
+                )
+            )
+        ],
+    )
+    router.add_api_route(
+        ENROLMENT_DONE_PATH,
+        get_enrolment_done_page,
+        methods=["GET"],
+        response_class=HTMLResponse,
+        dependencies=[
+            Depends(
+                public_route(
+                    "the page a browser lands on after passkey enrolment; static, reads no"
+                    " request input"
                 )
             )
         ],

@@ -3664,12 +3664,13 @@ def test_mcp_path_returns_503_while_graph_replay_is_unhealthy() -> None:
     assert response.json() == _REPLAY_GATE_BODY
 
 
-def test_livez_readyz_status_and_well_known_are_not_gated() -> None:
+def test_livez_readyz_status_well_known_and_the_enrolment_done_page_are_not_gated() -> None:
     app = create_app(_complete_config())
     _hold_replay()
 
     with TestClient(app) as client:
         livez = client.get("/livez")
+        done_page = client.get("/enrolled")
         statuses = {
             path: client.get(path).status_code
             for path in ("/readyz", "/status", "/.well-known/oauth-protected-resource")
@@ -3680,6 +3681,8 @@ def test_livez_readyz_status_and_well_known_are_not_gated() -> None:
     assert statuses["/readyz"] == 503  # /readyz's own answer, with its own body
     assert statuses["/status"] == 200
     assert statuses["/.well-known/oauth-protected-resource"] != 503
+    assert done_page.status_code == 200
+    assert "ps-cli auth login" in done_page.text
 
 
 def test_requests_reach_the_app_again_when_graph_replay_is_healthy() -> None:

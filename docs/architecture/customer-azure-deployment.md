@@ -259,18 +259,22 @@ startup/on change — a native Authentik feature, no custom code), covering:
 - An **invite-gated, passkey-only Enrollment flow**: Invitation stage
   (`continue_flow_without_invitation: false` — no invite code, registration is rejected identically
   whether the code is missing, garbage, expired, or already redeemed) → Prompt (username/name/email,
-  no password field) → User Write → WebAuthn (passkey) → User Login → confirmation page
-  naming `ps-cli login`. An invitee's account therefore has no password set.
+  no password field) → User Write → WebAuthn (passkey) → User Login → redirect to PS Service's
+  public `/enrolled` page naming `ps-cli auth login`. An invitee's account therefore has no password set.
 - A **passkey-only login flow** (`ps-login`, the brand's `flow_authentication`): Identification →
   Reputation Deny (order 25) → passkey validation (order 30) → User Login. It has no password
   stage. Its identification stage accepts a WebAuthn assertion directly (autofill), and the
   validation stage is skipped after such a sign-in so there is no second prompt; a typed username
   followed by **Log in** triggers the passkey prompt. The validation stage requires user
   verification and denies a user who has no passkey.
-- A **passkey recovery flow** (WebAuthn setup → User Login → confirmation page naming `ps-cli login`, no
-  password stage), set as the brand's
+- A **passkey recovery flow** (WebAuthn setup → User Login → redirect to PS Service's public
+  `/enrolled` page naming `ps-cli auth login`, no password stage), set as the brand's
   `flow_recovery`. It is what the owner's enrolment link is issued from — Authentik cannot issue a
-  recovery link while the brand has none.
+  recovery link while the brand has none. A link stores its flow plan when it is issued, so an
+  owner link issued before upgrading to a release whose recovery ends on `/enrolled` still
+  registers the passkey but can end on an Authentik error page instead of `/enrolled`; the owner
+  checks with `ps-cli auth login` and, if that fails, gets a fresh link from
+  [`--reset-owner-passkey`](#--reset-owner-passkey).
 - The ps-cli Provider's **`sub_mode: user_username`**, so the ID token's `sub` is the username;
   with the owner's username equal to their email, the owner's `sub` is known before they log in.
 - The bundled blueprints first apply Authentik's own shipped `Default - Brand` blueprint. Without
@@ -312,8 +316,8 @@ in-cluster consequences: PS Service calls Authentik on its in-cluster Service ad
 public address (`psService.authentik.publicUrl` → `PS_AUTHENTIK_PUBLIC_URL`); and the deploy
 script creates the owner through a `kubectl port-forward` to the Service, rewriting the link's
 authority to the public host. The user-facing `/auth/if/user/` page is deliberately not
-allowlisted (an enrolment ends on a confirmation page that Authentik serves from the allowlisted
-flow path, with no redirect to `/auth/`). Verified on ingress-nginx
+allowlisted (an enrolment ends on PS Service's public `/enrolled` page through a redirect stage;
+`/auth/` and `/auth/if/user/` stay unrouted). Verified on ingress-nginx
 under `kind`, **not** on AKS's managed NGINX add-on (see [Open Risks](#open-risks--follow-ups)).
 
 **The evaluator counterpart.** `deploy-ps-eval.sh` serves PS Service and Authentik through the

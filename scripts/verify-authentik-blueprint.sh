@@ -39,11 +39,16 @@
 # worker would only log is a failure here. After the last pass the script asserts the ps-login flow
 # chain, the brand pointers and the ps-cli application, and plans ps-login through Authentik's
 # FlowPlanner to require that the validate stage is skipped only when the plan records a passkey
-# identification. Every expression policy in the shipped blueprints and in BLUEPRINT must read
-# only names that Authentik's policy evaluator provides. Exit 0 means the blueprint applies; any
-# other exit status is a failure and the output names the entry. The one-shot run removes its
-# containers and network on every exit path; --start-environment does so only when it fails.
-# Each phase logs its elapsed seconds on stderr as "phase NAME: Ns". No credentials are needed and
+# identification. The passkey recovery and invite enrollment flows must each end, as their one
+# binding after user login, on a static redirect stage to PS Service's done page /enrolled, and
+# neither deny confirmation stage (ps-enrollment-confirmation, ps-recovery-confirmation) may
+# exist. The brand's custom CSS must name the flow cancel path /flows/-/cancel/, which it
+# hides. Every expression policy in the shipped blueprints and in BLUEPRINT must read only names
+# that Authentik's policy evaluator provides.
+# Exit 0 means the blueprint applies; any other exit status is a failure and the output names the
+# entry. The one-shot run removes its containers and network on every exit path;
+# --start-environment does so only when it fails. Each phase logs its elapsed seconds on stderr
+# as "phase NAME: Ns". No credentials are needed and
 # the image is a public pull.
 set -euo pipefail
 
@@ -210,6 +215,7 @@ from authentik.policies.models import PolicyBinding
 from authentik.policies.types import PolicyRequest
 from authentik.providers.oauth2.models import OAuth2Provider
 from authentik.stages.deny.models import DenyStage
+from authentik.stages.redirect.models import RedirectStage
 from authentik.stages.password.stage import PLAN_CONTEXT_METHOD
 
 # The shell command records an audit event for every row it saves, which nothing here reads and
@@ -223,6 +229,7 @@ SEED = os.environ.get("GUARD_SEED") or None
 TARGET = os.environ.get("GUARD_TARGET")
 
 VALIDATE_ORDER = 30
+DONE_PATH = "/enrolled"
 PASSKEY_AUTH_METHOD = "auth_webauthn_pwl"
 NO_AUTH_METHOD = object()
 # Every value here must leave the validate stage in the plan: no value at all, empty values, the
@@ -455,14 +462,20 @@ if deny.count() != 1 or deny.first().negate or deny.first().policy.name != "ps-l
 brand = Brand.objects.get(domain="authentik-default")
 if brand.flow_authentication_id != flow.pk or brand.flow_device_code_id != flow.pk:
     fail("brand flow_authentication and flow_device_code are not ps-login")
+if "/flows/-/cancel/" not in (brand.branding_custom_css or ""):
+    fail("brand branding_custom_css does not hide links to /flows/-/cancel/")
 application = Application.objects.filter(slug="ps-cli").first()
 if application is None or not OAuth2Provider.objects.filter(client_id="ps-cli").exists():
     fail("the ps-cli application or its provider is missing")
 print("PASS ps-login chain, brand pointers and ps-cli application")
+print("PASS brand css hides flow cancel links")
 check_validate_skip(flow, pending_user)
-for slug, orders in (
-    ("ps-passkey-recovery", [10, 100, 110]),
-    ("ps-invite-enrollment", [5, 10, 20, 30, 100, 110]),
+retired = ["ps-recovery-confirmation", "ps-enrollment-confirmation"]
+if DenyStage.objects.filter(name__in=retired).exists():
+    fail(f"a retired deny confirmation stage still exists: {retired}")
+for slug, orders, login_order in (
+    ("ps-passkey-recovery", [10, 100, 110], 100),
+    ("ps-invite-enrollment", [5, 10, 20, 30, 100, 110], 100),
 ):
     target = Flow.objects.filter(slug=slug).first()
     if target is None:
@@ -470,10 +483,13 @@ for slug, orders in (
     chain = list(FlowStageBinding.objects.filter(target=target).order_by("order"))
     if [b.order for b in chain] != orders:
         fail(f"{slug} binding orders are {[b.order for b in chain]}, expected {orders}")
-    confirmation = DenyStage.objects.filter(pk=chain[-1].stage_id).first()
-    if confirmation is None or "ps-cli login" not in confirmation.deny_message:
-        fail(f"{slug} does not end on the confirmation deny stage")
-print("PASS recovery and enrollment flows end on the confirmation stage")
+    after_login = [b for b in chain if b.order > login_order]
+    if len(after_login) != 1:
+        fail(f"{slug} has {len(after_login)} bindings after user login, expected exactly 1")
+    done = RedirectStage.objects.filter(pk=after_login[0].stage_id).first()
+    if done is None or done.mode != "static" or done.target_static != DONE_PATH:
+        fail(f"{slug} does not end on a static redirect to {DONE_PATH}")
+    print(f"PASS {slug} ends on the done-page redirect")
 PY
 }
 

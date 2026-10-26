@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers
 from starlette.requests import Request
 
+from ps_service.api.enrolment_done import ENROLMENT_DONE_PATH
 from ps_service.api.error_handlers import (
     _make_verbatim_handler,  # pyright: ignore[reportPrivateUsage]  # shared body-shaping helper; reused so the 413 body matches every other ApiError's shape exactly
     register_exception_handlers,
@@ -188,7 +189,9 @@ class _MaxBodySizeMiddleware:
         await self._app(scope, receive, send)
 
 
-_REPLAY_GATE_EXEMPT_PATHS = frozenset({"/livez", "/readyz", "/status", "/metrics"})
+_REPLAY_GATE_EXEMPT_PATHS = frozenset(
+    {"/livez", "/readyz", "/status", "/metrics", ENROLMENT_DONE_PATH}
+)
 _REPLAY_GATE_EXEMPT_PREFIX = "/.well-known/"
 _REPLAY_GATE_RETRY_AFTER_SECONDS = "5"
 
@@ -198,11 +201,13 @@ class _ReplayReadGateMiddleware:
 
     While `graph_replay` is unhealthy a graph may be empty or half rebuilt, so any request that
     could read it gets `503` with the status-only `/readyz` body. Exempt: `/livez`, `/readyz`,
-    `/status`, `/metrics` and the `/.well-known/` metadata, the only paths that are
-    unauthenticated (or, for `/status`, verify an optional token in their own handler) and
-    graph-free. It is the outermost layer, so it runs before authentication: a caller who is not
-    authenticated learns nothing beyond "not ready". A dependency that was never recorded counts
-    healthy, so a service without a replay is never gated. Only HTTP scopes are looked at.
+    `/status`, `/metrics`, the `/.well-known/` metadata and the enrolment done page `/enrolled`,
+    the only paths that are unauthenticated (or, for `/status`, verify an optional token in their
+    own handler) and graph-free. The done page is exempt because a first passkey enrolment
+    typically follows a deploy while the replay may still run. It is the outermost layer, so it
+    runs before authentication: a caller who is not authenticated learns nothing beyond "not
+    ready". A dependency that was never recorded counts healthy, so a service without a replay
+    is never gated. Only HTTP scopes are looked at.
     """
 
     def __init__(self, app: ASGIApp) -> None:

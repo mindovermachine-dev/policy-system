@@ -11,12 +11,15 @@ Pure file parsing, no external process: hermetic, no marker needed.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 import yaml
+
+from ps_service.api.enrolment_done import ENROLMENT_DONE_PATH
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FILES_DIR = REPO_ROOT / "charts" / "policy-system" / "files"
@@ -136,7 +139,7 @@ def test_recovery_flow_is_passkey_only_recovery_designation(
     assert flow["attrs"]["authentication"] == "none"
 
 
-def test_recovery_flow_binds_webauthn_setup_then_user_login_then_confirmation(
+def test_recovery_flow_binds_webauthn_setup_then_user_login_then_done_redirect(
     main_entries: list[dict[str, Any]],
 ) -> None:
     models = _bound_stage_models(main_entries, "ps-recovery-flow")
@@ -144,30 +147,79 @@ def test_recovery_flow_binds_webauthn_setup_then_user_login_then_confirmation(
     assert models == [
         "authentik_stages_authenticator_webauthn.authenticatorwebauthnstage",
         "authentik_stages_user_login.userloginstage",
-        "authentik_stages_deny.denystage",
+        REDIRECT_STAGE_MODEL,
     ]
 
 
-CONFIRMATION_FLOW_IDS = ["ps-recovery-flow", "ps-enrollment-flow"]
+REDIRECT_STAGE_MODEL = "authentik_stages_redirect.redirectstage"
+DENY_STAGE_MODEL = "authentik_stages_deny.denystage"
+DONE_REDIRECT_FLOW_IDS = ["ps-recovery-flow", "ps-enrollment-flow"]
+RETIRED_CONFIRMATION_STAGE_NAMES = ["ps-recovery-confirmation", "ps-enrollment-confirmation"]
 
 
-@pytest.mark.parametrize("flow_id", CONFIRMATION_FLOW_IDS)
-def test_flow_ends_on_a_deny_confirmation_bound_after_user_login(
+def _user_login_order(entries: list[dict[str, Any]], bindings: list[dict[str, Any]]) -> int:
+    order: int = next(
+        b["identifiers"]["order"]
+        for b in bindings
+        if _by_id(entries, _keyof_target(b["identifiers"]["stage"]))["model"]
+        == "authentik_stages_user_login.userloginstage"
+    )
+    return order
+
+
+@pytest.mark.parametrize("flow_id", DONE_REDIRECT_FLOW_IDS)
+def test_flow_ends_on_a_static_redirect_to_the_done_page_after_user_login(
     main_entries: list[dict[str, Any]], flow_id: str
 ) -> None:
     bindings = _bindings_for(main_entries, flow_id)
-    login_order = next(
-        b["identifiers"]["order"]
-        for b in bindings
-        if _by_id(main_entries, _keyof_target(b["identifiers"]["stage"]))["model"]
-        == "authentik_stages_user_login.userloginstage"
-    )
     final = bindings[-1]
     final_stage = _by_id(main_entries, _keyof_target(final["identifiers"]["stage"]))
+    target = final_stage["attrs"]["target_static"]
 
-    assert final["identifiers"]["order"] > login_order
-    assert final_stage["model"] == "authentik_stages_deny.denystage"
-    assert "ps-cli login" in final_stage["attrs"]["deny_message"]
+    assert final["identifiers"]["order"] > _user_login_order(main_entries, bindings)
+    assert final_stage["model"] == REDIRECT_STAGE_MODEL
+    assert final_stage["attrs"]["mode"] == "static"
+    assert target == ENROLMENT_DONE_PATH
+    assert target.startswith("/")
+    assert not target.startswith("//")
+    assert "://" not in target
+    assert not target.startswith("/auth/")
+
+
+@pytest.mark.parametrize("flow_id", DONE_REDIRECT_FLOW_IDS)
+def test_no_deny_stage_is_bound_to_the_enrolment_flows(
+    main_entries: list[dict[str, Any]], flow_id: str
+) -> None:
+    assert DENY_STAGE_MODEL not in _bound_stage_models(main_entries, flow_id)
+
+
+@pytest.mark.parametrize("stage_name", RETIRED_CONFIRMATION_STAGE_NAMES)
+def test_retired_deny_confirmation_stage_is_declared_absent(
+    main_entries: list[dict[str, Any]], stage_name: str
+) -> None:
+    matches = [
+        e
+        for e in main_entries
+        if e["model"] == DENY_STAGE_MODEL and e["identifiers"].get("name") == stage_name
+    ]
+
+    assert matches == [
+        {"model": DENY_STAGE_MODEL, "state": "absent", "identifiers": {"name": stage_name}}
+    ]
+
+
+def test_both_enrolment_flows_redirect_to_the_same_done_page(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    targets = {
+        _by_id(
+            main_entries,
+            _keyof_target(_bindings_for(main_entries, flow_id)[-1]["identifiers"]["stage"]),
+        )["attrs"]["target_static"]
+        for flow_id in DONE_REDIRECT_FLOW_IDS
+    }
+
+    assert targets == {ENROLMENT_DONE_PATH}
 
 
 def test_recovery_flow_has_no_password_or_identification_stage(
@@ -235,7 +287,7 @@ def test_no_password_prompt_exists_anywhere_in_the_blueprint(
     )
 
 
-def test_enrollment_binding_chain_is_invitation_prompt_write_webauthn_login_confirmation(
+def test_enrollment_binding_chain_is_invitation_prompt_write_webauthn_login_done_redirect(
     main_entries: list[dict[str, Any]],
 ) -> None:
     bindings = _bindings_for(main_entries, "ps-enrollment-flow")
@@ -247,7 +299,7 @@ def test_enrollment_binding_chain_is_invitation_prompt_write_webauthn_login_conf
         "authentik_stages_user_write.userwritestage",
         "authentik_stages_authenticator_webauthn.authenticatorwebauthnstage",
         "authentik_stages_user_login.userloginstage",
-        "authentik_stages_deny.denystage",
+        REDIRECT_STAGE_MODEL,
     ]
 
 
@@ -381,6 +433,48 @@ def test_device_code_flow_is_the_passkey_login_flow(main_entries: list[dict[str,
     assert _keyof_target(brand["attrs"]["flow_device_code"]) == _login_flow_id(main_entries)
 
 
+FLOW_CANCEL_ANCHOR = 'a[href*="/flows/-/cancel/"]'
+
+
+def _brand_css_rules(entries: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """The brand custom CSS as `(selector, declarations)` pairs, comments removed."""
+    _, brand = _brand_entry_with(entries, "branding_custom_css")
+    css = re.sub(r"/\*.*?\*/", "", str(brand["attrs"]["branding_custom_css"]), flags=re.DOTALL)
+    rules: list[tuple[str, str]] = []
+    for chunk in css.split("}"):
+        if not chunk.strip():
+            continue
+        selector, _, declarations = chunk.partition("{")
+        rules.append((" ".join(selector.split()), declarations.strip()))
+    return rules
+
+
+def test_brand_custom_css_hides_every_link_to_the_flow_cancel_path(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    rules = _brand_css_rules(main_entries)
+    selectors = [s.strip() for selector, _ in rules for s in selector.split(",")]
+
+    assert selectors == [
+        FLOW_CANCEL_ANCHOR,
+        f'div[slot="link"]:has(> {FLOW_CANCEL_ANCHOR})',
+        f"fieldset:has(> {FLOW_CANCEL_ANCHOR})",
+    ]
+    assert all(re.fullmatch(r"display:\s*none\s*!important;?", d) for _, d in rules), rules
+    assert '$="/flows/-/cancel/"' not in "".join(selector for selector, _ in rules)
+
+
+def test_brand_custom_css_does_not_hide_the_deny_message(
+    main_entries: list[dict[str, Any]],
+) -> None:
+    for selector, _ in _brand_css_rules(main_entries):
+        for single in selector.split(","):
+            subject = re.sub(r":has\(.*\)", "", single.strip())
+
+            assert FLOW_CANCEL_ANCHOR in single
+            assert re.search(r"(^|[\s>+~])(p|h1|\.pf-c-empty-state)\b", subject) is None, single
+
+
 def test_identification_webauthn_stage_is_the_bound_passkey_validate_stage(
     main_entries: list[dict[str, Any]],
 ) -> None:
@@ -394,19 +488,33 @@ def test_identification_webauthn_stage_is_the_bound_passkey_validate_stage(
     assert identification["attrs"]["user_fields"] == ["email", "username"]
 
 
-def test_no_entry_deletes_a_row_with_state_absent(
+def test_only_the_retired_deny_confirmation_stages_are_deleted_with_state_absent(
     main_entries: list[dict[str, Any]],
 ) -> None:
-    """Authentik's importer deletes through an instance it builds unsaved when no row matches.
+    """Only the retired deny confirmation stages may be deleted, and only by stage entry.
 
-    For the multi-table-inheritance models (a flow-stage binding and a policy binding both
-    inherit from the policy-binding model) that unsaved instance has no parent pointer, so the
-    delete raises and the whole apply fails on any install where the row does not exist. A
-    blueprint cannot condition a deletion on the row existing, so none may use `state: absent`.
+    Authentik's importer deletes through an instance it builds unsaved when no row matches. A
+    stage's primary key is its parent link, so an unsaved stage has none and the importer skips
+    the deletion on an install that never had the row. A flow-stage binding or policy binding
+    has its own defaulted primary key, so deleting a missing one raises and fails the whole
+    apply. Deleting a stage cascades to that stage's own bindings only, which is how the retired
+    stages' bindings go. Any other stage deletion would strip that stage from every flow binding
+    it, including flows this chart does not own, so the allowed set is exact.
     """
-    removals = [e["model"] for e in main_entries if e.get("state") == "absent"]
+    removals = [e for e in main_entries if e.get("state") == "absent"]
+    removed = sorted((e["model"], tuple(sorted(e["identifiers"].items()))) for e in removals)
+    kept_names = {
+        e.get("identifiers", {}).get("name") for e in main_entries if e.get("state") != "absent"
+    }
 
-    assert removals == []
+    assert removed == sorted(
+        (DENY_STAGE_MODEL, (("name", name),)) for name in RETIRED_CONFIRMATION_STAGE_NAMES
+    )
+    assert all(set(e) == {"model", "state", "identifiers"} for e in removals)
+    assert kept_names.isdisjoint(RETIRED_CONFIRMATION_STAGE_NAMES)
+    assert MAIN_BLUEPRINT.read_text(encoding="utf-8").count("state: absent") == len(
+        RETIRED_CONFIRMATION_STAGE_NAMES
+    )
 
 
 def test_login_flow_keeps_the_reputation_deny_then_passkey_validate_then_login_order(

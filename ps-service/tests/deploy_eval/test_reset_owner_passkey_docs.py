@@ -200,3 +200,27 @@ def test_azure_deployment_lists_the_release_version_check_among_the_preflight_ch
         "the release's chart version against the VERSION file of the bundle in use"
         " (published chart only)," in section
     )
+
+
+_PRE_UPGRADE_LINK_LOCATIONS = {
+    "install-guide-upgrade": (_INSTALL, "## Upgrading an existing install"),
+    "azure-authentik": (_AZURE, "### Authentik"),
+}
+
+
+@pytest.mark.parametrize("location", sorted(_PRE_UPGRADE_LINK_LOCATIONS))
+def test_upgrade_guidance_covers_an_owner_link_issued_before_the_upgrade(location: str) -> None:
+    """The upgrade guidance says a pre-upgrade owner link still enrols, and how to recover.
+
+    A recovery link carries the flow plan from when it was issued, so a link issued before an
+    upgrade that removes a flow stage registers the passkey but can stop on an Authentik error
+    page instead of the done page. The note must say so once, name the check and the reset flag.
+    """
+    path, heading = _PRE_UPGRADE_LINK_LOCATIONS[location]
+    section = _collapsed(_section(path, heading))
+    assert section.count("issued before") == 1
+    assert "still registers the passkey" in section
+    assert "Authentik error page" in section
+    assert "`/enrolled`" in section
+    assert "`ps-cli auth login`" in section
+    assert _FLAG in section

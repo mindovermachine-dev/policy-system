@@ -137,10 +137,11 @@ For every user of the bundled Authentik, enrolment and recovery ask for a passke
 password:
 
 - **Invitation enrolment** (`ps-invite-enrollment`): Invitation stage → Prompt
-  (username/name/email) → User Write → WebAuthn passkey setup → User Login → confirmation page. The prompt has no
-  password field, so an invitee's account has **no password set**.
+  (username/name/email) → User Write → WebAuthn passkey setup → User Login → redirect to the PS
+  Service done page `/enrolled`. The prompt has no password field, so an invitee's account has
+  **no password set**.
 - **Recovery** (`ps-passkey-recovery`, set as the brand's `flow_recovery`): WebAuthn setup →
-  User Login → confirmation page, with no password stage. The deploy scripts issue the owner's single-use,
+  User Login → redirect to the PS Service done page `/enrolled`, with no password stage. The deploy scripts issue the owner's single-use,
   time-limited link from it. Authentik cannot issue a recovery link unless the brand has a
   recovery flow, which is why the blueprint sets one.
 - **Login** (`ps-login`, set as the brand's `flow_authentication` and `flow_device_code`):
@@ -154,6 +155,11 @@ password:
   and is not modified, but it stays reachable by its direct URL. On an install upgraded from an
   earlier revision, a reputation Deny binding left on that flow is not removed and has no effect
   on login through `ps-login`.
+- **Cancel links**: the blueprint sets the brand's custom CSS to hide Authentik's "Go back" and
+  "Not you?" links, which point at the flow cancel path `/flows/-/cancel/` that the ingress does
+  not route. The reputation lockout page keeps its message; only the link is hidden. The
+  blueprint owns the brand's custom CSS, so an edit made in Authentik is overwritten on the next
+  apply.
 
   The blueprint is applied to the pinned Authentik image in CI by the `authentik-blueprint`
   workflow (`.github/workflows/authentik-blueprint.yml`), a job that runs in parallel with the
@@ -174,8 +180,10 @@ password:
   docker; the first run pulls a 1.4 GB image). `scripts/verify-authentik-blueprint.sh [--twice]
   [--upgrade-from REV] [BLUEPRINT]` runs the same apply directly. The check also plans the login
   flow with and without the passkey `auth_method` and requires the validation stage to be skipped
-  only after a passkey sign-in, and it fails on any blueprint expression policy that reads a name
-  the pinned Authentik does not provide.
+  only after a passkey sign-in, requires the recovery and invite enrolment flows to end on a
+  static redirect to `/enrolled` and the brand's custom CSS to hide the flow cancel links, and it
+  fails on any blueprint expression policy that reads a name the pinned Authentik does not
+  provide.
 
 ### Configuring PS Service manually (non-script Authentik instances)
 
@@ -250,7 +258,7 @@ $ curl -X POST http://localhost:9080/api/v3/stages/invitation/invitations/ \
 
 # 2. Redeem it at /if/flow/ps-invite-enrollment/?itoken=<pk> -- Prompt (username/
 #    name/email; no password field) -> User Write -> WebAuthn passkey
-#    enrollment -> logged in -> confirmation page naming `ps-cli login`.
+#    enrollment -> logged in -> redirect to /enrolled, which names `ps-cli auth login`.
 #    (server-side confirmation a real credential was persisted:)
 $ ak shell -c "WebAuthnDevice.objects.filter(user__username='combined-user-1')"
 device 'WebAuthn Device' created 2026-09-26 12:08:...

@@ -247,8 +247,8 @@ minutes.
 A Let's Encrypt certificate serves the host. You do not need to trust a CA in the browser or
 for `ps-cli`.
 
-After enrolment, the browser ends on a confirmation page served by Authentik. It says the
-passkey is registered and you are signed in, and names `ps-cli login`. Close the tab. You are
+After enrolment, the browser ends on a PS Service page at `https://<host>/enrolled`. It says the
+passkey is registered and you are signed in, and names `ps-cli auth login`. Close the tab. You are
 enrolled and signed in.
 
 #### Recover the owner
@@ -271,7 +271,8 @@ invitation before they can sign in:
 2. The owner delivers the invite link. See [User Guide: Invite a new
    user](./user-guide.md#invite-a-new-user).
 3. The invitee registers a passkey from that link. The invitee never sets a password. The
-   account has no password set.
+   account has no password set. Registration ends on the same PS Service page at
+   `https://<host>/enrolled` that names `ps-cli auth login`.
 
 For the release that makes the link carry the public address, see [Verification
 status](#verification-status).
@@ -288,7 +289,8 @@ Ingress manifest. An Ingress left by an earlier script run is taken over by the 
 automatically before the upgrade, and its certificate Secret name is unchanged.
 
 The Ingress of PS Service routes only the paths in the chart file `files/ps-service-public-paths.txt`:
-`/status`, `/.well-known/`, and the API and MCP prefixes. It has no catch-all rule, so the
+`/status`, `/enrolled` (the page a browser lands on after passkey enrolment), `/.well-known/`,
+and the API and MCP prefixes. It has no catch-all rule, so the
 in-cluster probes `/livez` and `/readyz`, `/metrics` and the interactive API documentation are
 never routed.
 
@@ -311,7 +313,7 @@ This table shows what is public and what is not:
 | Surface | Public? | Notes |
 | --- | --- | --- |
 | The eight paths above | Yes, to anyone on the internet | Login, enrolment, and recovery run here. Authentik gates each flow itself (an enrolment or recovery link, a passkey). |
-| The PS Service paths in the allowlist above | Yes | Every call needs an Authentik-issued bearer token. `/status` needs no token; a valid one adds the dependency detail. |
+| The PS Service paths in the allowlist above | Yes | Every call needs an Authentik-issued bearer token. `/status` needs no token; a valid one adds the dependency detail. `/enrolled` needs no token and shows a fixed page. |
 | PS Service `/livez`, `/readyz`, `/metrics` and the interactive API documentation | **No** | Not routed by the chart Ingress; in-cluster only. |
 | The Authentik admin UI (`/auth/if/admin/`), the admin and core APIs, the invitation API, and `/auth/if/user/` | **No** | Not routed. PS Service answers the request, never Authentik. Verified on ingress-nginx, not on AKS. See [Verification status](#verification-status). |
 | The owner enrolment link and the owner-creation API calls | Link: public path. API: **no** | The link opens on the public `/auth/if/flow/` path. The script creates the owner and the link through a cluster-internal `kubectl port-forward`. |
@@ -784,6 +786,12 @@ If you run `helm upgrade` yourself, add `--set psService.publicUrl=https://<host
 has no path, query or fragment, and uses `https` unless the local-test bypass is on. See the
 [Helm Chart Values
 Reference](./helm-chart-values-reference.md).
+
+**Owner links from before the upgrade.** An owner enrolment link issued before you upgrade to
+a release whose enrolment ends on the PS Service page `/enrolled` still registers the passkey,
+but it can end on an Authentik error page instead of `/enrolled`. Check with `ps-cli auth login`;
+if that fails, issue a fresh link with `--reset-owner-passkey` (see [Recover the
+owner](#recover-the-owner)).
 
 **Authentik API token.** **Applies to:** installs made before this flow existed.
 

@@ -175,7 +175,7 @@ entries:
 
   # --- 4. Invite-only, passkey-only Enrollment flow: Invitation -> Prompt
   # (username, name, email; no password field) -> User
-  # Write -> WebAuthn (required) -> User Login, each an
+  # Write -> WebAuthn (required) -> User Login -> redirect to the done page, each an
   # ordered flowstagebinding. Structure confirmed against the upstream
   # example blueprint blueprints/example/flows-invitation-enrollment-minimal.yaml
   # (same stage sequence/ordering convention, literal names here instead of
@@ -283,14 +283,24 @@ entries:
     identifiers:
       name: ps-enrollment-user-login
 
-  # Final stage after sign-in: ends the flow on a page that shows its message with no
-  # redirect; the session opened by the user-login stage stays authenticated.
+  # Final stage after sign-in: a static redirect to PS Service's public done page. Authentik
+  # and PS Service share one public host, so the relative target needs no templating, and the
+  # session opened by the user-login stage stays authenticated.
+  - model: authentik_stages_redirect.redirectstage
+    id: ps-enrollment-done-stage
+    identifiers:
+      name: ps-enrollment-done
+    attrs:
+      mode: static
+      target_static: /enrolled
+
+  # Deletes the deny stage `ps-enrollment-confirmation` where it exists, so no flow can bind
+  # it. Deleting a stage also deletes its bindings; on an install without the row the importer
+  # skips the entry.
   - model: authentik_stages_deny.denystage
-    id: ps-enrollment-confirmation-stage
+    state: absent
     identifiers:
       name: ps-enrollment-confirmation
-    attrs:
-      deny_message: "Passkey registered and you are signed in. You can close this tab and run ps-cli login."
 
   - model: authentik_flows.flowstagebinding
     identifiers:
@@ -328,16 +338,16 @@ entries:
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf ps-enrollment-flow
-      stage: !KeyOf ps-enrollment-confirmation-stage
+      stage: !KeyOf ps-enrollment-done-stage
       order: 110
 
   # --- 4b. Passkey-only Recovery flow. The owner link the
   # deploy scripts issue (`POST /api/v3/core/users/{pk}/recovery/`) needs the brand's
   # `flow_recovery` set: on a fresh install it is null and Authentik answers 400 "No
-  # recovery flow set.". Two stages only, WebAuthn setup then user login: no password
-  # stage and no identification stage, so a recovery link can register a passkey and
-  # log the user in but never set or ask for a password. `authentication: none` because
-  # the recovery token in the link carries the identity.
+  # recovery flow set.". WebAuthn setup, then user login, then a redirect to the done page:
+  # no password stage and no identification stage, so a recovery link can register a
+  # passkey and log the user in but never set or ask for a password. `authentication: none`
+  # because the recovery token in the link carries the identity.
   - model: authentik_flows.flow
     id: ps-recovery-flow
     identifiers:
@@ -362,15 +372,24 @@ entries:
     identifiers:
       name: ps-recovery-user-login
 
-  # Final stage after sign-in. A deny stage ends the flow on a page that shows its message
-  # and issues no redirect, so the browser never lands on an unrouted path; the session
-  # opened by the user-login stage stays authenticated.
+  # Final stage after sign-in: a static redirect to PS Service's public done page. Authentik
+  # and PS Service share one public host, so the relative target needs no templating, and the
+  # session opened by the user-login stage stays authenticated.
+  - model: authentik_stages_redirect.redirectstage
+    id: ps-recovery-done-stage
+    identifiers:
+      name: ps-recovery-done
+    attrs:
+      mode: static
+      target_static: /enrolled
+
+  # Deletes the deny stage `ps-recovery-confirmation` where it exists, so no flow can bind
+  # it. Deleting a stage also deletes its bindings; on an install without the row the importer
+  # skips the entry.
   - model: authentik_stages_deny.denystage
-    id: ps-recovery-confirmation-stage
+    state: absent
     identifiers:
       name: ps-recovery-confirmation
-    attrs:
-      deny_message: "Passkey registered and you are signed in. You can close this tab and run ps-cli login."
 
   - model: authentik_flows.flowstagebinding
     identifiers:
@@ -387,7 +406,7 @@ entries:
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf ps-recovery-flow
-      stage: !KeyOf ps-recovery-confirmation-stage
+      stage: !KeyOf ps-recovery-done-stage
       order: 110
 
   # --- 5. Reputation Policy, enforced via a dedicated DenyStage in the login flow.
@@ -551,3 +570,16 @@ entries:
       flow_recovery: !KeyOf ps-recovery-flow
       flow_authentication: !KeyOf ps-login-flow
       flow_device_code: !KeyOf ps-login-flow
+      # Authentik renders a "Not you?" link on the passkey prompt and a "Go back" button on a
+      # deny page, both pointing at its flow cancel path. That path is not routed through the
+      # ingress (its view signs the user out and lands on the Authentik user interface, which
+      # PS Service does not expose), so these rules hide every link to it, and the empty slot
+      # or fieldset around it. The lockout page keeps its message; only the link is hidden.
+      # Authentik adopts this CSS into each page component's shadow root, so the plain
+      # selectors match there. This blueprint owns the brand's custom CSS: an operator edit is
+      # overwritten on the next apply. Authentik suppresses the CSS only in the safe mode of its
+      # recovery token view, which the ingress does not serve.
+      branding_custom_css: |
+        a[href*="/flows/-/cancel/"] { display: none !important; }
+        div[slot="link"]:has(> a[href*="/flows/-/cancel/"]) { display: none !important; }
+        fieldset:has(> a[href*="/flows/-/cancel/"]) { display: none !important; }

@@ -48,6 +48,10 @@ TEMPLATE_SESSIONS_QUERY = (
 # holds the earlier blueprint's rows when the current one is applied.
 PREVIOUS_REVISION = "e95dae75~1"
 
+# A release whose enrolment flows end on deny confirmation stages: an install upgraded from it
+# holds those stages and their bindings when the current blueprint is applied.
+DENY_CONFIRMATION_RELEASE = "12.1.2"
+
 # A row-deletion entry whose target does not exist: the importer builds an unsaved instance of a
 # multi-table-inheritance model for it, and deleting that raises.
 ABSENT_ENTRY_ON_MISSING_ROW = """\
@@ -216,7 +220,9 @@ def test_chart_blueprint_applies_and_passes_every_guard_check(
         "PASS ps-login validate stage is skipped only after a passkey identification"
         in completed.stdout
     )
-    assert "PASS recovery and enrollment flows end on the confirmation stage" in completed.stdout
+    assert "PASS ps-passkey-recovery ends on the done-page redirect" in completed.stdout
+    assert "PASS ps-invite-enrollment ends on the done-page redirect" in completed.stdout
+    assert "PASS brand css hides flow cancel links" in completed.stdout
     assert shared_environment.template_sessions() == 0
 
 
@@ -242,6 +248,26 @@ def test_chart_blueprint_applies_over_the_previous_revision(
     completed = shared_environment.verify("--upgrade-from", PREVIOUS_REVISION, str(CHART_BLUEPRINT))
 
     assert completed.returncode == 0, completed.stdout[-4000:] + completed.stderr[-2000:]
+
+
+def test_chart_blueprint_applies_over_a_release_that_ends_on_the_deny_confirmation(
+    shared_environment: SharedEnvironment,
+) -> None:
+    revision_present = subprocess.run(  # noqa: S603  # fixed argv
+        ["git", "-C", str(REPO_ROOT), "cat-file", "-e", f"{DENY_CONFIRMATION_RELEASE}^{{commit}}"],  # noqa: S607
+        capture_output=True,
+        check=False,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+    )
+    if revision_present.returncode != 0:
+        pytest.skip(f"git history does not hold {DENY_CONFIRMATION_RELEASE} (shallow clone)")
+    completed = shared_environment.verify(
+        "--upgrade-from", DENY_CONFIRMATION_RELEASE, str(CHART_BLUEPRINT)
+    )
+
+    assert completed.returncode == 0, completed.stdout[-4000:] + completed.stderr[-2000:]
+    assert "PASS ps-passkey-recovery ends on the done-page redirect" in completed.stdout
+    assert "PASS ps-invite-enrollment ends on the done-page redirect" in completed.stdout
 
 
 def test_guard_fails_on_a_blueprint_the_importer_cannot_apply(

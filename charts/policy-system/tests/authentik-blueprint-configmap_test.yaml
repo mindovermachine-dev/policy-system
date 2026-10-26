@@ -66,11 +66,20 @@ tests:
           path: data["authentik-blueprint.yaml"]
           pattern: "negate: false"
 
-  - it: no entry deletes a row with state absent
+  - it: only the retired deny confirmation stages are deleted with state absent
     asserts:
       - notMatchRegex:
           path: data["authentik-blueprint.yaml"]
-          pattern: "state: absent"
+          pattern: "(?s)state: absent.*state: absent.*state: absent"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "model: authentik_stages_deny\\.denystage\\n\\s+state: absent\\n\\s+identifiers:\\n\\s+name: ps-recovery-confirmation\\n"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "model: authentik_stages_deny\\.denystage\\n\\s+state: absent\\n\\s+identifiers:\\n\\s+name: ps-enrollment-confirmation\\n"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "authentik_stages_redirect\\.redirectstage"
 
   - it: login passkey validate stage is passkey-only, requires user verification and denies accounts without a passkey
     asserts:

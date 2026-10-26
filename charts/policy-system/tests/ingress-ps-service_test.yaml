@@ -33,7 +33,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.rules[0].http.paths
-          count: 10
+          count: 11
       - equal:
           path: spec.rules[0].http.paths[0].path
           value: /status
@@ -42,57 +42,63 @@ tests:
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[1].path
-          value: /.well-known/
+          value: /enrolled
       - equal:
           path: spec.rules[0].http.paths[1].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[2].path
-          value: /catalog
+          value: /.well-known/
       - equal:
           path: spec.rules[0].http.paths[2].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[3].path
-          value: /ingestions
+          value: /catalog
       - equal:
           path: spec.rules[0].http.paths[3].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[4].path
-          value: /restorations
+          value: /ingestions
       - equal:
           path: spec.rules[0].http.paths[4].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[5].path
-          value: /exports
+          value: /restorations
       - equal:
           path: spec.rules[0].http.paths[5].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[6].path
-          value: /change-checks
+          value: /exports
       - equal:
           path: spec.rules[0].http.paths[6].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[7].path
-          value: /near-misses
+          value: /change-checks
       - equal:
           path: spec.rules[0].http.paths[7].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[8].path
-          value: /approvals
+          value: /near-misses
       - equal:
           path: spec.rules[0].http.paths[8].pathType
           value: Prefix
       - equal:
           path: spec.rules[0].http.paths[9].path
-          value: /mcp
+          value: /approvals
       - equal:
           path: spec.rules[0].http.paths[9].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[10].path
+          value: /mcp
+      - equal:
+          path: spec.rules[0].http.paths[10].pathType
           value: Prefix
 
   - it: does not forward /livez or /readyz

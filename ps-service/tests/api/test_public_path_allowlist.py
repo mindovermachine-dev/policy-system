@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from ps_service.api.enrolment_done import ENROLMENT_DONE_PATH
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
 
@@ -160,3 +161,26 @@ def test_the_allowlist_header_names_status_and_not_the_probes() -> None:
     assert "/status" in header
     for probe in ("/livez", "/readyz", *_RETIRED_PROBE_PATHS):
         assert probe not in header, probe
+
+
+AUTHENTIK_ALLOWLIST_FILE = ALLOWLIST_FILE.with_name("authentik-public-paths.txt")
+
+
+def _read_entries(path: Path) -> list[str]:
+    return [
+        entry
+        for entry in (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+        if entry and not entry.startswith("#")
+    ]
+
+
+def test_the_allowlist_lists_the_enrolment_done_page() -> None:
+    assert ENROLMENT_DONE_PATH in _read_allowlist()
+
+
+def test_the_enrolment_redirect_target_routes_to_ps_service_not_authentik() -> None:
+    ps_service_entries = _read_allowlist()
+    authentik_entries = _read_entries(AUTHENTIK_ALLOWLIST_FILE)
+
+    assert any(_entry_covers(entry, ENROLMENT_DONE_PATH) for entry in ps_service_entries)
+    assert not any(_entry_covers(entry, ENROLMENT_DONE_PATH) for entry in authentik_entries)
