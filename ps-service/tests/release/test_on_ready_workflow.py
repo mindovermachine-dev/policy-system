@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 LINT_JOB = "lint-commit-header"
 BUILD_JOB = "build"
+BLUEPRINT_JOB = "authentik-blueprint"
 MERGE_JOB = "merge-to-trunk"
 LINT_SCRIPT_PATH = "scripts/release/lint-commit-header.sh"
 CHECKOUT_ACTION = "actions/checkout"
@@ -33,7 +34,7 @@ def _lint_step(workflow: WorkflowFile) -> dict[str, object]:
 def test_merge_to_trunk_needs_the_header_lint_job(on_ready_workflow: WorkflowFile) -> None:
     needs = on_ready_workflow.needs(on_ready_workflow.job(MERGE_JOB))
 
-    assert set(needs) == {BUILD_JOB, LINT_JOB}, f"`{MERGE_JOB}` needs {needs}"
+    assert set(needs) == {BUILD_JOB, LINT_JOB, BLUEPRINT_JOB}, f"`{MERGE_JOB}` needs {needs}"
 
 
 def test_header_lint_job_declares_contents_read_and_checks_out(
@@ -62,6 +63,7 @@ def test_no_run_body_in_on_ready_interpolates_a_github_expression(
     interpolating = [
         (name, body)
         for name, job in on_ready_workflow.jobs.items()
+        if "steps" in job  # a job that calls a reusable workflow has no steps
         for body in on_ready_workflow.run_bodies(job)
         if GITHUB_EXPRESSION.search(body)
     ]

@@ -1,0 +1,41 @@
+name: Authentik blueprint weekly
+
+# Runs the authentik-blueprint check with the gate forced on, once a week. The per-push check
+# runs only when a path in scripts/authentik-blueprint-triggers.txt changed; this run catches
+# what that list cannot see (a moved image pin, a changed marker or dependency). A failure shows
+# as a red scheduled run and GitHub's default notification to the schedule owner.
+
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Queue rather than cancel: a cancelled run proves nothing about the blueprint.
+concurrency:
+  group: authentik-blueprint-weekly
+  cancel-in-progress: false
+
+jobs:
+  blueprint:
+    name: Apply the blueprint to the pinned Authentik image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # prep-runner installs the gh-insitu extension, which needs a token.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # Full history: the gate compares against origin/main when it is not forced.
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare the runner
+        uses: ./.github/actions/prep-runner
+
+      - name: Run the blueprint check, forced
+        run: AUTHENTIK_BLUEPRINT_FORCE=1 ./scripts/check-authentik-blueprint.sh

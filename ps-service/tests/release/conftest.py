@@ -715,3 +715,9 @@ def pr_to_ready_workflow() -> WorkflowFile:
 def backup_restore_e2e_workflow() -> WorkflowFile:
     """`.github/workflows/backup-restore-e2e.yml`, parsed."""
     return load_workflow("backup-restore-e2e.yml")
+
+
+@pytest.fixture
+def authentik_blueprint_weekly_workflow() -> WorkflowFile:
+    """`.github/workflows/authentik-blueprint-weekly.yml`, parsed."""
+    return load_workflow("authentik-blueprint-weekly.yml")

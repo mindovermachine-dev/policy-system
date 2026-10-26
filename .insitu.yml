@@ -111,7 +111,7 @@ inventory:
 
   - id: authentik-blueprint
     name: Apply the chart's Authentik blueprint to the pinned Authentik image
-    command: uv run pytest -m authentik_blueprint -q -n0
+    command: ./scripts/check-authentik-blueprint.sh
     timeout: 20m
 
   - id: mock-boundary-guardrail
@@ -291,7 +291,6 @@ waves:
       - pip-audit
       - helm-lint
       - helm-unittest
-      - authentik-blueprint
 
   - id: "fix-all"
     name: "Fix anything that can be fixed automatically"

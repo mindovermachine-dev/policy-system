@@ -155,13 +155,27 @@ password:
   earlier revision, a reputation Deny binding left on that flow is not removed and has no effect
   on login through `ps-login`.
 
-  The blueprint is applied to the pinned Authentik image in CI. To run that check locally, use
-  `uv run pytest -m authentik_blueprint -q -n0` (needs podman or docker; the first run pulls a
-  1.4 GB image). `scripts/verify-authentik-blueprint.sh [--twice] [--upgrade-from REV]
-  [BLUEPRINT]` runs the same apply directly. The check also plans the login flow with and
-  without the passkey `auth_method` and requires the validation stage to be skipped only after a
-  passkey sign-in, and it fails on any blueprint expression policy that reads a name the pinned
-  Authentik does not provide.
+  The blueprint is applied to the pinned Authentik image in CI by the `authentik-blueprint`
+  workflow (`.github/workflows/authentik-blueprint.yml`), a job that runs in parallel with the
+  trunk-worthy wave of the wrapup and ready flows; the ready flow's merge to trunk waits for it.
+  The check runs only when a path listed in `scripts/authentik-blueprint-triggers.txt` changed since the
+  merge base with `origin/main` (that file is the source of truth for the paths). When none
+  changed, the check logs `authentik-blueprint: skipped` with the reason and exits 0 without
+  starting a container; a skipped run shows as a passed status, not as skipped, so read the log
+  line to tell the two apart. Set `AUTHENTIK_BLUEPRINT_FORCE=1` to run it regardless, for
+  example `AUTHENTIK_BLUEPRINT_FORCE=1 ./scripts/check-authentik-blueprint.sh`. The check also
+  runs when the comparison base cannot be determined. The `authentik-blueprint-weekly` workflow
+  (`.github/workflows/authentik-blueprint-weekly.yml`, Mondays and on manual dispatch) forces the
+  check, so a change the trigger list cannot see still surfaces within a week; its failure shows
+  as a red scheduled run and GitHub's default notification to the schedule owner, and no issue is
+  filed.
+
+  To run the check locally, use `uv run pytest -m authentik_blueprint -q -n0` (needs podman or
+  docker; the first run pulls a 1.4 GB image). `scripts/verify-authentik-blueprint.sh [--twice]
+  [--upgrade-from REV] [BLUEPRINT]` runs the same apply directly. The check also plans the login
+  flow with and without the passkey `auth_method` and requires the validation stage to be skipped
+  only after a passkey sign-in, and it fails on any blueprint expression policy that reads a name
+  the pinned Authentik does not provide.
 
 ### Configuring PS Service manually (non-script Authentik instances)
 

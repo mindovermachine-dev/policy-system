@@ -44,3 +44,9 @@ jobs:
         uses: ./.github/actions/prep-runner
         with:
           verify: gh insitu run trunk-worthy
+
+  authentik-blueprint:
+    name: Authentik blueprint
+    permissions:
+      contents: read
+    uses: ./.github/workflows/authentik-blueprint.yml

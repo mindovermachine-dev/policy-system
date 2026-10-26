@@ -1,0 +1,16 @@
+# Git pathspecs, one per line. A change to any of them makes the authentik-blueprint check run;
+# see scripts/check-authentik-blueprint.sh. Blank lines and text after '#' are ignored.
+charts/policy-system/files/authentik-blueprint.yaml
+charts/policy-system/Chart.yaml
+charts/policy-system/Chart.lock
+scripts/verify-authentik-blueprint.sh
+scripts/lib/authentik-owner.sh
+scripts/check-authentik-blueprint.sh
+scripts/authentik-blueprint-triggers.txt
+.insitu.yml
+.github/workflows/authentik-blueprint.yml
+.github/workflows/authentik-blueprint-weekly.yml
+ps-service/tests/scripts/test_authentik_blueprint*.py
+ps-service/tests/scripts/test_verify_authentik_blueprint.py
+ps-service/tests/guardrails/chart_render.py
+ps-service/tests/guardrails/migration_sources.py

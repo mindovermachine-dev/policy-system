@@ -353,9 +353,14 @@ Things to know:
   - Authentik's shipped `default-authentication-flow` is not used by the brand but stays
     reachable by its direct URL. On an install upgraded from an earlier revision, a reputation
     Deny binding left on that flow is not removed and has no effect on login through `ps-login`.
-  - The chart's blueprint is applied to the pinned Authentik image in CI. To run that check
-    locally, use `uv run pytest -m authentik_blueprint -q -n0` (needs podman or docker; the
-    first run pulls a 1.4 GB image).
+  - The chart's blueprint is applied to the pinned Authentik image in CI by the
+    `authentik-blueprint` workflow, a job that runs in parallel with the trunk-worthy wave and that
+    the ready flow's merge to trunk waits for. The check runs only when a path listed in `scripts/authentik-blueprint-triggers.txt` changed; otherwise it logs
+    `authentik-blueprint: skipped` and exits 0, and a skipped run shows as a passed status, not
+    as skipped. Set `AUTHENTIK_BLUEPRINT_FORCE=1` to run it regardless. The
+    `authentik-blueprint-weekly` workflow forces it every week; its failure shows as a red
+    scheduled run. To run the check locally, use `uv run pytest -m authentik_blueprint -q -n0`
+    (needs podman or docker; the first run pulls a 1.4 GB image).
 - This flow does not change production TLS termination (Let's Encrypt, cert-manager).
 
 ---

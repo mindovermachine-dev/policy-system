@@ -1,0 +1,49 @@
+name: Authentik blueprint
+
+# Applies the chart's Authentik blueprint to the pinned Authentik image, outside the trunk-worthy
+# wave so its container start-up is not on that wave's critical path. on_dev.yml and on_ready.yml
+# call this as a parallel job that always runs; the gate script decides, from the paths in
+# scripts/authentik-blueprint-triggers.txt, whether the check starts or logs a skip and exits 0.
+# Because the job always reports a result, `needs:` on it never waits on a skipped job, and the
+# ready flow's merge to trunk is blocked only by a real blueprint failure.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  blueprint:
+    name: Apply the blueprint to the pinned Authentik image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # prep-runner installs the gh-insitu extension, which needs a token.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # Full history: the gate compares against the merge base with origin/main.
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A branch that `gh issue develop` just created has no commits yet, which the gate would read
+      # as "no comparison base" and run the check for nothing. A manual dispatch always runs.
+      - name: Check for commits ahead of the default branch
+        id: divergence
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          ahead=$(git rev-list --count "origin/$DEFAULT_BRANCH..HEAD")
+          echo "Commits ahead of $DEFAULT_BRANCH: $ahead"
+          echo "has_commits=$([ "$ahead" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare the runner
+        if: github.event_name == 'workflow_dispatch' || steps.divergence.outputs.has_commits == 'true'
+        uses: ./.github/actions/prep-runner
+
+      - name: Run the blueprint check when a trigger path changed
+        if: github.event_name == 'workflow_dispatch' || steps.divergence.outputs.has_commits == 'true'
+        run: ./scripts/check-authentik-blueprint.sh
