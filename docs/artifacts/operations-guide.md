@@ -8,6 +8,7 @@
   - [Granting an access role from the command line](#granting-an-access-role-from-the-command-line)
   - [Updating or reinstalling the Policy System Plugin](#updating-or-reinstalling-the-policy-system-plugin)
   - [Owner recovery, certificate renewal and re-running the script](#owner-recovery-certificate-renewal-and-re-running-the-script)
+  - [Resetting the owner's passkeys after a lost or stolen device](#resetting-the-owners-passkeys-after-a-lost-or-stolen-device)
   - [Upgrading an existing evaluator](#upgrading-an-existing-evaluator)
   - [Moving an existing evaluator off a .local hostname](#moving-an-existing-evaluator-off-a-local-hostname)
   - [Recording verification evidence](#recording-verification-evidence)
@@ -158,8 +159,11 @@ email as before:
 
 - **Owner with no passkey registered** (the enrolment link expired or was never used): a fresh
   single-use link is printed.
-- **Owner who already has a passkey**: unchanged, no link is issued. If the only device was lost,
-  remove it from the owner's user page in the Authentik admin UI (next section) and re-run.
+- **Owner who already has a passkey**: unchanged, no link is issued. If the only device was lost
+  or stolen, run `scripts/deploy-ps-eval.sh --reset-owner-passkey` instead (see [Resetting the
+  owner's passkeys after a lost or stolen
+  device](#resetting-the-owners-passkeys-after-a-lost-or-stolen-device)); the signing passkey is
+  re-enrolled at the next approval.
 - **Certificate renewal**: the script regenerates the local certificate when it is within 30 days
   of expiry or the hostname changed (the certificate lasts 397 days; the local CA 10 years). It
   then makes Authentik serve the new certificate by re-applying its certificate blueprint, with no
@@ -173,6 +177,74 @@ email as before:
   holds; the script then stops with "Authentik rejected the shared API token" before creating
   anything. See [Installation Guide: Upgrading an existing
   install](./installation-guide.md#upgrading-an-existing-install) for the fix.
+
+### Resetting the owner's passkeys after a lost or stolen device
+
+The owner has two passkeys: a sign-in passkey at Authentik and a signing passkey that approves
+signed actions (merges, releases, unmerges and near-miss merges) at PS Service. If the owner's only
+device is lost or stolen, both are gone, and the lost device must stop being a valid owner
+credential. The reset mode of the deploy scripts does both in one command. It is gated by cluster
+access, like the rest of the script.
+
+On the evaluator, on the Server:
+
+```bash
+scripts/deploy-ps-eval.sh --reset-owner-passkey --owner-email <email>
+```
+
+On production, with the production cluster as the current kube context (no Azure login is
+needed):
+
+```bash
+scripts/deploy-ps-prod.sh --reset-owner-passkey --owner-email <email>
+```
+
+The email must be the owner recorded in the installed release. The mode takes no other deploy
+flag. Without `--yes` it shows the owner, the number of Authentik devices, signing credentials
+and pending approvals it removes, the kube context and the hostname, and asks for confirmation:
+`y` on the evaluator, the owner email typed in full on production. `--yes` skips the question and
+needs `--owner-email`. Declining changes nothing.
+
+It then removes, in this order:
+
+1. Every Authentik device of the owner, of every type.
+2. Every Authentik session of the owner.
+3. The owner's OAuth refresh tokens, then access tokens.
+4. The owner's app-password and API tokens and any old recovery links.
+5. The owner's signing passkeys in PS Service. Every approval the owner requested and has not
+   signed yet is voided: it can no longer be enrolled on or signed, and its outcome says it was
+   cancelled; ask for a new approval.
+
+Last, it prints one new single-use link on the installed hostname. Open it to register a new
+sign-in passkey. The signing passkey is re-enrolled at the next approval: the approval page asks
+the new device to enrol before it signs. The mode changes nothing else: no Helm upgrade, no
+certificate, hosts-file or role change, and the owner keeps the same Authentik user.
+
+Deleting the OAuth tokens stops any new access token being issued from them (refresh tokens are
+deleted first), but PS Service verifies access tokens locally by signature and expiry, so an
+access token already issued to the lost device stays valid until it expires: at most the access
+token validity of the `ps-cli` provider (the bundled blueprint leaves Authentik's default).
+
+If the shared Authentik API token belongs to the owner, the mode keeps the owner's API tokens,
+because the one in use cannot be told apart from the others, and prints a warning before the
+link. Move the shared token to a token of a non-owner Authentik user and run the reset again to
+delete them.
+
+**Record.** Before the link the mode prints one UTC-timestamped line:
+
+```text
+owner-passkey-reset <time> owner=<email> kube_context=<context> devices_deleted=N sessions_deleted=N oauth_tokens_revoked=N core_tokens_deleted=N core_tokens_kept=N signing_credentials_deleted=N approvals_voided=N
+```
+
+Keep it: it is the only complete record of the reset. Authentik's own event log records the device
+and app-password/API-token deletions but does not record session, OAuth-token or endpoint-device
+deletions. PS Service's audit trail records the signing step as one `passkey.revoke` row with the
+system actor `system:owner-passkey-reset`; the operator who ran the reset appears only in the
+printed line, as the kube context.
+
+**Failure.** If a step fails, no link is printed, the mode exits non-zero and states how many
+devices, sessions, OAuth tokens, app-password/API tokens, signing credentials and pending
+approvals remain. Running it again is safe and finishes the reset.
 
 ### Upgrading an existing evaluator
 
@@ -433,10 +505,12 @@ Guide](./evaluator-installation-guide.md#supported-scenarios)). A **Client** is 
 you use as the owner. In the single-laptop scenarios (1 and 2) the Server and the Client are the
 same machine.
 
-> [!WARNING]
-> **Unverified.** Login is passkey-only, and the owner's passkey is registered for the evaluator
-> hostname, not for `localhost`. Whether the passkey prompt works at `http://localhost:9000` has
-> not been confirmed. If the prompt does not appear or fails, stop and report it.
+Signing in there with the owner's passkey fails: the passkey is bound to the evaluator hostname,
+so a browser on `http://localhost:9000` cannot use it. Owner recovery does not need the admin UI;
+for a lost or stolen device use
+[`--reset-owner-passkey`](#resetting-the-owners-passkeys-after-a-lost-or-stolen-device). To sign
+in to the admin UI for anything else, use a recovery key for `akadmin`, a non-owner user, so a
+token you create there is not removed by an owner reset:
 
 1. **On the Server**, in a terminal you leave open:
 
@@ -444,26 +518,31 @@ same machine.
    kubectl port-forward svc/policy-system-authentik-server 9000:80
    ```
 
-2. Open the admin UI.
+2. **On the Server**, in a second terminal, create a single-use recovery key valid for 10
+   minutes:
 
-   - **Browser on the Server:** open the login URL below on the Server.
-   - **Browser on a Client:** **on the Client**, in a second terminal you leave open, forward the
-     port from the Server:
+   ```bash
+   kubectl exec deploy/policy-system-authentik-worker -- ak create_recovery_key 10 akadmin
+   ```
+
+   It prints a path that starts with `/auth/recovery/use-token/`. The link works once and expires
+   after the given number of minutes.
+
+3. Open the admin UI.
+
+   - **Browser on the Server:** open the printed path on `http://localhost:9000` on the Server.
+   - **Browser on a Client:** **on the Client**, in a terminal you leave open, forward the port
+     from the Server:
 
      ```bash
      ssh -N -L 9000:127.0.0.1:9000 <user>@<server address>
      ```
 
-     Then open the login URL below **on the Client**. Windows 10 and 11 include `ssh`.
+     Then open the printed path on `http://localhost:9000` **on the Client**. Windows 10 and 11
+     include `ssh`.
 
-3. Sign in as the owner with your passkey. Open the login flow directly, so the admin UI opens
-   after you sign in:
-
-   ```text
-   http://localhost:9000/auth/if/flow/ps-login/?next=%2Fauth%2Fif%2Fadmin%2F
-   ```
-
-   Do not open `http://localhost:9000/auth/if/admin/` while signed out. The admin page then
+   It signs you in as the superuser `akadmin` directly, with no passkey. Then open
+   `http://localhost:9000/auth/if/admin/`. Do not open that page while signed out: it then
    redirects to `http://localhost:9000/flows/-/default/authentication/`, which is missing the
    `/auth` prefix, and the browser shows a 404.
 
@@ -1115,8 +1194,10 @@ A malformed discovery document is not retried.
 Re-running `scripts/deploy-ps-prod.sh` with the same owner email (`--owner-email` or
 `AUTHZ_OWNER_EMAIL`) is the owner-recovery path, gated by cluster access: an owner with no passkey
 registered gets a fresh single-use link (printed on `https://<host>/auth/if/flow/...`); an owner
-with one is left unchanged and no link is issued. If the only device was lost, remove it from
-the owner's user page in the admin UI and re-run.
+with one is left unchanged and no link is issued. If the only device was lost or stolen, run
+`scripts/deploy-ps-prod.sh --reset-owner-passkey` instead (see [Resetting the owner's passkeys
+after a lost or stolen device](#resetting-the-owners-passkeys-after-a-lost-or-stolen-device));
+the signing passkey is re-enrolled at the next approval.
 
 The Authentik admin UI is **not** on the public Ingress; reach it from a machine with cluster
 access (see [Installation Guide, step 4](./installation-guide.md#4-access-the-cluster-with-kubelogin))
@@ -1126,8 +1207,23 @@ through a port-forward, and leave it running while you work:
 kubectl port-forward svc/policy-system-authentik-server 9000:80
 ```
 
-Then open `http://localhost:9000/auth/if/admin/` and sign in as the owner. Note the `/auth`
-prefix. The public Ingress routes only eight user-facing path prefixes; see [Installation Guide:
+Signing in there with the owner's passkey fails: the passkey is bound to `<host>`, so a browser
+on `http://localhost:9000` cannot use it. Owner recovery does not need the admin UI; use
+[`--reset-owner-passkey`](#resetting-the-owners-passkeys-after-a-lost-or-stolen-device). To sign
+in, for example to replace a rejected API token, create a single-use recovery key valid for 10
+minutes in the worker pod:
+
+```bash
+kubectl exec deploy/policy-system-authentik-worker -- ak create_recovery_key 10 akadmin
+```
+
+It prints a path that starts with `/auth/recovery/use-token/`. Open that path on
+`http://localhost:9000` (through the port-forward). It signs you in as the superuser `akadmin`
+directly, with no passkey; `akadmin` is a non-owner user, so a token created there is not removed
+by an owner reset. The link works once and expires after the given number of minutes. Then open
+`http://localhost:9000/auth/if/admin/`; note the `/auth` prefix.
+
+The public Ingress routes only eight user-facing path prefixes; see [Installation Guide:
 What is exposed (production)](./installation-guide.md#what-is-exposed-production). The Authentik
 API token is the Authentik bootstrap token, stored in the Secret
 `policy-system-authentik-api-token`; it does not rotate, so do not change the Secret alone (see

@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+r"""Fake of the PS Service signing revoke command, as `kubectl exec` runs it in the pod.
+
+Copied into a test's `bin/` directory (never imported); a harness's fake `kubectl` hands it the
+whole `exec` argv when that argv runs `python -m ps_service.passkey_signing.revoke`. It reads
+`--subject`, `--issuer` and `--count-only` after the `--`, and prints the command's one JSON line
+(the shape `ps_service.passkey_signing.revoke` prints; a contract test keeps the two equal).
+
+State lives in a JSON file named by $PS_TEST_SIGNING_STATE (absent -> nobody has any signing
+passkey). Every call appends its argv to $PS_TEST_SIGNING_LOG when that is set.
+
+State keys (all optional, tests seed them):
+  actors        {"<subject>\n<issuer>": {"credentials": N, "pending": ["<id>", ...]}}
+  fail          "revoke" | "count" -> that mode prints a failed line and exits 1
+  fail_reason   the failed line's reason_code (default "signing_store_unavailable")
+  raw_stdout    printed verbatim instead of the JSON line, exit 0 (a malformed result)
+  credentials_after_revoke  credentials the actor holds right after a revoke (a credential
+                enrolled while the reset ran)
+  pending_after_revoke  pending approval ids the actor holds right after a revoke (an approval
+                requested while the reset ran)
+  audit         appended by every revoke: {"subject", "issuer", "credentials_deleted",
+                "voided_approval_ids"}
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+_MODULE = "ps_service.passkey_signing.revoke"
+
+
+def _load(path: Path | None) -> dict[str, object]:
+    if path is None or not path.exists():
+        return {}
+    loaded: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
+    return loaded
+
+
+def _command_args(argv: list[str]) -> list[str]:
+    """The arguments after `-- python -m <module>`; exit 2 for any other command."""
+    if "--" not in argv:
+        sys.exit(2)
+    command = argv[argv.index("--") + 1 :]
+    if command[:3] != ["python", "-m", _MODULE]:
+        sys.exit(2)
+    return command[3:]
+
+
+def _value(args: list[str], flag: str) -> str:
+    if flag not in args or args.index(flag) + 1 >= len(args):
+        sys.stderr.write(f"usage: python -m {_MODULE}: {flag} is required\n")
+        sys.exit(2)
+    value = args[args.index(flag) + 1].strip()
+    if not value:
+        sys.stderr.write(f"usage: python -m {_MODULE}: {flag} must not be blank\n")
+        sys.exit(2)
+    return value
+
+
+def _line(payload: dict[str, object]) -> None:
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    log = os.environ.get("PS_TEST_SIGNING_LOG")
+    if log:
+        with Path(log).open("a", encoding="utf-8") as handle:
+            handle.write(" ".join(argv) + "\n")
+    args = _command_args(argv)
+    subject = _value(args, "--subject")
+    issuer = _value(args, "--issuer")
+    mode = "count" if "--count-only" in args else "revoke"
+    state_env = os.environ.get("PS_TEST_SIGNING_STATE")
+    state_path = Path(state_env) if state_env else None
+    state = _load(state_path)
+    if "raw_stdout" in state:
+        sys.stdout.write(str(state["raw_stdout"]))
+        return 0
+    if state.get("fail") == mode:
+        _line(
+            {
+                "status": "failed",
+                "reason_code": state.get("fail_reason", "signing_store_unavailable"),
+            }
+        )
+        return 1
+    actors = state.setdefault("actors", {})
+    assert isinstance(actors, dict)
+    actor = actors.setdefault(f"{subject}\n{issuer}", {"credentials": 0, "pending": []})
+    credentials = int(actor.get("credentials", 0))
+    pending = list(actor.get("pending", []))
+    if mode == "count":
+        _line({"status": "counted", "credentials": credentials, "pending_approvals": len(pending)})
+        return 0
+    actor["credentials"] = int(state.get("credentials_after_revoke", 0))
+    actor["pending"] = list(state.get("pending_after_revoke", []))
+    audit = state.setdefault("audit", [])
+    assert isinstance(audit, list)
+    audit.append(
+        {
+            "subject": subject,
+            "issuer": issuer,
+            "credentials_deleted": credentials,
+            "voided_approval_ids": pending,
+        }
+    )
+    if state_path is not None:
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+    _line({"status": "revoked", "credentials_deleted": credentials, "voided_approval_ids": pending})
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

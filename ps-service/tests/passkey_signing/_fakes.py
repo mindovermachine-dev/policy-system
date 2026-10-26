@@ -15,8 +15,14 @@ import threading
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
+from ps_service.passkey_signing.errors import SigningRevocationPersistenceError
 from ps_service.passkey_signing.models import PendingApprovalRow, SigningCredentialRow
+from ps_service.passkey_signing.revocation import ActorSigningRevocation, ActorSigningState
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _CODE_TOKEN_BYTES = 32  # mirrors `store.py`'s own `_CODE_TOKEN_BYTES`
 _NONCE_BYTES = 32  # mirrors `store.py`'s own `_NONCE_BYTES`
@@ -104,6 +110,14 @@ class FakePendingApprovalStore:
         if row is not None:
             self._rows_by_id[pending_approval_id] = replace(row, outcome=outcome)
 
+    def all_rows(self) -> tuple[PendingApprovalRow, ...]:
+        """Every stored approval row, in creation order."""
+        return tuple(self._rows_by_id.values())
+
+    def replace_rows(self, rows: tuple[PendingApprovalRow, ...]) -> None:
+        """Replace the stored rows wholesale (a revocation fake's void and rollback)."""
+        self._rows_by_id = {row.id: row for row in rows}
+
 
 @dataclass
 class FakeSigningCredentialStore:
@@ -173,3 +187,102 @@ class FakeSigningCredentialStore:
             if row.credential_id == credential_id:
                 self._rows[index] = replace(row, sign_count=sign_count)
                 return
+
+    def all_rows(self) -> tuple[SigningCredentialRow, ...]:
+        """Every stored credential row, in enrolment order."""
+        return tuple(self._rows)
+
+    def replace_rows(self, rows: tuple[SigningCredentialRow, ...]) -> None:
+        """Replace the stored rows wholesale (a revocation fake's delete and rollback)."""
+        self._rows = list(rows)
+
+
+@dataclass
+class FakeSigningRevocationStore:
+    """In-memory `SigningRevocationStore` over the credential and approval fakes.
+
+    `revoke_for_actor` first voids the actor's pending approvals in `pending` (every one, expired
+    or not: status `signed`, outcome `void_outcome`), then deletes the actor's credentials from
+    `credentials` (every `rp_id`, the empty one included), calls `before_commit` with the result,
+    and on any exception from it restores the snapshots taken before the changes, as the real
+    store's transaction rolls back. `fail_before_audit` raises the store error before
+    `before_commit` runs; `fail_commit` raises it after `before_commit` returned, restoring the
+    snapshots (a failed COMMIT); `fail_read` makes `state_for_actor` raise it.
+    """
+
+    credentials: FakeSigningCredentialStore
+    pending: FakePendingApprovalStore = field(default_factory=FakePendingApprovalStore)
+    fail_before_audit: bool = False
+    fail_commit: bool = False
+    fail_read: bool = False
+
+    def state_for_actor(self, *, actor_subject: str, actor_issuer: str) -> ActorSigningState:
+        """Count the actor's credentials and list its pending approval ids, oldest first."""
+        if self.fail_read:
+            message = "fake signing store unavailable"
+            raise SigningRevocationPersistenceError(message)
+        credentials = sum(
+            1 for row in self.credentials.all_rows() if _owned(row, actor_subject, actor_issuer)
+        )
+        return ActorSigningState(
+            credentials=credentials,
+            pending_approval_ids=self._pending_ids(actor_subject, actor_issuer),
+        )
+
+    def revoke_for_actor(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        void_outcome: dict[str, object],
+        before_commit: Callable[[ActorSigningRevocation], None],
+    ) -> ActorSigningRevocation:
+        """Void the actor's approvals and delete its credentials; keep both only on success."""
+        if self.fail_before_audit:
+            message = "fake signing store unavailable"
+            raise SigningRevocationPersistenceError(message)
+        credential_snapshot = self.credentials.all_rows()
+        pending_snapshot = self.pending.all_rows()
+        voided = self._pending_ids(actor_subject, actor_issuer)
+        self.pending.replace_rows(
+            tuple(
+                replace(row, status="signed", outcome=void_outcome) if row.id in voided else row
+                for row in pending_snapshot
+            )
+        )
+        kept = tuple(
+            row for row in credential_snapshot if not _owned(row, actor_subject, actor_issuer)
+        )
+        result = ActorSigningRevocation(
+            credentials_deleted=len(credential_snapshot) - len(kept), voided_approval_ids=voided
+        )
+        self.credentials.replace_rows(kept)
+        try:
+            before_commit(result)
+        except BaseException:
+            self._restore(credential_snapshot, pending_snapshot)
+            raise
+        if self.fail_commit:
+            self._restore(credential_snapshot, pending_snapshot)
+            message = "fake commit failed"
+            raise SigningRevocationPersistenceError(message)
+        return result
+
+    def _restore(
+        self,
+        credentials: tuple[SigningCredentialRow, ...],
+        pending: tuple[PendingApprovalRow, ...],
+    ) -> None:
+        self.credentials.replace_rows(credentials)
+        self.pending.replace_rows(pending)
+
+    def _pending_ids(self, actor_subject: str, actor_issuer: str) -> tuple[str, ...]:
+        return tuple(
+            row.id
+            for row in sorted(self.pending.all_rows(), key=lambda row: row.created_at)
+            if _owned(row, actor_subject, actor_issuer) and row.status == "pending"
+        )
+
+
+def _owned(row: SigningCredentialRow | PendingApprovalRow, subject: str, issuer: str) -> bool:
+    return row.actor_subject == subject and row.actor_issuer == issuer

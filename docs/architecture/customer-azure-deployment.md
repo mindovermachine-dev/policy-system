@@ -19,6 +19,7 @@
      - [Helm release and chart hardening profile](#helm-release-and-chart-hardening-profile)
      - [Public exposure and TLS](#public-exposure-and-tls)
      - [`--rotate-key`](#--rotate-key)
+     - [`--reset-owner-passkey`](#--reset-owner-passkey)
      - [Rotating Authentik's secrets manually](#rotating-authentiks-secrets-manually)
 5. [Naming & Idempotency](#naming--idempotency)
 6. [Region Selection & Quota](#region-selection--quota)
@@ -184,7 +185,8 @@ provisioning order, each step create-if-absent unless noted:
     passkey-enrolment link on the public `https://<hostname>/auth` address. The admin API is not on
     the public Ingress, so the calls go through a temporary `kubectl port-forward`. Nothing is
     created on any failure. Re-running is the owner-recovery path: an owner with no registered
-    passkey gets a fresh link, one with a passkey is left unchanged.
+    passkey gets a fresh link, one with a passkey is left unchanged. A lost or stolen owner device
+    is recovered with [`--reset-owner-passkey`](#--reset-owner-passkey).
 14. **Provisioning summary** (`print_provisioning_summary`) — names which secrets exist (never
     their values), prints the resulting `https://<hostname>` URL, and prints the enrolment link
     last.
@@ -489,6 +491,42 @@ otherwise), compares the currently-stored `AZURE-API-KEY` secret against the acc
 carried over near-verbatim from `deploy-llm.sh`'s own proven `--rotate-key` implementation. Never
 prints a key value, old or new.
 
+### `--reset-owner-passkey`
+
+`scripts/deploy-ps-prod.sh --reset-owner-passkey [--owner-email <address>] [--yes]` makes a lost or
+stolen owner device stop being a valid owner credential, for sign-in and for approvals, and issues
+the owner a new enrolment link. It branches immediately after flag parsing
+(`reset_owner_passkey_main`), before the Azure tool check, config validation and every Azure, AKS
+or Helm step: it works against the current kube context and makes no Azure call. It takes no other
+deploy flag (combined with `--rotate-key` it is a usage error), and `--yes` needs `--owner-email`.
+The logic is shared with `deploy-ps-eval.sh` through `scripts/lib/authentik-owner.sh`.
+
+- **Inputs come from the installed release.** The owner's `(subject, issuer)` is the release's
+  `psService.authzBootstrapOwner`, and the link host is its `psService.authentik.publicUrl`. A
+  missing release or value, or an `--owner-email` that differs from the recorded subject, stops the
+  mode with no change.
+- **Everything is read and checked before any change**: cluster reachability, the shared Authentik
+  token, the owner user, the owner's devices, and the owner's signing state in the PS Service pod.
+  Without `--yes` the operator confirms by typing the owner email.
+- **Authentik side**, through the same temporary `kubectl port-forward` as owner creation: deletes
+  every owner device of every type, every owner session, the owner's OAuth refresh then access
+  tokens, and the owner's other tokens (app passwords, API tokens, old recovery links). Every
+  request targets an id from the owner's own listing, re-checked against the owner. When the
+  shared API token belongs to the owner, the owner's API tokens are kept and a warning says so.
+- **PS Service side**: runs `python -m ps_service.passkey_signing.revoke` in the PS Service pod
+  through `kubectl exec`, which deletes the owner's signing credentials, voids the owner's pending
+  approvals and writes one `passkey.revoke` audit row (actor `system:owner-passkey-reset`); see
+  [PS Service Container Architecture: Passkey
+  Signing](./ps-service-container-architecture.md#passkey-signing). The signing passkey is
+  re-enrolled at the next approval.
+- **Output**: one UTC-timestamped record line with the owner, the kube context and every count,
+  then one single-use link on the public hostname, last. Authentik's own event log does not record
+  every deletion, so the record line is the only complete record. On any failure no link is
+  issued, the remaining counts are printed and a re-run finishes the reset.
+- **No other change**: no Helm upgrade, no `kubectl apply`, no TLS or role change; the owner keeps
+  the same Authentik user. An access token already issued to the lost device stays valid until it
+  expires, because PS Service verifies access tokens locally.
+
 ### Rotating Authentik's secrets manually
 
 `scripts/deploy-ps-prod.sh` has no flag to rotate Authentik's secrets. Because
@@ -635,7 +673,8 @@ model-*availability* failure).
   custom authorization code in this chart or script; the owner the script creates is
   the only account with admin rights immediately after install. That person is both the Authentik
   administrator and PS's `SystemOwner` — acceptable for a single-owner deployment; splitting the
-  two later is a role change. Re-running the script is the owner-recovery path, gated by cluster
+  two later is a role change. Re-running the script is the owner-recovery path for an owner with
+  no passkey, and `--reset-owner-passkey` for a lost or stolen device, both gated by cluster
   access.
 - **Public exposure is real** — unlike the Local Test path, this script's endpoint is reachable
   over the public internet once DNS propagates, secured by a genuine Let's Encrypt certificate

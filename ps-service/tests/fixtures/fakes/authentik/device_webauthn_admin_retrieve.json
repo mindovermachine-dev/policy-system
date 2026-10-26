@@ -1,0 +1,17 @@
+{
+  "pk": 1,
+  "name": "owner-passkey",
+  "created_on": "2026-10-26T11:14:49.862471Z",
+  "device_type": null,
+  "aaguid": "00000000-0000-0000-0000-000000000000",
+  "user": {
+    "pk": 5,
+    "username": "owner@example.test",
+    "name": "owner@example.test",
+    "is_active": true,
+    "last_login": null,
+    "email": "owner@example.test",
+    "attributes": {},
+    "uid": "80d1f8a8db63cf994857e93c1d5eff82dbdd25d21fe007a98859cb980a65ab95"
+  }
+}

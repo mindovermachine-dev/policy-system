@@ -4,15 +4,18 @@
 # Usage:
 #   scripts/deploy-ps-prod.sh [--yes] [--owner-email <address>]
 #   scripts/deploy-ps-prod.sh --rotate-key
+#   scripts/deploy-ps-prod.sh --reset-owner-passkey [--owner-email <address>] [--yes]
 #
 #   --yes         Skip the "Proceed with these values? [Y/n]" prompt (the table still prints).
 #                 The owner email is then never prompted for: pass --owner-email (or set
 #                 AUTHZ_OWNER_EMAIL in scripts/ps-defaults.conf).
-#   --owner-email The first SystemOwner (issue #165). Prompted for when neither this flag nor
+#   --owner-email The first SystemOwner. Prompted for when neither this flag nor
 #                 AUTHZ_OWNER_EMAIL gives one. The address becomes an Authentik administrator
 #                 (username == email, no password) and the OIDC `sub` PS Service expects, so the
 #                 deploy sets the whole bootstrap identity in one pass; a single-use passkey
-#                 enrolment link is printed at the end. Re-running is the owner-recovery path.
+#                 enrolment link is printed at the end. Re-running issues a fresh link to an
+#                 owner with no passkey; a lost or stolen device is recovered with
+#                 --reset-owner-passkey.
 #   --rotate-key  Rotate the Azure Cognitive Services API key currently NOT stored in Key Vault
 #                 (the "inactive" slot) and write its new value back. Branches immediately after
 #                 flag parsing -- skips config validation, the confirmation table, RBAC
@@ -20,10 +23,17 @@
 #                 matter for rotating an already-provisioned account's key). Fails clearly if run
 #                 before a first successful deploy (require_account_exists/require_keyvault_exists
 #                 below).
+#   --reset-owner-passkey
+#                 Lost or stolen device: deletes every Authentik device, session, OAuth and
+#                 app-password/API token of the owner, clears the owner's signing passkeys and
+#                 voids their pending approvals in PS Service, then prints one fresh single-use
+#                 enrolment link. Changes nothing else. Works on the release in the current kube
+#                 context with no Azure call and no config file; cannot be combined with
+#                 --rotate-key, and --yes needs --owner-email.
 #
-# Issue #159: Authentik's own Django `secret_key`/Postgres password and the PS Postgres
-# (admin/state/signing) passwords are no longer generated or synced by this script -- the
-# Helm chart itself now generates and persists them (a `lookup`+`randAlphaNum` idiom in
+# Authentik's own Django `secret_key`/Postgres password and the PS Postgres
+# (admin/state/signing) passwords are not generated or synced by this script -- the
+# Helm chart generates and persists them (a `lookup`+`randAlphaNum` idiom in
 # charts/policy-system/templates/authentik-credentials-secret.yaml/ps-postgres-secret.yaml),
 # created/updated as ordinary chart-rendered resources by `helm upgrade --install` (below, in
 # ensure_release). This script makes no Key Vault or kubectl calls for either secret.
@@ -35,8 +45,8 @@ set -euo pipefail
 
 # Every hard-stop failure message goes through print_error (below), which is red only when
 # stderr is a terminal -- piping to a file/CI log leaves plain text, no stray ANSI codes
-# (respects NO_COLOR, https://no-color.org). Copied verbatim from scripts/deploy-llm.sh
-# (PLAN.md §0.10 -- small, self-contained, no shared-lib extraction needed).
+# (respects NO_COLOR, https://no-color.org). Same few lines as scripts/deploy-llm.sh: small and
+# self-contained, so each script keeps its own copy rather than sourcing a shared lib.
 if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
   readonly COLOR_RED=$'\033[31m'
   readonly COLOR_RESET=$'\033[0m'
@@ -49,7 +59,7 @@ chart_version_args=()
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/deploy-llm-common.sh
 source "${SCRIPT_DIR}/lib/deploy-llm-common.sh"
-# Shared with scripts/deploy-ps-eval.sh (issue #165): creates the first Authentik owner and
+# Shared with scripts/deploy-ps-eval.sh: creates the first Authentik owner and
 # issues the passkey-enrolment link.
 # shellcheck source=lib/authentik-owner.sh
 source "${SCRIPT_DIR}/lib/authentik-owner.sh"
@@ -62,15 +72,16 @@ readonly CONFIG_FILE="${SCRIPT_DIR}/ps-defaults.conf"
 readonly CONFIG_FILE_DISPLAY_PATH="scripts/ps-defaults.conf"
 readonly SUPPORTED_REGIONS=(swedencentral francecentral westeurope germanywestcentral)
 readonly POSITIVE_INTEGER_PATTERN='^[1-9][0-9]*$'
-# Matches scripts/deploy-llm.sh's own AZURE_API_VERSION_LITERAL (issue #105) -- not evaluator-
+# Matches scripts/deploy-llm.sh's own AZURE_API_VERSION_LITERAL -- not evaluator-
 # tunable there either; the API version is a platform constant, not a per-subscription choice.
 readonly AZURE_API_VERSION_LITERAL="preview"
-USAGE="usage: $(basename "$0") [--yes] [--owner-email <address>] [--rotate-key]"
+USAGE="usage: $(basename "$0") [--yes] [--owner-email <address>] | --rotate-key | --reset-owner-passkey [--owner-email <address>] [--yes]"
 readonly USAGE
 
 skip_confirmation=false
 rotate_key=false
-# Read by lib/authentik-owner.sh (issue #165): the owner's email, the --yes switch that turns its
+reset_owner_passkey=false
+# Read by lib/authentik-owner.sh: the owner's email, the --yes switch that turns its
 # prompt off, and the API/link bases + curl arguments for the owner-creation calls.
 OWNER_EMAIL=""
 SKIP_OWNER_PROMPT=false
@@ -90,15 +101,20 @@ made_changes=false
 # discipline as every other process-wide variable above.
 public_hostname=""
 
-# parse_args <args...>: sets skip_confirmation/rotate_key from CLI flags; fails fast otherwise.
-# --rotate-key is checked in main() BEFORE any of S5-S18's provisioning body runs, mirroring
-# scripts/deploy-llm.sh's own proven shape (its own parse_args/main()) -- see rotate_key_main
-# below.
+# parse_args <args...>: sets skip_confirmation/rotate_key/reset_owner_passkey from CLI flags;
+# fails fast otherwise. --rotate-key and --reset-owner-passkey are checked in main() BEFORE any
+# provisioning step runs, the same shape as scripts/deploy-llm.sh's parse_args/main() -- see
+# rotate_key_main and reset_owner_passkey_main below.
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --yes) skip_confirmation=true ;;
       --rotate-key) rotate_key=true ;;
+      --reset-owner-passkey) reset_owner_passkey=true ;;
+      -h | --help)
+        printf '%s\n\n%s\n' "$USAGE" "$OWNER_PASSKEY_RESET_HELP"
+        exit 0
+        ;;
       --owner-email)
         if [[ $# -lt 2 || -z "$2" ]]; then
           print_error '--owner-email needs a value\n%s\n' "$USAGE"
@@ -114,10 +130,18 @@ parse_args() {
     esac
     shift
   done
+  if [[ "$reset_owner_passkey" == true && "$rotate_key" == true ]]; then
+    print_error '%s cannot be combined with %s\n%s\n' --reset-owner-passkey --rotate-key "$USAGE"
+    exit "$EXIT_USAGE"
+  fi
+  if [[ "$reset_owner_passkey" == true && "$skip_confirmation" == true && -z "$OWNER_EMAIL" ]]; then
+    print_error '%s --yes needs --owner-email <address>\n%s\n' --reset-owner-passkey "$USAGE"
+    exit "$EXIT_USAGE"
+  fi
 }
 
 # print_experimental_notice: states on stderr that this production path is experimental and not
-# verified on AKS, and where the evidence lives (issue #353). Printed before any Azure resource is
+# verified on AKS, and where the evidence lives. Printed before any Azure resource is
 # created; the wording matches the production banner in docs/artifacts/installation-guide.md.
 print_experimental_notice() {
   {
@@ -136,9 +160,9 @@ load_config() {
   fi
   # shellcheck source=ps-defaults.conf
   source "$CONFIG_FILE"
-  # A config predating issue #165 has no AUTHZ_OWNER_EMAIL (the retired AUTHZ_BOOTSTRAP_OWNER_*
-  # pair is ignored); default it blank so the prompt (rather than `set -u`'s unbound-variable
-  # error) is what an operator with an older file sees.
+  # A config file may lack AUTHZ_OWNER_EMAIL (AUTHZ_BOOTSTRAP_OWNER_* keys in it are ignored);
+  # default it blank so the prompt (rather than `set -u`'s unbound-variable error) is what an
+  # operator with such a file sees.
   : "${AUTHZ_OWNER_EMAIL:=}"
 }
 
@@ -174,8 +198,7 @@ join_comma_space() {
 # check_required_tools <tool...>: hard-stops unless every named CLI is on PATH, listing all
 # missing tools in one message rather than failing on the first -- so a missing binary is caught
 # before any Azure resource is touched instead of partway through provisioning (kubectl/helm
-# previously weren't needed until S14+, after the AKS cluster and everything before it already
-# existed). See docs/artifacts/installation-guide.md#prerequisites-production for install links.
+# are first used only after the AKS cluster and everything before it exist). See docs/artifacts/installation-guide.md#prerequisites-production for install links.
 check_required_tools() {
   local tool missing=()
   for tool in "$@"; do
@@ -188,8 +211,8 @@ check_required_tools() {
   fi
 }
 
-# fail_validation <message>: prints a field+file-scoped config error and exits (contributes
-# AC-BI-019).
+# fail_validation <message>: prints a field+file-scoped config error and exits before any Azure
+# call.
 fail_validation() {
   local message="$1"
   print_error '%s: %s\n' "$CONFIG_FILE_DISPLAY_PATH" "$message"
@@ -208,7 +231,7 @@ is_supported_region() {
 
 # validate_region_candidates: every LLM_REGION_CANDIDATES entry must be a supported EU region.
 # Unlike deploy-llm.sh, ps-defaults.conf has no single LLM_REGION field -- region *selection*
-# runs later (S8); S5 only validates the candidate pool itself.
+# runs later (select_region); this only validates the candidate pool itself.
 validate_region_candidates() {
   local index region
   for index in "${!LLM_REGION_CANDIDATES[@]}"; do
@@ -254,12 +277,12 @@ prompt_for_tls_contact_email() {
   read -r TLS_CONTACT_EMAIL || true
 }
 
-# resolve_owner_email: the owner email (issue #165) comes from --owner-email, else the config's
+# resolve_owner_email: the owner email comes from --owner-email, else the config's
 # AUTHZ_OWNER_EMAIL, else an interactive prompt (never with --yes) -- like TLS_CONTACT_EMAIL there
 # is no sensible value to bake into a checked-in file. The address is validated up front, before any
 # `az` call. It is both the Authentik username and the `sub` PS Service's bootstrap expects
-# (`sub_mode: user_username`), so no first login is needed to learn it (the retired
-# placeholder-identity two-deploy flow).
+# (`sub_mode: user_username`), so no first login is needed to learn it and one deploy sets the
+# whole bootstrap identity.
 resolve_owner_email() {
   if [[ -z "$OWNER_EMAIL" ]]; then
     OWNER_EMAIL="$AUTHZ_OWNER_EMAIL"
@@ -270,9 +293,8 @@ resolve_owner_email() {
 
 # validate_config: runs every config validation rule against the loaded config, in order.
 # LLM_CHAT_MODEL_SKU/LLM_EMBED_MODEL_SKU are new fields vs. deploy-llm.sh (whose SKUs are
-# hardcoded literals, not evaluator-tunable there) -- the spike proved SKU choice is genuinely
-# subscription-quota-dependent, so it is tunable, and non-emptiness must be checked here
-# (PLAN.md §1).
+# hardcoded literals, not evaluator-tunable there) -- SKU availability depends on the
+# subscription's quota, so it is tunable, and non-emptiness must be checked here.
 validate_config() {
   validate_region_candidates
   validate_non_empty "LLM_CHAT_MODEL_NAME" "$LLM_CHAT_MODEL_NAME"
@@ -286,15 +308,15 @@ validate_config() {
 
 # fetch_subscription_id: prints the signed-in az session's subscription id. Called exactly once
 # by main() -- every resource name below derives from this single value (no repeated
-# subscription lookups, same discipline as deploy-llm.sh's S2).
+# subscription lookups, same discipline as deploy-llm.sh).
 fetch_subscription_id() {
   az account show --query id -o tsv
 }
 
 # print_confirmation_table <account_name> <vault_name> <cluster_name> <dns_label>: prints every
-# deterministically-computed resource name (contributes AC-BI-019). The region row shows the
-# configured candidate list, not a single resolved region -- region selection is a later slice
-# (S8), same convention as deploy-llm.sh's own table.
+# deterministically-computed resource name, before any Azure change. The region row shows the
+# configured candidate list, not a single resolved region -- region selection runs after the
+# confirmation (select_region), same convention as deploy-llm.sh's own table.
 print_confirmation_table() {
   local account_name="$1"
   local vault_name="$2"
@@ -330,8 +352,8 @@ confirm_or_exit() {
 }
 
 # fetch_signed_in_user_upn: prints the signed-in az session's UPN (used as the RBAC preflight's
-# --assignee and in its failure message). Reused almost verbatim from scripts/deploy-llm.sh
-# (PLAN.md §0.5 -- user-only, no service-principal branch).
+# --assignee and in its failure message). Same shape as scripts/deploy-llm.sh's: user-only, no
+# service-principal branch.
 fetch_signed_in_user_upn() {
   az account show --query user.name -o tsv
 }
@@ -341,8 +363,8 @@ fetch_signed_in_user_upn() {
 # into a Windows path before a non-MSYS binary ever sees it -- helpful for a real filesystem path,
 # but it mangles an Azure resource ID/scope like "/subscriptions/..." into garbage. This script has
 # exactly one real filesystem path (VALUES_PROD_FILE, passed to `helm -f` in ensure_release) that
-# depends on that conversion happening, so MSYS_NO_PATHCONV can't be exported globally (previously
-# tried -- broke the `helm -f` lookup under Git Bash on Windows) -- it must be scoped to only the
+# depends on that conversion happening, so MSYS_NO_PATHCONV can't be exported globally (that
+# breaks the `helm -f` lookup under Git Bash on Windows) -- it must be scoped to only the
 # `az` calls below that take a leading-"/" resource ID: fetch_role_assignments,
 # grant_aks_rbac_access's role assignment create, and the `--ids`-based public-IP calls
 # (ensure_dns_label/fetch_public_ip_fqdn).
@@ -353,10 +375,10 @@ az_no_pathconv() {
 # fetch_role_assignments <assignee> <scope>: prints the newline-separated role names assigned to
 # <assignee> at <scope>. Takes an explicit scope rather than building a subscription-root scope
 # internally -- `az role assignment list --scope` accepts any resource ID (subscription, resource
-# group, or a single resource such as an AKS cluster), and S13's AKS RBAC grant
+# group, or a single resource such as an AKS cluster), and the AKS RBAC grant
 # (grant_aks_rbac_access below) needs this same read at a cluster-scoped resource ID, a different
 # scope than rbac_preflight's subscription-root check just below; both callers share this one
-# function (L1 DRY) rather than duplicating the `az role assignment list` call shape.
+# function rather than duplicating the `az role assignment list` call shape.
 fetch_role_assignments() {
   local assignee="$1" scope="$2"
   az_no_pathconv role assignment list --assignee "$assignee" --scope "$scope" \
@@ -376,7 +398,7 @@ has_sufficient_role() {
 
 # rbac_preflight <subscription_id>: hard-stops unless the signed-in user has Owner or
 # Contributor at subscription scope, with an actionable fix command -- same user-only pattern as
-# deploy-llm.sh's own preflight (PLAN.md §0.5: no service-principal branch). Runs before any
+# deploy-llm.sh's own preflight (no service-principal branch). Runs before any
 # other Azure resource is touched, including provider registration below.
 rbac_preflight() {
   local subscription_id="$1"
@@ -397,29 +419,26 @@ rbac_preflight() {
 # account, AKS cluster, Key Vault, virtual-network resources, VMs, managed identities, and the
 # Container Insights/Log Analytics monitoring stack). On a fresh subscription only
 # Microsoft.Authorization is registered by default; any of these left NotRegistered fails
-# resource creation with MissingSubscriptionRegistration (AC-BI-008).
+# resource creation with MissingSubscriptionRegistration.
 readonly REQUIRED_PROVIDERS=(
   Microsoft.CognitiveServices Microsoft.ContainerService Microsoft.KeyVault Microsoft.Network
   Microsoft.Compute Microsoft.ManagedIdentity Microsoft.OperationsManagement
   Microsoft.OperationalInsights Microsoft.Insights
 )
-# Bundled Authentik, as broker (issue #129) -- one fixed OAuth2 Provider + Application, both
-# named "ps-cli" (PLAN.md §0.5: no separate API-app/CLI-app split; S4's blueprint,
+# Bundled Authentik, as broker -- one fixed OAuth2 Provider + Application, both named "ps-cli"
+# (no separate API-app/CLI-app split; the blueprint,
 # charts/policy-system/files/authentik-blueprint.yaml, is the single source of truth for this
-# literal on the chart side). AUTHENTIK_SCOPES matches S4's blueprint's own actual
-# `property_mappings` (openid/profile/email/offline_access) -- confirmed via IMPL_SLICE_0B.md's
-# live-checkpoint finding that a Provider with no `offline_access` scope mapping never issues a
-# `refresh_token`, breaking every ps-cli command after the very first `auth login`.
+# literal on the chart side). AUTHENTIK_SCOPES matches that blueprint's own
+# `property_mappings` (openid/profile/email/offline_access): a Provider with no `offline_access`
+# scope mapping never issues a `refresh_token`, breaking every ps-cli command after the very
+# first `auth login`.
 readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
 
-# Fixed AKS node shape (AC-BI-011, PLAN.md §0.6) -- not evaluator-tunable, matching the spike's
-# own resolved "testing one deployment shape" decision (scripts/ps-defaults.conf has no
-# conflicting AKS-size field -- confirmed by reading it before adding these). No spike-proven
-# mechanism ports here (§0.6): the spike explicitly left this undischarged (its README's "Manual
-# steps a real installer needs" #3) -- these literals and the check_aks_vm_size function below are
-# this run's own new design against documented Azure CLI surfaces, not yet empirically
-# re-verified against a live subscription. AKS_NODE_VM_SIZE_VCPUS is Standard_D4as_v7's own vCPU
+# Fixed AKS node shape -- not evaluator-tunable: one tested deployment shape
+# (scripts/ps-defaults.conf has no AKS-size field). These literals and the check_aks_vm_size
+# function below follow the documented Azure CLI surfaces and are not verified against a live
+# subscription. AKS_NODE_VM_SIZE_VCPUS is Standard_D4as_v7's own vCPU
 # count (the Dasv7-series specification), used only to compute the total vCPUs this fixed 2-node
 # shape needs: AKS_NODE_COUNT x AKS_NODE_VM_SIZE_VCPUS = 2 x 4 = 8.
 readonly AKS_NODE_VM_SIZE="Standard_D4as_v7"
@@ -427,19 +446,19 @@ readonly AKS_NODE_VM_SIZE_FAMILY="StandardDasv7Family"
 readonly AKS_NODE_COUNT=2
 readonly AKS_NODE_VM_SIZE_VCPUS=4
 
-# Built-in role granted at cluster scope (S13, AC-BI-006) so the deploying identity's own
-# kubectl/helm calls (S14+) can authenticate against an --enable-azure-rbac cluster -- matches
+# Built-in role granted at cluster scope so the deploying identity's own
+# kubectl/helm calls can authenticate against an --enable-azure-rbac cluster -- matches
 # Azure's built-in "Azure Kubernetes Service RBAC Cluster Admin" role name exactly, the role that
 # grants full access to Kubernetes APIs when Azure RBAC authorization is enabled on the cluster.
 readonly AKS_RBAC_ADMIN_ROLE="Azure Kubernetes Service RBAC Cluster Admin"
 
-# LLM credentials Secret name (S14) and Helm release identity (S15): LLM_SECRET_NAME is the
+# LLM credentials Secret name and Helm release identity: LLM_SECRET_NAME is the
 # Kubernetes Secret name ensure_llm_secret below creates/reads; CHART_REF is this project's own
 # published OCI chart (charts/policy-system, published to ghcr.io); HELM_RELEASE_NAME is the Helm
 # release name ensure_release below installs/upgrades.
 readonly LLM_SECRET_NAME="policy-system-llm-credentials"
 # PS_CHART_REF (a chart path or OCI ref) overrides the published chart, e.g. to deploy an
-# unreleased local chart (issue #165's live verification); unset, the published chart is used.
+# unreleased local chart for a live check; unset, the published chart is used.
 readonly CHART_REF="${PS_CHART_REF:-oci://ghcr.io/mindovermachine-dev/charts/policy-system}"
 readonly HELM_RELEASE_NAME="policy-system"
 # PS Service name -- equals the chart's rendered PS Service Service and PS Service Ingress name
@@ -462,21 +481,16 @@ readonly AUTHENTIK_IN_CLUSTER_BASE_URL="http://${AUTHENTIK_SERVICE_NAME}/auth"
 # secret.yaml) that Authentik also reads as its bootstrap token.
 readonly AUTHENTIK_API_TOKEN_SECRET_NAME="${HELM_RELEASE_NAME}-authentik-api-token"
 readonly AUTHENTIK_ROLLOUT_TIMEOUT="${AUTHENTIK_ROLLOUT_TIMEOUT:-900s}"
-# Resolves the REAL chart file directly (S14, AC-BI-013 script-half) -- reads
-# charts/policy-system/values-prod.yaml from the repo's actual chart directory, never a local
-# copy that could silently drift from it. This script (scripts/deploy-ps-prod.sh) lives ONE directory
-# below the repo root (scripts/), so one "../" from SCRIPT_DIR is correct here -- verified by
-# resolving the path against this script's own real SCRIPT_DIR before choosing this literal
-# (independently re-confirmed by IMPL_SLICE_14.md's own path-existence test, which reads this
-# exact assignment back out of this file rather than re-deriving the "expected" path, so a wrong
-# "../" count here cannot pass by construction).
+# Resolves the REAL chart file directly -- reads charts/policy-system/values-prod.yaml from the
+# repo's actual chart directory, never a local copy that could silently drift from it. This
+# script (scripts/deploy-ps-prod.sh) lives ONE directory below the repo root (scripts/), so one
+# "../" from SCRIPT_DIR is correct here; a path-existence test reads this exact assignment back
+# out of this file, so a wrong "../" count fails it.
 readonly VALUES_PROD_FILE="${SCRIPT_DIR}/../charts/policy-system/values-prod.yaml"
 
-# Env-var-overridable (default matches the spike's own proven values) so tests can poll on a
-# millisecond timescale instead of the real ~5-minute worst case -- neither deploy-llm.sh nor the
-# spike had a test-friendly polling pattern to copy (both hardcode these as plain `readonly`
-# literals); this `${VAR:-default}` shape is this script's own new precedent, documented in
-# IMPL_SLICE_7.md for S8+ to reuse if another polling loop needs the same treatment.
+# Env-var-overridable so tests can poll on a millisecond timescale instead of the real ~5-minute
+# worst case; the defaults are the values that cover a real registration. Other polling loops in
+# this script use the same `${VAR:-default}` shape.
 readonly PROVIDER_REGISTRATION_WAIT_ATTEMPTS="${PROVIDER_REGISTRATION_WAIT_ATTEMPTS:-30}"
 readonly PROVIDER_REGISTRATION_WAIT_INTERVAL_SECONDS="${PROVIDER_REGISTRATION_WAIT_INTERVAL_SECONDS:-10}"
 
@@ -486,11 +500,11 @@ provider_registered() {
 }
 
 # ensure_providers_registered: register-if-absent every namespace in REQUIRED_PROVIDERS, then
-# poll each to Registered before returning -- every dependent resource create in later slices
-# runs after this (AC-BI-008). Kicks off every missing registration first, then polls each in
+# poll each to Registered before returning -- every dependent resource create runs after this,
+# so none fails with MissingSubscriptionRegistration. Kicks off every missing registration first, then polls each in
 # turn, rather than register-then-poll one at a time -- registration is asynchronous on Azure's
 # side regardless of when the request lands, so the wait for provider 2 already overlaps
-# provider 1's (same resolved shape as the spike's own ensure_providers_registered).
+# provider 1's.
 ensure_providers_registered() {
   local ns unregistered=()
   for ns in "${REQUIRED_PROVIDERS[@]}"; do
@@ -534,7 +548,7 @@ both_models_generally_available() {
 }
 
 # fail_no_region_available: hard-stops when no candidate region has both models Generally
-# Available at the required SKU (AC-BI-010) -- reached only after every candidate was tried.
+# Available at the required SKU -- reached only after every candidate was tried.
 fail_no_region_available() {
   print_error 'No candidate region has both %s (%s) and %s (%s) Generally Available. Tried: %s\n' \
     "$LLM_CHAT_MODEL_NAME" "$LLM_CHAT_MODEL_SKU" "$LLM_EMBED_MODEL_NAME" "$LLM_EMBED_MODEL_SKU" \
@@ -543,14 +557,14 @@ fail_no_region_available() {
 }
 
 # select_region: probes LLM_REGION_CANDIDATES in configured order, stopping at the first
-# candidate where both models are Generally Available (AC-BI-009) -- a flat loop with an early
+# candidate where both models are Generally Available -- a flat loop with an early
 # exit, not nested conditionals (docs/coding-standards/level1-coding-principles.md, cyclomatic
 # complexity).
 # Prints "<region>\n<model_list_json>" so a caller capturing this via command substitution
 # (which runs in a subshell -- a plain variable set here would not survive back to the caller)
 # gets both the selected region and its already-fetched `model list` response, letting later
 # steps (capacity validation, model version lookup) reuse it instead of re-querying the same
-# region. Fails explicitly if no candidate qualifies (AC-BI-010).
+# region. Fails explicitly if no candidate qualifies.
 select_region() {
   local candidate model_list
   for candidate in "${LLM_REGION_CANDIDATES[@]}"; do
@@ -580,7 +594,7 @@ model_capacity_range() {
 
 # validate_model_capacity <model_list_json> <field_name> <model_name> <sku> <capacity>: hard
 # stops unless <capacity> falls within the [minimum, maximum] range <model_name>'s <sku> SKU
-# reports in <model_list_json> (AC-BI-009).
+# reports in <model_list_json>.
 validate_model_capacity() {
   local model_list="$1" field_name="$2" model_name="$3" sku="$4" capacity="$5"
   local range minimum maximum
@@ -596,9 +610,9 @@ validate_model_capacity() {
 }
 
 # validate_capacity_range <model_list_json>: validates the configured chat/embed capacities
-# against the selected region's live-reported ranges (AC-BI-009) -- reuses the `model list`
+# against the selected region's live-reported ranges -- reuses the `model list`
 # response select_region already fetched, no second call for the same region. Unlike
-# deploy-llm.sh's post-issue-#110 fail_region_not_viable, a failure here is a hard stop: the
+# deploy-llm.sh's fail_region_not_viable, a failure here is a hard stop: the
 # selected region is never swapped for another once select_region has already picked one.
 validate_capacity_range() {
   local model_list="$1"
@@ -612,8 +626,8 @@ validate_capacity_range() {
 # a model+SKU pair, e.g. "OpenAI.DataZoneStandard.gpt-5.4-mini". `az cognitiveservices usage
 # list` names each quota entry "OpenAI.<sku>.<model_name>"; querying by any other key (e.g. the
 # literal strings "chat"/"embed") never matches a real entry, so a quota preflight built on those
-# keys would silently never fire on any subscription. scripts/deploy-llm.sh (issue #105) still has
-# this bug uncorrected.
+# keys would silently never fire on any subscription. scripts/deploy-llm.sh still queries by
+# those literal keys.
 quota_usage_key() {
   local sku="$1" model_name="$2"
   printf 'OpenAI.%s.%s' "$sku" "$model_name"
@@ -644,9 +658,9 @@ model_remaining_quota() {
 
 # validate_model_quota <usage_json> <usage_key> <field_name> <requested_capacity>: hard stops
 # with a quota-increase message unless <usage_key>'s remaining quota covers
-# <requested_capacity> (AC-BI-009). Skips the check (with a note, not silently) when Azure
-# reports no usage entry for <usage_key> at all -- bugfix 3/6, see model_usage_entry_exists's own
-# comment; the account/deployment create calls in a later slice still enforce the real limit and
+# <requested_capacity>. Skips the check (with a note, not silently) when Azure
+# reports no usage entry for <usage_key> at all -- see model_usage_entry_exists's own
+# comment; the account/deployment create calls still enforce the real limit and
 # will fail clearly if it's actually insufficient.
 validate_model_quota() {
   local usage="$1" usage_key="$2" field_name="$3" requested_capacity="$4"
@@ -665,10 +679,9 @@ validate_model_quota() {
   fi
 }
 
-# deployment_exists <account_name> <deployment_name>: true if it already exists. Ported early
-# (spike order: after ensure_account, alongside S9's provisioning chain) because check_quota
-# below depends on it for bugfix 5/6 -- ensure_account/ensure_deployment themselves (the actual
-# create-if-absent calls) are S9's job, not this slice's; this function only ever reads.
+# deployment_exists <account_name> <deployment_name>: true if it already exists. Defined here,
+# ahead of the provisioning chain, because check_quota below uses it to skip an existing
+# deployment; this function only ever reads.
 deployment_exists() {
   local account_name="$1" deployment_name="$2"
   az cognitiveservices account deployment show --name "$account_name" \
@@ -677,7 +690,7 @@ deployment_exists() {
 }
 
 # check_quota <region> <account_name>: hard-stops if either model's remaining quota at <region>
-# is less than its configured capacity (AC-BI-009) -- runs once, at the already-selected region
+# is less than its configured capacity -- runs once, at the already-selected region
 # only; never tried against a different region. Skips a model's check entirely when its
 # deployment already exists: once a deployment exists, its own allocated capacity counts against
 # Azure's reported `currentValue`, so re-requesting the same capacity on a rerun would read as
@@ -708,9 +721,8 @@ check_quota() {
 # deployment create` hard-requires an explicit `--model-version` -- reads `.model.version` from
 # the already-fetched `model list` response rather than omitting the flag. Reuses
 # select_region's already-fetched response rather than a second `model list` call for the same
-# region. S9's ensure_deployment call is the actual consumer of this value (feeds
-# --model-version); this slice only resolves and logs it (see main()'s "Selected region" step
-# below) since deployment creation itself doesn't exist yet.
+# region. ensure_deployment consumes this value (feeds --model-version); main() resolves and
+# logs it at its "Selected region" step, before any deployment is created.
 model_version() {
   local model_list="$1" model_name="$2"
   jq -r --arg name "$model_name" '.[] | select(.model.name == $name) | .model.version' \
@@ -722,13 +734,13 @@ resource_group_exists() {
   az group show --name "$RESOURCE_GROUP_NAME" >/dev/null 2>&1
 }
 
-# ensure_resource_group <region>: create-if-absent (AC-BI-015's own RG-scoped provisioning) --
-# the first link in the provisioning chain, own copy under $RESOURCE_GROUP_NAME (PLAN.md §0.1 --
-# not shared/sourced from scripts/deploy-llm.sh). Checks resource_group_exists first rather than
+# ensure_resource_group <region>: create-if-absent -- the first link in the provisioning chain,
+# this script's own copy under $RESOURCE_GROUP_NAME (not shared/sourced from
+# scripts/deploy-llm.sh). Checks resource_group_exists first rather than
 # calling `az group create` unconditionally -- `az group create` is itself idempotent (a no-op if
 # the group already exists), but only the explicit check lets this function set
-# made_changes=true exclusively when a create actually happened, the check-before-act idiom a
-# later slice's idempotent-rerun proof depends on.
+# made_changes=true exclusively when a create actually happened, the check-before-act idiom the
+# idempotent-rerun summary depends on.
 ensure_resource_group() {
   local region="$1"
   if resource_group_exists; then
@@ -765,10 +777,10 @@ ensure_account() {
 
 # ensure_deployment <account_name> <deployment_name> <sku> <capacity> <model_version>:
 # create-if-absent, using the deployment name as the model name (design doc's own reference
-# deployment does the same, e.g. "Deployment: gpt-5.4-mini"). <model_version> is bugfix 6/6 from
-# S8 (--model-version is hard-required now, see model_version's own comment above) -- the caller
+# deployment does the same, e.g. "Deployment: gpt-5.4-mini"). <model_version> is required
+# (--model-version is hard-required, see model_version's own comment above) -- the caller
 # passes $chat_model_version/$embed_model_version, already resolved in main() before this point.
-# deployment_exists is already defined above (ported early in S8 for check_quota's own use).
+# deployment_exists is defined above, next to check_quota, which also uses it.
 ensure_deployment() {
   local account_name="$1" deployment_name="$2" sku="$3" capacity="$4" version="$5"
   if deployment_exists "$account_name" "$deployment_name"; then
@@ -800,9 +812,8 @@ ensure_keyvault() {
 }
 
 # fetch_signed_in_user_object_id: prints the signed-in identity's object id (the Key Vault
-# access policy's --object-id). Reused almost verbatim from scripts/deploy-llm.sh -- user-only,
-# no service-principal branch (PLAN.md §0.5; the spike's own resolve_operator_identity/
-# operator_object_id trio is explicitly out of scope here).
+# access policy's --object-id). Same shape as scripts/deploy-llm.sh's -- user-only, no
+# service-principal branch.
 fetch_signed_in_user_object_id() {
   az ad signed-in-user show --query id -o tsv
 }
@@ -861,8 +872,7 @@ write_secret_if_changed() {
 
 # fetch_vm_sku_json <region>: prints az's `vm list-skus` response for AKS_NODE_VM_SIZE at
 # <region> (server-side filtered by --size, so this is a handful of tier/zone-variant entries for
-# one VM size, not the whole SKU catalog). New for S12 -- see PLAN.md §0.6, this AC's mechanism
-# has no spike-proven equivalent to port.
+# one VM size, not the whole SKU catalog).
 fetch_vm_sku_json() {
   local region="$1"
   az vm list-skus --location "$region" --size "$AKS_NODE_VM_SIZE" --all -o json
@@ -871,7 +881,7 @@ fetch_vm_sku_json() {
 # vm_size_restricted <sku_json> <region>: true if any returned SKU entry's restrictions[] mark
 # AKS_NODE_VM_SIZE unavailable to this subscription -- either an explicit
 # "NotAvailableForSubscription" reasonCode (any restriction type), or a "Location"-type
-# restriction whose values cover <region> specifically (PLAN.md §0.6's resolved mechanism).
+# restriction whose values cover <region> specifically.
 vm_size_restricted() {
   local sku_json="$1" region="$2"
   jq -e --arg region "$region" \
@@ -890,7 +900,8 @@ vm_size_restriction_reason() {
 }
 
 # vm_size_allowed <region>: true unless AKS_NODE_VM_SIZE is restricted for this subscription in
-# <region> (vm_size_restricted above) -- the allowlist half of AC-BI-011, independent of quota.
+# <region> (vm_size_restricted above) -- the allowlist half of check_aks_vm_size, independent of
+# quota.
 vm_size_allowed() {
   local region="$1"
   ! vm_size_restricted "$(fetch_vm_sku_json "$region")" "$region"
@@ -907,7 +918,7 @@ fetch_vm_usage_json() {
 # (limit minus current usage) in <usage_json>, as an integer -- jq `floor`, same float-safety
 # discipline as model_remaining_quota above (Azure reports these as floats too, per that
 # function's own comment). Prints 0 if the family has no entry at all -- unlike the Cognitive
-# Services usage-list gap (bugfix 3/6, model_usage_entry_exists's own comment), a subscription's
+# Services usage-list gap (model_usage_entry_exists's own comment), a subscription's
 # core-count quota families are a fixed catalog Azure always reports in `vm list-usage`, so an
 # absent entry here means genuinely no quota, not "never deployed here yet".
 vm_family_quota_remaining() {
@@ -919,7 +930,8 @@ vm_family_quota_remaining() {
 }
 
 # vm_family_quota_sufficient <usage_json> <needed_vcpus>: true if AKS_NODE_VM_SIZE_FAMILY's
-# remaining vCPU quota in <usage_json> covers <needed_vcpus> -- the quota half of AC-BI-011,
+# remaining vCPU quota in <usage_json> covers <needed_vcpus> -- the quota half of
+# check_aks_vm_size,
 # checked only once the allowlist check above has already passed.
 vm_family_quota_sufficient() {
   local usage_json="$1" needed_vcpus="$2"
@@ -928,15 +940,12 @@ vm_family_quota_sufficient() {
   (( remaining >= needed_vcpus ))
 }
 
-# check_aks_vm_size <cluster_name> <region>: hard-stops before any AKS creation (S13, not
-# implemented yet) unless AKS_NODE_VM_SIZE is both allowed for this subscription in <region> and
-# this subscription's vCPU family quota there covers AKS_NODE_COUNT x AKS_NODE_VM_SIZE_VCPUS
-# (AC-BI-011). New design, not ported -- PLAN.md §0.6: the spike explicitly left this
-# undischarged (its README's own "Manual steps a real installer needs" #3), so this mechanism is
-# not yet empirically proven against a live subscription the way S8's ported bugfixes are (flagged
-# in IMPL_SLICE_12.md). Fails with the actual allowlist/quota numbers shown, mirroring
-# validate_model_quota's own message-style convention (explicit numbers, never a generic
-# message) -- never left to `az aks create`'s own error text, this AC's literal wording.
+# check_aks_vm_size <cluster_name> <region>: hard-stops before any AKS creation
+# (ensure_aks_cluster) unless AKS_NODE_VM_SIZE is both allowed for this subscription in <region>
+# and this subscription's vCPU family quota there covers AKS_NODE_COUNT x AKS_NODE_VM_SIZE_VCPUS.
+# Not verified against a live subscription. Fails with the actual allowlist/quota numbers shown,
+# mirroring validate_model_quota's own message-style convention (explicit numbers, never a
+# generic message) -- never left to `az aks create`'s own error text.
 #
 # Skips entirely when <cluster_name> already exists, same reasoning as check_quota's own
 # deployment_exists guard above: ensure_aks_cluster is create-if-absent and never resizes an
@@ -972,10 +981,9 @@ check_aks_vm_size() {
 }
 
 # has_role <roles> <role_name>: true if the newline-separated <roles> contains <role_name>
-# exactly. New for S13 -- has_sufficient_role above (S6) checks for either-of-two roles at
-# subscription scope with its own small loop; this checks for exactly one role at an arbitrary
-# scope (grant_aks_rbac_access below), so it is kept as its own narrow function rather than
-# reshaping S6's already-tested one.
+# exactly. has_sufficient_role above checks for either-of-two roles at subscription scope with
+# its own small loop; this checks for exactly one role at an arbitrary scope
+# (grant_aks_rbac_access below), so it is kept as its own narrow function.
 has_role() {
   local roles="$1" wanted="$2"
   local role
@@ -993,14 +1001,14 @@ aks_cluster_exists() {
 
 # fetch_aks_cluster_id <cluster_name>: prints the cluster's own resource ID -- the --scope
 # grant_aks_rbac_access below grants the deploying identity's role at, deliberately never the
-# subscription root (AC-BI-006's own cluster-scoped-not-subscription-scoped intent).
+# subscription root: the grant is scoped to the cluster, never the subscription.
 fetch_aks_cluster_id() {
   local cluster_name="$1"
   az aks show --name "$cluster_name" --resource-group "$RESOURCE_GROUP_NAME" --query id -o tsv
 }
 
-# ensure_aks_cluster <cluster_name> <region>: create-if-absent, with every AC-BI-006/AC-BI-012
-# hardening flag: AAD-integrated auth, Azure RBAC authorization, local (cert-based) accounts
+# ensure_aks_cluster <cluster_name> <region>: create-if-absent, with every cluster hardening
+# flag: AAD-integrated auth, Azure RBAC authorization, local (cert-based) accounts
 # disabled, and Azure CNI network policy. --network-plugin azure MUST be passed ALONGSIDE
 # --network-policy azure -- `az aks create --network-policy azure` requires an explicit
 # `--network-plugin azure`; Azure network policy enforcement is only supported on top of the
@@ -1019,13 +1027,13 @@ ensure_aks_cluster() {
 }
 
 # grant_aks_rbac_access <cluster_name>: grants the deploying identity -- reusing
-# fetch_signed_in_user_object_id's result, the SAME identity resolver S9's Key Vault access grant
-# already uses, not a separate service-principal-aware resolver (PLAN.md §0.5) -- the built-in
+# fetch_signed_in_user_object_id's result, the SAME identity resolver the Key Vault access grant
+# uses, not a separate service-principal-aware resolver -- the built-in
 # "Azure Kubernetes Service RBAC Cluster Admin" role, scoped to this cluster's own resource ID
 # only, never the subscription root. Without this, --enable-azure-rbac rejects every kubectl/helm
-# call in S14+ regardless of the operator's subscription-level Owner/Contributor role S6's
+# call after this regardless of the operator's subscription-level Owner/Contributor role
 # rbac_preflight already checked -- that is a different scope for a different concern. Read-
-# before-write, like grant_keyvault_access's sibling in S9: unlike keyvault set-policy, `az role
+# before-write, like grant_keyvault_access: unlike keyvault set-policy, `az role
 # assignment create` errors on a duplicate assignment instead of being silently idempotent.
 grant_aks_rbac_access() {
   local cluster_name="$1"
@@ -1052,7 +1060,7 @@ ensure_aks_credentials() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# LLM credentials -> Kubernetes Secret (S14), and the Helm release itself (S15).
+# LLM credentials -> Kubernetes Secret, and the Helm release itself.
 # ---------------------------------------------------------------------------------------------
 
 # apply_output_changed <apply_output>: true unless kubectl reported the object unchanged --
@@ -1063,11 +1071,11 @@ apply_output_changed() {
   [[ "$1" != *unchanged* ]]
 }
 
-# ensure_llm_secret <vault_name>: reads the three LLM credentials S9 already wrote to Key Vault
+# ensure_llm_secret <vault_name>: reads the three LLM credentials already written to Key Vault
 # and writes them into the cluster as a Kubernetes Secret, underscore-keyed (K8s env-var
 # convention) from the dash-named Key Vault secret names -- same create --dry-run=client -o yaml
 # | apply idiom as scripts/sync-llm-secrets-to-kind.sh, minus its kind-only context guard (this
-# script already pointed kubectl at the right cluster via S13's ensure_aks_credentials).
+# script already pointed kubectl at the right cluster via ensure_aks_credentials).
 ensure_llm_secret() {
   local vault_name="$1"
   local api_key api_base api_version apply_output
@@ -1115,9 +1123,9 @@ release_values_json() {
 # <authentik_base_url> <authentik_public_url> <public_url>:
 # write-if-changed against the currently deployed release's values (`helm get values`), since
 # plain `helm upgrade --install` has no built-in no-op detection of its own -- it creates a new
-# revision even when nothing changed. <audience> is the fixed Authentik application slug
-# (issue #129), same literal as <cli_client_id>. <owner_subject> is the owner's email and
-# <owner_issuer> the issuer (issue #165): rerunning with the same values is a no-op here, and
+# revision even when nothing changed. <audience> is the fixed Authentik application slug,
+# same literal as <cli_client_id>. <owner_subject> is the owner's email and
+# <owner_issuer> the issuer: rerunning with the same values is a no-op here, and
 # ps_service's own "grantable once" bootstrap is unaffected either way.
 #
 # Compares only the 14 fields release_values_json sets, extracted from `helm get values`'s output
@@ -1214,15 +1222,14 @@ adopt_legacy_ingresses() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Public exposure (S16, supports AC-BI-015): AKS application-routing add-on (managed NGINX
-# ingress controller) + Azure's own public-IP DNS label -- gives a
-# "<label>.<region>.cloudapp.azure.com" hostname with no customer-owned domain required (spike's
-# resolved "DNS zone for the hostname" decision).
+# Public exposure: AKS application-routing add-on (managed NGINX ingress controller) + Azure's
+# own public-IP DNS label -- gives a "<label>.<region>.cloudapp.azure.com" hostname with no
+# customer-owned domain or DNS zone required.
 # ---------------------------------------------------------------------------------------------
 
-# Env-var-overridable (default matches the spike's own proven values) so tests can poll on a
-# millisecond timescale instead of the real worst case -- same `${VAR:-default}` precedent
-# established for PROVIDER_REGISTRATION_WAIT_ATTEMPTS/_INTERVAL_SECONDS above (S7).
+# Env-var-overridable so tests can poll on a millisecond timescale instead of the real worst
+# case -- same `${VAR:-default}` shape as PROVIDER_REGISTRATION_WAIT_ATTEMPTS/_INTERVAL_SECONDS
+# above.
 readonly INGRESS_IP_WAIT_ATTEMPTS="${INGRESS_IP_WAIT_ATTEMPTS:-30}"
 readonly INGRESS_IP_WAIT_INTERVAL_SECONDS="${INGRESS_IP_WAIT_INTERVAL_SECONDS:-10}"
 
@@ -1239,7 +1246,7 @@ approuting_enabled() {
 }
 
 # ensure_approuting <cluster_name>: create-if-absent the managed NGINX ingress controller add-on
-# (supports AC-BI-015).
+# that publishes PS Service and Authentik.
 ensure_approuting() {
   local cluster_name="$1"
   if approuting_enabled "$cluster_name"; then
@@ -1278,7 +1285,7 @@ fetch_public_ip_resource_id() {
 }
 
 # ensure_dns_label <public_ip_id> <label>: create-if-absent Azure's own public-IP DNS label
-# (spike's "DNS zone for the hostname" decision) -- no external registrar or Azure DNS zone.
+# -- no external registrar or Azure DNS zone.
 # Read-before-write like grant_keyvault_access/grant_aks_rbac_access's sibling functions above.
 ensure_dns_label() {
   local public_ip_id="$1" label="$2"
@@ -1299,7 +1306,7 @@ fetch_public_ip_fqdn() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# cert-manager install + wait-for-Available, then ClusterIssuer (S17, AC-BI-016).
+# cert-manager install + wait-for-Available, then ClusterIssuer.
 # ---------------------------------------------------------------------------------------------
 
 readonly CERT_MANAGER_CHART_REF="oci://quay.io/jetstack/charts/cert-manager"
@@ -1312,7 +1319,7 @@ readonly CLUSTER_ISSUER_NAME="letsencrypt-prod"
 # chart -- the AKS application-routing add-on installs only the NGINX ingress controller, NOT
 # cert-manager: there is no bundled cert-manager for a ClusterIssuer to use unless this script
 # installs one itself. Waits for the controller/webhook/cainjector deployments to report
-# Available BEFORE returning (AC-BI-016) -- a fresh install's admission webhook needs its own
+# Available BEFORE returning -- a fresh install's admission webhook needs its own
 # cert issued before it can admit the ClusterIssuer ensure_cluster_issuer creates next; applying
 # one immediately after a fresh install can intermittently fail webhook admission otherwise.
 ensure_cert_manager() {
@@ -1332,8 +1339,8 @@ ensure_cert_manager() {
 # ensure_cluster_issuer <email>: create-if-absent (via kubectl apply, itself idempotent) a Let's
 # Encrypt ClusterIssuer using the cert-manager install above, HTTP-01 solved through the
 # app-routing add-on's own nginx ingress class -- MUST run only after ensure_cert_manager's own
-# wait-for-Available has already returned (AC-BI-016's literal claim; main() below calls these in
-# that fixed order, never the reverse).
+# wait-for-Available has already returned (main() below calls these in that fixed order, never
+# the reverse).
 ensure_cluster_issuer() {
   local email="$1" apply_output
   apply_output="$(kubectl apply -f - <<EOF
@@ -1374,10 +1381,10 @@ wait_for_authentik() {
 }
 
 # provision_authentik_owner <hostname>: creates the owner in Authentik and issues the enrolment
-# link (issue #165, via lib/authentik-owner.sh). The admin API is deliberately NOT on the public
+# link (via lib/authentik-owner.sh). The admin API is deliberately NOT on the public
 # Ingress, so the calls go through a loopback `kubectl port-forward` to the Authentik Service; the
 # link Authentik returns names that loopback address, so the lib rewrites it onto the public
-# `https://<hostname>/auth` authority (OD-2). Nothing is created on any failure (AC-BI-016).
+# `https://<hostname>/auth` authority. A failure leaves no half-created owner.
 provision_authentik_owner() {
   local hostname="$1" kube_namespace
   kube_namespace="$(current_kube_namespace)"
@@ -1395,9 +1402,8 @@ provision_authentik_owner() {
   stop_authentik_port_forward
 }
 
-# print_provisioning_summary: evaluator-visible closing message (S18) -- names which secrets now
-# exist (never their values, AC-BI-013's summary-line half -- only the fixed secret NAMES S9
-# already wrote, never read back), whether anything actually changed anywhere in the whole chain,
+# print_provisioning_summary: evaluator-visible closing message -- names which secrets now
+# exist (never their values -- only the fixed secret NAMES already written, never read back), whether anything actually changed anywhere in the whole chain,
 # and the resulting HTTPS URL. Reads $made_changes/$public_hostname directly (both already
 # process-wide state by this point, top-of-file note) rather than taking parameters, matching
 # scripts/deploy-llm.sh's own print_provisioning_summary's no-argument shape. Also surfaces
@@ -1419,8 +1425,8 @@ print_provisioning_summary() {
 }
 
 # require_account_exists <account_name>: fails clearly if the AIServices account has not been
-# provisioned yet -- --rotate-key has nothing to rotate otherwise (PLAN.md §0.6). Ported from
-# scripts/deploy-llm.sh's own require_account_exists, message adapted to name this script's own
+# provisioned yet -- --rotate-key has nothing to rotate otherwise. Same check as
+# scripts/deploy-llm.sh's require_account_exists, with a message that names this script's own
 # flag.
 require_account_exists() {
   local account_name="$1"
@@ -1448,7 +1454,7 @@ require_keyvault_exists() {
 # persisted AZURE-API-KEY secret) equals the account's current key2 value, "key1" otherwise --
 # including when neither key matches (a from-scratch rotation), matching this script's own
 # initial secret write in ensure_account/the write_secret_if_changed call in main(), which always
-# writes key1's value first. Ported verbatim from scripts/deploy-llm.sh's own active_key_slot.
+# writes key1's value first. Same logic as scripts/deploy-llm.sh's active_key_slot.
 active_key_slot() {
   local stored_value="$1" key2_value="$2"
   if [[ "$stored_value" == "$key2_value" ]]; then
@@ -1458,8 +1464,8 @@ active_key_slot() {
   fi
 }
 
-# inactive_key_slot <slot>: prints the other slot name. Ported verbatim from
-# scripts/deploy-llm.sh's own inactive_key_slot.
+# inactive_key_slot <slot>: prints the other slot name. Same logic as
+# scripts/deploy-llm.sh's inactive_key_slot.
 inactive_key_slot() {
   local slot="$1"
   if [[ "$slot" == "key1" ]]; then
@@ -1469,12 +1475,11 @@ inactive_key_slot() {
   fi
 }
 
-# rotate_key_main: `--rotate-key` mode, carried over from scripts/deploy-llm.sh's own proven
-# implementation (main() branches into this immediately after flag parsing, before any of
-# S5-S18's provisioning body runs). Reads the stored AZURE-API-KEY secret, compares it against the
+# rotate_key_main: `--rotate-key` mode, the same flow as scripts/deploy-llm.sh's (main()
+# branches into this immediately after flag parsing, before any provisioning step runs). Reads the stored AZURE-API-KEY secret, compares it against the
 # account's live key1/key2 to find the active slot, and regenerates the inactive one. Never prints
 # an old or new key value -- new_value/stored_value/key2_value only ever feed the next
-# `az`/comparison, matching read_secret_value's own never-log discipline (AC-BI-013).
+# `az`/comparison, matching read_secret_value's own never-log discipline.
 rotate_key_main() {
   local subscription_id account_name vault_name
   subscription_id="$(fetch_subscription_id)"
@@ -1507,8 +1512,25 @@ rotate_key_main() {
     "$inactive_slot" "$active_slot"
 }
 
+# reset_owner_passkey_main: the --reset-owner-passkey mode against the current kube context. No
+# Azure call and no config file: it needs only cluster access. Changes only the owner's passkeys
+# and what authenticates as the owner, then prints one fresh enrolment link.
+reset_owner_passkey_main() {
+  owner_reset_require_tools || exit "$EXIT_FAILURE"
+  SKIP_OWNER_PROMPT="$skip_confirmation"
+  trap stop_authentik_port_forward EXIT
+  run_owner_passkey_reset prod "$(current_kube_namespace)" "$HELM_RELEASE_NAME" \
+    "$AUTHENTIK_API_TOKEN_SECRET_NAME" "$AUTHENTIK_SERVICE_NAME" "$PS_SERVICE_NAME" \
+    || exit "$EXIT_FAILURE"
+}
+
 main() {
   parse_args "$@"
+
+  if [[ "$reset_owner_passkey" == true ]]; then
+    reset_owner_passkey_main
+    return
+  fi
 
   check_required_tools az jq
 
@@ -1637,7 +1659,7 @@ main() {
     "$OWNER_EMAIL" "$issuer" "$AUTHENTIK_IN_CLUSTER_BASE_URL" "https://${public_hostname}/auth" \
     "https://${public_hostname}"
 
-  # Issue #165: the owner (an Authentik admin, username == email, no password) and the
+  # The owner (an Authentik admin, username == email, no password) and the
   # single-use passkey-enrolment link. The port-forward is killed however the script ends.
   trap stop_authentik_port_forward EXIT
   log_step "Waiting for Authentik to become Ready"

@@ -27,6 +27,9 @@ _BASH_TIMEOUT_SECONDS = 60
 FAKE_KUBECTL = r"""#!/usr/bin/env bash
 # Recording fake kubectl: logs argv; `get secret` answers with $PS_TEST_SECRET_B64.
 printf '%s\n' "$*" >> "$PS_TEST_KUBECTL_LOG"
+if [[ "$*" == *" exec "*"ps_service.passkey_signing.revoke"* ]]; then
+  exec "$PS_TEST_SIGNING_FAKE" "$@"
+fi
 if [[ "$*" == *"get secret"* ]]; then
   if [[ -n "${PS_TEST_SECRET_MISSING:-}" ]]; then
     echo 'Error from server (NotFound): secrets not found' >&2
@@ -105,6 +108,24 @@ class LibHarness:
         users: dict[str, Any] = json.loads(self.curl_state.read_text()).get("users", {})
         return users
 
+    @property
+    def signing_state_path(self) -> Path:
+        return self.root / "signing-state.json"
+
+    def seed_signing(self, **state: Any) -> None:  # noqa: ANN401 - JSON-shaped state values
+        """Merge `state` into the state of the fake signing revoke command (`ps_signing_revoke`)."""
+        current: dict[str, Any] = {}
+        if self.signing_state_path.exists():
+            current = json.loads(self.signing_state_path.read_text())
+        current.update(state)
+        self.signing_state_path.write_text(json.dumps(current))
+
+    def signing_state(self) -> dict[str, Any]:
+        if not self.signing_state_path.exists():
+            return {}
+        state: dict[str, Any] = json.loads(self.signing_state_path.read_text())
+        return state
+
     def kubectl_calls(self) -> list[str]:
         if not self.kubectl_log.exists():
             return []
@@ -136,6 +157,8 @@ class LibHarness:
             "PS_TEST_KUBECTL_APPLIED": str(self.root / "kubectl-applied.yaml"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
             "PS_EVAL_STATE_DIR": str(self.root / "state"),
+            "PS_TEST_SIGNING_FAKE": str(self.bin_dir / "ps-signing-revoke"),
+            "PS_TEST_SIGNING_STATE": str(self.signing_state_path),
             **self.env_extra,
             **env,
         }
@@ -164,6 +187,7 @@ def lib_harness(tmp_path: Path) -> LibHarness:
     (tmp_path / "home").mkdir()
     _install_python_fake(FAKES_DIR / "curl", harness.bin_dir / "curl")
     _install_python_fake(FAKES_DIR / "podman", harness.bin_dir / "podman")
+    _install_python_fake(FAKES_DIR / "ps_signing_revoke", harness.bin_dir / "ps-signing-revoke")
     kubectl = harness.bin_dir / "kubectl"
     kubectl.write_text(FAKE_KUBECTL, encoding="utf-8")
     kubectl.chmod(0o755)

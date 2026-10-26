@@ -44,3 +44,12 @@ class SigningCredentialPersistenceError(Exception):
     an insert unexpectedly returns no row. The driver error is chained as `__cause__`. The
     caller cannot recover the operation; it may be retried once Postgres is healthy.
     """
+
+
+class SigningRevocationPersistenceError(Exception):
+    """Revoking or counting an actor's signing passkeys failed in the passkey-signing Postgres.
+
+    Raised by `PsycopgSigningRevocationStore` when the connection cannot be opened, a statement
+    fails or the COMMIT fails. The driver error is chained as `__cause__`. The transaction is
+    rolled back, so no credential was deleted; the caller may retry once Postgres is healthy.
+    """

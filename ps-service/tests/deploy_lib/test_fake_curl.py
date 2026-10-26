@@ -309,3 +309,221 @@ def test_blueprint_list_filters_by_name_like_the_live_api(curl: FakeCurl) -> Non
     _, _, listing = curl.call(f"{API}/managed/blueprints/?name=nonexistent")
 
     assert listing["results"] == []
+
+
+@pytest.mark.parametrize("query", ["?user=5", "?user__username=owner%40example.com"])
+def test_per_type_device_lists_ignore_the_user_filter(curl: FakeCurl, query: str) -> None:
+    curl.seed(
+        users={
+            "5": {"pk": 5, "username": "owner@example.com"},
+            "6": {"pk": 6, "username": "other@example.com"},
+        },
+        devices={
+            "5": [{"pk": "1", "type": "authentik_stages_authenticator_totp.totpdevice"}],
+            "6": [{"pk": "2", "type": "authentik_stages_authenticator_totp.totpdevice"}],
+        },
+    )
+
+    _, status, body = curl.call(f"{API}/authenticators/admin/totp/{query}")
+    _, all_status, owned = curl.call(f"{API}/authenticators/admin/all/?user=5")
+
+    assert status == 200
+    assert sorted(row["user"]["pk"] for row in body["results"]) == [5, 6]
+    assert all_status == 200
+    assert [(row["pk"], row["meta_model_name"]) for row in owned] == [
+        ("1", "authentik_stages_authenticator_totp.totpdevice")
+    ]
+
+
+TWO_USERS = {
+    "5": {"pk": 5, "username": "owner@example.com"},
+    "6": {"pk": 6, "username": "other@example.com"},
+}
+OWNER_FILTER = "user__username=owner%40example.com"
+
+
+def test_sessions_list_ignores_user_pk_and_filters_by_username(curl: FakeCurl) -> None:
+    curl.seed(users=TWO_USERS, sessions={"s-1": {"user": 5}, "s-2": {"user": 6}})
+
+    _, _, by_pk = curl.call(f"{API}/core/authenticated_sessions/?user=5")
+    _, _, by_name = curl.call(f"{API}/core/authenticated_sessions/?{OWNER_FILTER}")
+
+    assert sorted(row["user"] for row in by_pk["results"]) == [5, 6]
+    assert [(row["uuid"], row["user"]) for row in by_name["results"]] == [("s-1", 5)]
+    recorded = json.loads((FIXTURES_DIR / "sessions_list_owner.json").read_text())
+    assert set(by_name["results"][0]) == set(recorded["results"][0])
+
+
+def test_session_delete_is_204_then_the_recorded_404(curl: FakeCurl) -> None:
+    curl.seed(users=TWO_USERS, sessions={"s-1": {"user": 5}})
+
+    first = curl.call("-X", "DELETE", f"{API}/core/authenticated_sessions/s-1/")
+    again = curl.call("-X", "DELETE", f"{API}/core/authenticated_sessions/s-1/")
+
+    assert first[1] == 204
+    assert again[1:] == (404, {"detail": "No AuthenticatedSession matches the given query."})
+
+
+def test_sessions_bulk_delete_scopes_by_user_pks(curl: FakeCurl) -> None:
+    curl.seed(users=TWO_USERS, sessions={"s-1": {"user": 5}, "s-2": {"user": 6}})
+
+    missing = curl.call("-X", "DELETE", f"{API}/core/authenticated_sessions/bulk_delete/")
+    deleted = curl.call(
+        "-X", "DELETE", f"{API}/core/authenticated_sessions/bulk_delete/?user_pks=5"
+    )
+
+    assert missing[1:] == (400, {"user_pks": ["This field is required."]})
+    assert deleted[1:] == (200, {"deleted": 1})
+    _, _, left = curl.call(f"{API}/core/authenticated_sessions/")
+    assert [row["uuid"] for row in left["results"]] == ["s-2"]
+
+
+@pytest.mark.parametrize("kind", ["access_tokens", "refresh_tokens"])
+def test_oauth_lists_ignore_username_and_reject_an_unknown_pk(curl: FakeCurl, kind: str) -> None:
+    curl.seed(users=TWO_USERS, **{kind: {"1": {"user": 5}, "2": {"user": 6}}})
+
+    _, _, by_name = curl.call(f"{API}/oauth2/{kind}/?{OWNER_FILTER}")
+    _, _, by_pk = curl.call(f"{API}/oauth2/{kind}/?user=5")
+    _, unknown_status, unknown = curl.call(f"{API}/oauth2/{kind}/?user=999")
+
+    assert sorted(row["user"]["pk"] for row in by_name["results"]) == [5, 6]
+    assert [(row["pk"], row["user"]["pk"]) for row in by_pk["results"]] == [(1, 5)]
+    assert by_pk["results"][0]["user"]["username"] == "owner@example.com"
+    recorded = json.loads(
+        (FIXTURES_DIR / "oauth2_access_tokens_list_unknown_user_400.json").read_text()
+    )
+    assert (unknown_status, unknown) == (400, recorded)
+
+
+@pytest.mark.parametrize(
+    ("kind", "model"), [("access_tokens", "AccessToken"), ("refresh_tokens", "RefreshToken")]
+)
+def test_oauth_token_delete_is_204_then_404(curl: FakeCurl, kind: str, model: str) -> None:
+    curl.seed(users=TWO_USERS, **{kind: {"1": {"user": 5}}})
+
+    first = curl.call("-X", "DELETE", f"{API}/oauth2/{kind}/1/")
+    again = curl.call("-X", "DELETE", f"{API}/oauth2/{kind}/1/")
+
+    assert first[1] == 204
+    assert again[1:] == (404, {"detail": f"No {model} matches the given query."})
+
+
+def test_core_tokens_list_ignores_user_pk_and_filters_by_username(curl: FakeCurl) -> None:
+    curl.seed(
+        users=TWO_USERS,
+        core_tokens={
+            "owner-api": {"user": 5, "intent": "api"},
+            "other-api": {"user": 6, "intent": "api"},
+        },
+    )
+
+    _, _, by_pk = curl.call(f"{API}/core/tokens/?user=5")
+    _, _, by_name = curl.call(f"{API}/core/tokens/?{OWNER_FILTER}")
+
+    assert sorted(row["user"] for row in by_pk["results"]) == [5, 6]
+    assert [(row["identifier"], row["intent"]) for row in by_name["results"]] == [
+        ("owner-api", "api")
+    ]
+    assert curl.call("-X", "DELETE", f"{API}/core/tokens/owner-api/")[1] == 204
+    assert curl.call("-X", "DELETE", f"{API}/core/tokens/owner-api/")[1] == 404
+
+
+def test_a_recovery_link_is_stored_as_a_recovery_core_token(curl: FakeCurl) -> None:
+    user = _create_owner(curl)
+
+    curl.call("-X", "POST", f"{API}/core/users/{user['pk']}/recovery/")
+
+    _, _, tokens = curl.call(f"{API}/core/tokens/?{OWNER_FILTER}")
+    assert [row["intent"] for row in tokens["results"]] == ["recovery"]
+
+
+def test_paginated_lists_walk_by_next_page_number_and_404_past_the_end(curl: FakeCurl) -> None:
+    curl.seed(users=TWO_USERS, sessions={f"s-{i:03}": {"user": 5} for i in range(150)})
+
+    _, _, first = curl.call(f"{API}/core/authenticated_sessions/?{OWNER_FILTER}&page_size=100")
+    _, _, second = curl.call(
+        f"{API}/core/authenticated_sessions/?{OWNER_FILTER}&page_size=100&page=2"
+    )
+    _, _, capped = curl.call(f"{API}/core/authenticated_sessions/?page_size=500")
+    _, _, default = curl.call(f"{API}/core/authenticated_sessions/")
+    _, past_status, past = curl.call(f"{API}/core/authenticated_sessions/?page=3&page_size=100")
+
+    assert (first["pagination"]["next"], first["pagination"]["current"]) == (2, 1)
+    assert len(first["results"]) == 100
+    assert (second["pagination"]["next"], second["pagination"]["total_pages"]) == (0, 2)
+    assert len(second["results"]) == 50
+    assert len(capped["results"]) == 100
+    assert len(default["results"]) == 20
+    assert (past_status, past) == (404, {"detail": "Invalid page."})
+
+
+@pytest.mark.parametrize(
+    ("listing", "url"),
+    [
+        ("sessions", f"{API}/core/authenticated_sessions/?{OWNER_FILTER}"),
+        ("oauth", f"{API}/oauth2/refresh_tokens/?user=5"),
+        ("core_tokens", f"{API}/core/tokens/?{OWNER_FILTER}"),
+    ],
+)
+def test_ignore_user_filters_makes_a_listing_return_every_user(
+    curl: FakeCurl, listing: str, url: str
+) -> None:
+    rows = {"1": {"user": 5, "intent": "api"}, "2": {"user": 6, "intent": "api"}}
+    curl.seed(
+        users=TWO_USERS,
+        sessions=rows,
+        refresh_tokens=rows,
+        core_tokens=rows,
+        ignore_user_filters=[listing],
+    )
+
+    _, _, body = curl.call(url)
+
+    owners = [
+        row["user"]["pk"] if isinstance(row["user"], dict) else row["user"]
+        for row in body["results"]
+    ]
+    assert sorted(owners) == [5, 6]
+
+
+def test_a_stuck_next_page_repeats_on_every_page(curl: FakeCurl) -> None:
+    curl.seed(users=TWO_USERS, sessions={"s-1": {"user": 5}}, stuck_next_page=1)
+
+    _, _, body = curl.call(f"{API}/core/authenticated_sessions/?{OWNER_FILTER}")
+
+    assert body["pagination"]["next"] == 1
+
+
+def test_on_request_adds_rows_once_after_the_matching_request_succeeds(curl: FakeCurl) -> None:
+    curl.seed(
+        users=TWO_USERS,
+        devices={"5": [{"pk": "1", "name": "old"}]},
+        sessions={"s-1": {"user": 5}},
+        on_request={
+            "DELETE /authenticators/admin/webauthn/": {
+                "devices": {"5": [{"pk": "9", "name": "added"}]},
+                "sessions": {"s-2": {"user": 5}},
+            }
+        },
+    )
+
+    curl.call("-X", "DELETE", f"{API}/authenticators/admin/webauthn/1/")
+    curl.call("-X", "DELETE", f"{API}/authenticators/admin/webauthn/7/")
+
+    state = json.loads(curl.state_path.read_text())
+    assert [d["pk"] for d in state["devices"]["5"]] == ["9"]
+    assert sorted(state["sessions"]) == ["s-1", "s-2"]
+    assert "on_request" not in state or state["on_request"] == {}
+
+
+def test_on_request_does_not_fire_on_a_failed_request(curl: FakeCurl) -> None:
+    curl.seed(
+        users=TWO_USERS,
+        sessions={},
+        fail_on={"DELETE /core/authenticated_sessions/": 500},
+        on_request={"DELETE /core/authenticated_sessions/": {"sessions": {"s-9": {"user": 5}}}},
+    )
+
+    curl.call("-X", "DELETE", f"{API}/core/authenticated_sessions/s-1/")
+
+    assert json.loads(curl.state_path.read_text())["sessions"] == {}

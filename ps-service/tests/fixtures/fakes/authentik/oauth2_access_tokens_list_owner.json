@@ -1,0 +1,116 @@
+{
+  "pagination": {
+    "next": 0,
+    "previous": 0,
+    "count": 2,
+    "current": 1,
+    "total_pages": 1,
+    "start_index": 1,
+    "end_index": 2
+  },
+  "results": [
+    {
+      "pk": 1,
+      "provider": {
+        "pk": 1,
+        "name": "example-provider",
+        "authentication_flow": null,
+        "authorization_flow": "7060a9f2-df73-4f9b-a923-a11a182579f4",
+        "invalidation_flow": "b5981d31-9891-4aea-bfa4-94f18278935d",
+        "property_mappings": [
+          "68ab059f-293e-4143-bd64-1228bbdb1bbf",
+          "29ec24eb-1965-460d-9ddb-c90cb29f8996",
+          "c564c9e7-33bc-45d5-aa52-f93eeaa7db40",
+          "4028037e-164a-4c53-b850-abcdb15a6940"
+        ],
+        "component": "ak-provider-oauth2-form",
+        "assigned_application_slug": "example-app",
+        "assigned_application_name": "example-app",
+        "assigned_backchannel_application_slug": null,
+        "assigned_backchannel_application_name": null,
+        "verbose_name": "OAuth2/OpenID Provider",
+        "verbose_name_plural": "OAuth2/OpenID Providers",
+        "meta_model_name": "authentik_providers_oauth2.oauth2provider"
+      },
+      "user": {
+        "pk": 5,
+        "username": "owner@example.test",
+        "name": "owner@example.test",
+        "is_active": true,
+        "last_login": "2026-10-26T11:18:31.032616Z",
+        "date_joined": "2026-10-26T11:14:34.406407Z",
+        "is_superuser": false,
+        "groups": [],
+        "groups_obj": [],
+        "roles": [],
+        "roles_obj": [],
+        "email": "owner@example.test",
+        "avatar": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NHB4IiBoZWlnaHQ9IjY0cHgiIHZpZXdCb3g9IjAgMCA2NCA2NCIgdmVyc2lvbj0iMS4xIj48cmVjdCBmaWxsPSIjNWIzNzZjIiBjeD0iMzIiIGN5PSIzMiIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByPSIzMiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBzdHlsZT0iY29sb3I6ICNmZmY7IGxpbmUtaGVpZ2h0OiAxOyBmb250LWZhbWlseTogJ1JlZEhhdFRleHQnLCdPdmVycGFzcycsb3ZlcnBhc3MsaGVsdmV0aWNhLGFyaWFsLHNhbnMtc2VyaWY7ICIgZmlsbD0iI2ZmZiIgYWxpZ25tZW50LWJhc2VsaW5lPSJtaWRkbGUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjgiIGZvbnQtd2VpZ2h0PSI0MDAiIGR5PSIuMWVtIj5PVzwvdGV4dD48L3N2Zz4=",
+        "attributes": {},
+        "uid": "80d1f8a8db63cf994857e93c1d5eff82dbdd25d21fe007a98859cb980a65ab95",
+        "path": "users",
+        "type": "internal",
+        "uuid": "2e1d618b-9675-4e9a-be99-f6a1b1abb166",
+        "password_change_date": "2026-10-26T11:16:24.621577Z",
+        "last_updated": "2026-10-26T11:16:24.710671Z"
+      },
+      "is_expired": false,
+      "expires": "2026-10-26T12:18:31.593813Z",
+      "scope": ["email", "offline_access", "profile", "openid"],
+      "id_token": "<redacted: JSON-encoded id_token claims>",
+      "revoked": false
+    },
+    {
+      "pk": 2,
+      "provider": {
+        "pk": 1,
+        "name": "example-provider",
+        "authentication_flow": null,
+        "authorization_flow": "7060a9f2-df73-4f9b-a923-a11a182579f4",
+        "invalidation_flow": "b5981d31-9891-4aea-bfa4-94f18278935d",
+        "property_mappings": [
+          "68ab059f-293e-4143-bd64-1228bbdb1bbf",
+          "29ec24eb-1965-460d-9ddb-c90cb29f8996",
+          "c564c9e7-33bc-45d5-aa52-f93eeaa7db40",
+          "4028037e-164a-4c53-b850-abcdb15a6940"
+        ],
+        "component": "ak-provider-oauth2-form",
+        "assigned_application_slug": "example-app",
+        "assigned_application_name": "example-app",
+        "assigned_backchannel_application_slug": null,
+        "assigned_backchannel_application_name": null,
+        "verbose_name": "OAuth2/OpenID Provider",
+        "verbose_name_plural": "OAuth2/OpenID Providers",
+        "meta_model_name": "authentik_providers_oauth2.oauth2provider"
+      },
+      "user": {
+        "pk": 5,
+        "username": "owner@example.test",
+        "name": "owner@example.test",
+        "is_active": true,
+        "last_login": "2026-10-26T11:18:31.032616Z",
+        "date_joined": "2026-10-26T11:14:34.406407Z",
+        "is_superuser": false,
+        "groups": [],
+        "groups_obj": [],
+        "roles": [],
+        "roles_obj": [],
+        "email": "owner@example.test",
+        "avatar": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NHB4IiBoZWlnaHQ9IjY0cHgiIHZpZXdCb3g9IjAgMCA2NCA2NCIgdmVyc2lvbj0iMS4xIj48cmVjdCBmaWxsPSIjNWIzNzZjIiBjeD0iMzIiIGN5PSIzMiIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByPSIzMiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBzdHlsZT0iY29sb3I6ICNmZmY7IGxpbmUtaGVpZ2h0OiAxOyBmb250LWZhbWlseTogJ1JlZEhhdFRleHQnLCdPdmVycGFzcycsb3ZlcnBhc3MsaGVsdmV0aWNhLGFyaWFsLHNhbnMtc2VyaWY7ICIgZmlsbD0iI2ZmZiIgYWxpZ25tZW50LWJhc2VsaW5lPSJtaWRkbGUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjgiIGZvbnQtd2VpZ2h0PSI0MDAiIGR5PSIuMWVtIj5PVzwvdGV4dD48L3N2Zz4=",
+        "attributes": {},
+        "uid": "80d1f8a8db63cf994857e93c1d5eff82dbdd25d21fe007a98859cb980a65ab95",
+        "path": "users",
+        "type": "internal",
+        "uuid": "2e1d618b-9675-4e9a-be99-f6a1b1abb166",
+        "password_change_date": "2026-10-26T11:16:24.621577Z",
+        "last_updated": "2026-10-26T11:16:24.710671Z"
+      },
+      "is_expired": false,
+      "expires": "2026-10-26T12:18:31.707555Z",
+      "scope": ["email", "offline_access", "profile", "openid"],
+      "id_token": "<redacted: JSON-encoded id_token claims>",
+      "revoked": false
+    }
+  ],
+  "autocomplete": {}
+}

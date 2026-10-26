@@ -258,7 +258,7 @@ def test_guides_open_the_evaluator_admin_ui_through_a_port_forward_under_the_aut
 
     assert (
         "http://127.0.0.1:9000/auth/if/admin/" in text
-        or "http://localhost:9000/auth/if/flow/ps-login/?next=%2Fauth%2Fif%2Fadmin%2F" in text
+        or "http://localhost:9000/auth/if/admin/" in text
     )
     assert "https://ps.test:30443/auth/if/admin/" not in text
 

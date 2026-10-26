@@ -166,6 +166,8 @@ _COSE_CRV_P256 = 1
 
 _FLAG_USER_PRESENT = 0b0000_0001
 _FLAG_USER_VERIFIED = 0b0000_0100
+_FLAG_ATTESTED_DATA_INCLUDED = 0b0100_0000
+_AAGUID = b"\x00" * 16
 
 
 def _cose_ec2_public_key(public_key: ec.EllipticCurvePublicKey) -> bytes:
@@ -195,6 +197,41 @@ class _Authenticator:
     @property
     def cose_public_key(self) -> bytes:
         return _cose_ec2_public_key(self.private_key.public_key())
+
+    def registration_credential(
+        self, *, rp_id: str, origin: str, challenge: bytes
+    ) -> dict[str, object]:
+        """Build a real, verifiable "none"-attestation `RegistrationCredential` for this key.
+
+        Enrolling it stores this authenticator's own credential id and public key, so the same
+        authenticator can then sign with `build_assertion`.
+        """
+        rp_id_hash = hashlib.sha256(rp_id.encode("utf-8")).digest()
+        flags = bytes([_FLAG_USER_PRESENT | _FLAG_USER_VERIFIED | _FLAG_ATTESTED_DATA_INCLUDED])
+        attested_credential_data = (
+            _AAGUID
+            + len(self.credential_id).to_bytes(2, "big")
+            + self.credential_id
+            + self.cose_public_key
+        )
+        auth_data = rp_id_hash + flags + (0).to_bytes(4, "big") + attested_credential_data
+        attestation_object = cbor2.dumps({"fmt": "none", "attStmt": {}, "authData": auth_data})
+        client_data = json.dumps(
+            {
+                "type": "webauthn.create",
+                "challenge": bytes_to_base64url(challenge),
+                "origin": origin,
+            }
+        ).encode("utf-8")
+        return {
+            "id": bytes_to_base64url(self.credential_id),
+            "rawId": bytes_to_base64url(self.credential_id),
+            "type": "public-key",
+            "response": {
+                "clientDataJSON": bytes_to_base64url(client_data),
+                "attestationObject": bytes_to_base64url(attestation_object),
+            },
+        }
 
     def build_assertion(
         self, *, rp_id: str, origin: str, challenge: bytes, sign_count: int

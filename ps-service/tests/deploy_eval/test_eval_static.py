@@ -176,6 +176,22 @@ def test_the_eval_script_documents_the_exposure_flags_in_its_header() -> None:
     assert "--check-exposure" in header
 
 
+def _header_prose(path: Path) -> str:
+    header = path.read_text().split("set -euo pipefail", 1)[0]
+    return " ".join(line.lstrip("#").strip() for line in header.splitlines())
+
+
+def test_eval_header_documents_reset_and_no_longer_claims_a_rerun_recovers_a_lost_device() -> None:
+    header = _header_prose(EVAL)
+
+    assert "--reset-owner-passkey" in header
+    assert "Re-running is the owner-recovery path" not in header
+    assert (
+        "Re-running issues a fresh link to an owner with no passkey; a lost or stolen device is"
+        " recovered with --reset-owner-passkey." in header
+    )
+
+
 def test_the_eval_release_values_set_the_passkey_signing_allowed_origins() -> None:
     source = EVAL.read_text()
 

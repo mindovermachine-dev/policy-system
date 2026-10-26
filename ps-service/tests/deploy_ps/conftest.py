@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -670,6 +671,12 @@ case "${1:-} ${2:-}" in
         done
         [[ "$all_ready" == true ]]
         ;;
+      "exec deploy/"*)
+        # exec deploy/<ps-service> -c ps-service ... -- python -m <module> ... -- the signing
+        # revoke command in the PS Service pod; the fake command answers for it.
+        [[ " $* " == *" ps_service.passkey_signing.revoke "* ]] || exit 2
+        exec "$PS_TEST_SIGNING_FAKE" "$@"
+        ;;
       "exec deployment/"*)
         # exec deployment/<name> -- psql -U <user> -d <db> -c "ALTER USER ... PASSWORD '...';".
         # Generic fake for an in-database password change issued against an already-running
@@ -681,6 +688,23 @@ case "${1:-} ${2:-}" in
       "config view")
         # config view --minify --output jsonpath={..namespace} -- the fake context has no namespace.
         printf ''
+        ;;
+      "config current-context")
+        # PS_TEST_NO_KUBE_CONTEXT models a kubeconfig with no current context.
+        if [[ -n "${PS_TEST_NO_KUBE_CONTEXT:-}" ]]; then
+          echo 'error: current-context is not set' >&2
+          exit 1
+        fi
+        printf '%s\n' "${PS_TEST_KUBE_CONTEXT:-prod-aks}"
+        ;;
+      "get deployments")
+        # get deployments -o name --request-timeout=<t> -- the reachability probe;
+        # PS_TEST_CLUSTER_UNREACHABLE makes it fail like an unreachable API server.
+        if [[ -n "${PS_TEST_CLUSTER_UNREACHABLE:-}" ]]; then
+          echo 'Unable to connect to the server' >&2
+          exit 1
+        fi
+        printf 'deployment.apps/policy-system-ps-service\n'
         ;;
       "get secret")
         # get secret <name> -o jsonpath={.data.PS_AUTHENTIK_API_TOKEN} (read_bootstrap_token):
@@ -812,6 +836,26 @@ esac
 """
 
 
+# System tools the owner reset runs, wrapped by `DeployPsFixture.log_every_tool_argv`.
+ARGV_LOGGED_SYSTEM_TOOLS = (
+    "jq",
+    "base64",
+    "sed",
+    "grep",
+    "date",
+    "tr",
+    "cut",
+    "head",
+    "tail",
+    "awk",
+    "cat",
+    "mktemp",
+    "sleep",
+    "dirname",
+    "basename",
+)
+
+
 @dataclass(frozen=True)
 class ScriptRun:
     """Captured outcome of one script invocation."""
@@ -902,6 +946,9 @@ class DeployPsFixture:
             "PS_TEST_CURL_LOG": str(self.curl_log),
             "PS_TEST_CURL_FIXTURES": str(self.root / "authentik-fixtures"),
             "PS_TEST_AUTHENTIK_TOKEN_B64": base64.b64encode(FAKE_AUTHENTIK_TOKEN.encode()).decode(),
+            # The signing revoke command the reset runs in the PS Service pod.
+            "PS_TEST_SIGNING_FAKE": str(self.bin_dir / "ps-signing-revoke"),
+            "PS_TEST_SIGNING_STATE": str(self.signing_state_path),
         }
 
     def run_deploy(
@@ -1466,6 +1513,40 @@ class DeployPsFixture:
             else []
         )
 
+    @property
+    def argv_log(self) -> Path:
+        return self.root / "argv.log"
+
+    def log_every_tool_argv(self) -> dict[str, str]:
+        """Put the argv-logging shim in front of every fake in `bin/` and of the system tools
+        the owner reset runs; returns the `extra_env` that turns the log on for a run.
+
+        A run then appends every external command line to `argv_log`, so a test can prove a
+        secret reached no argv of any tool, the fakes included.
+        """
+        real_dir = self.root / "real-bin"
+        real_dir.mkdir(exist_ok=True)
+        shim = (REPO_ROOT / "ps-service" / "tests" / "fixtures" / "fakes" / "argv_shim").read_text(
+            encoding="utf-8"
+        )
+        targets: dict[str, Path] = {}
+        for tool in sorted(self.bin_dir.iterdir()):
+            real = real_dir / tool.name
+            tool.rename(real)
+            targets[tool.name] = real
+        for name in ARGV_LOGGED_SYSTEM_TOOLS:
+            found = shutil.which(name, path=os.pathsep.join(["/usr/bin", "/bin"]))
+            if found and name not in targets:
+                targets[name] = Path(found)
+        for name, real in targets.items():
+            target = self.bin_dir / name
+            target.write_text(shim.replace("@REAL@", shlex.quote(str(real))), encoding="utf-8")
+            target.chmod(0o755)
+        return {"PS_TEST_ARGV_LOG": str(self.argv_log)}
+
+    def logged_argv(self) -> str:
+        return self.argv_log.read_text(encoding="utf-8") if self.argv_log.exists() else ""
+
     def seed_curl(self, **state: object) -> None:
         """Merge <state> into the fake Authentik API's state file -- e.g.
         `unreachable=True`, `devices={pk: [...]}`, `token_reject_status=401`.
@@ -1475,6 +1556,24 @@ class DeployPsFixture:
             current = json.loads(self.curl_state.read_text(encoding="utf-8"))
         current.update(state)
         self.curl_state.write_text(json.dumps(current), encoding="utf-8")
+
+    @property
+    def signing_state_path(self) -> Path:
+        return self.root / "signing-state.json"
+
+    def seed_signing(self, **state: object) -> None:
+        """Merge `state` into the state of the fake signing revoke command (`ps_signing_revoke`)."""
+        current: dict[str, object] = {}
+        if self.signing_state_path.exists():
+            current = json.loads(self.signing_state_path.read_text(encoding="utf-8"))
+        current.update(state)
+        self.signing_state_path.write_text(json.dumps(current), encoding="utf-8")
+
+    def signing_state(self) -> dict[str, object]:
+        if not self.signing_state_path.exists():
+            return {}
+        state: dict[str, object] = json.loads(self.signing_state_path.read_text(encoding="utf-8"))
+        return state
 
     def read_curl_calls(self) -> list[dict[str, object]]:
         """Every call the fake Authentik-API `curl` recorded (argv and URL; never the token)."""
@@ -1608,6 +1707,11 @@ def deploy_ps_fixture(tmp_path: Path) -> DeployPsFixture:
     fake_curl = bin_dir / "curl"
     fake_curl.write_text("\n".join(curl_lines) + "\n", encoding="utf-8")
     fake_curl.chmod(0o755)
+    signing_lines = (fakes_dir / "ps_signing_revoke").read_text(encoding="utf-8").splitlines()
+    signing_lines[0] = f"#!{sys.executable}"
+    fake_signing = bin_dir / "ps-signing-revoke"
+    fake_signing.write_text("\n".join(signing_lines) + "\n", encoding="utf-8")
+    fake_signing.chmod(0o755)
     shutil.copytree(fakes_dir / "authentik", tmp_path / "authentik-fixtures")
     curl_state = tmp_path / "curl-state.json"
     curl_state.write_text(

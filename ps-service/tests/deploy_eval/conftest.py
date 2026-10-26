@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import pty
+import shlex
 import shutil
 import subprocess
 import sys
@@ -82,7 +83,14 @@ if [[ "${args[0]:-}" == "-n" ]]; then args=("${args[@]:2}"); fi
 line="${args[*]}"
 printf '%s\n' "$*" >> "$PS_TEST_KUBECTL_LOG"
 case "$line" in
-  "config current-context") printf '%s\n' "${PS_TEST_KUBE_CONTEXT:-kind-policy-system}" ;;
+  "config current-context")
+    [[ -z "${PS_TEST_NO_KUBE_CONTEXT:-}" ]] || { echo 'error: no current-context' >&2; exit 1; }
+    printf '%s\n' "${PS_TEST_KUBE_CONTEXT:-kind-policy-system}"
+    ;;
+  "get deployments -o name"*)
+    [[ -z "${PS_TEST_CLUSTER_UNREACHABLE:-}" ]] || { echo 'Unable to connect' >&2; exit 1; }
+    printf 'deployment.apps/policy-system-ps-service\n'
+    ;;
   "config view"*) printf '%s' "${PS_TEST_KUBE_NAMESPACE:-}" ;;
   "get secret policy-system-llm-credentials"*)
     [[ -z "${PS_TEST_LLM_SECRET_MISSING:-}" ]] || { echo 'NotFound' >&2; exit 1; }
@@ -112,6 +120,7 @@ case "$line" in
     [[ -n "${PS_TEST_INGRESS_NO_ENDPOINTS:-}" ]] || printf '10.244.0.7'
     ;;
   "rollout status"*) exit "${PS_TEST_ROLLOUT_EXIT:-0}" ;;
+  exec*ps_service.passkey_signing.revoke*) exec "$PS_TEST_SIGNING_FAKE" "${args[@]}" ;;
   exec*) [[ -z "${PS_TEST_EXEC_FAIL:-}" ]] || { echo 'urlopen error' >&2; exit 1; } ;;
   port-forward*)
     if [[ -n "${PS_TEST_PF_FAIL:-}" ]]; then echo 'error: unable to forward port' >&2; exit 1; fi
@@ -330,6 +339,32 @@ class EvalFixture:
     def remove_tool(self, name: str) -> None:
         (self.bin_dir / name).unlink()
 
+    @property
+    def argv_log(self) -> Path:
+        return self.root / "argv.log"
+
+    def log_every_tool_argv(self) -> None:
+        """Put the argv-logging shim in front of every tool on the script's PATH (`bin/`).
+
+        Each run then appends every external command line to `argv_log`, so a test can prove a
+        secret reached no argv of any tool, the fakes included.
+        """
+        real_dir = self.root / "real-bin"
+        real_dir.mkdir(exist_ok=True)
+        shim = (FAKES_DIR / "argv_shim").read_text(encoding="utf-8")
+        for tool in sorted(self.bin_dir.iterdir()):
+            if tool.is_symlink():
+                real = tool.resolve()
+                tool.unlink()
+            else:
+                real = real_dir / tool.name
+                tool.rename(real)
+            _install_text_fake(shim.replace("@REAL@", shlex.quote(str(real))), tool)
+        self.env_extra["PS_TEST_ARGV_LOG"] = str(self.argv_log)
+
+    def logged_argv(self) -> str:
+        return self.argv_log.read_text(encoding="utf-8") if self.argv_log.exists() else ""
+
     def add_container_engine(self, name: str) -> None:
         _install_python_fake(FAKES_DIR / "podman", self.bin_dir / name)
 
@@ -414,6 +449,10 @@ class EvalFixture:
         users: dict[str, Any] = json.loads(self.curl_state.read_text()).get("users", {})
         return users
 
+    def curl_devices(self) -> dict[str, Any]:
+        devices: dict[str, Any] = json.loads(self.curl_state.read_text()).get("devices", {})
+        return devices
+
     def kubectl_calls(self) -> list[str]:
         return self.kubectl_log.read_text().splitlines() if self.kubectl_log.exists() else []
 
@@ -422,6 +461,29 @@ class EvalFixture:
 
     def helm_upgrades(self) -> list[str]:
         return [c for c in self.helm_calls() if c.startswith("upgrade")]
+
+    def seed_release(self, values: dict[str, Any]) -> None:
+        """Make the fake helm report an installed release whose `get values` is `values`."""
+        self.helm_state.mkdir(parents=True, exist_ok=True)
+        (self.helm_state / "values.json").write_text(json.dumps(values), encoding="utf-8")
+
+    @property
+    def signing_state_path(self) -> Path:
+        return self.root / "signing-state.json"
+
+    def seed_signing(self, **state: Any) -> None:  # noqa: ANN401 - JSON-shaped state values
+        """Merge `state` into the state of the fake signing revoke command (`ps_signing_revoke`)."""
+        current: dict[str, Any] = {}
+        if self.signing_state_path.exists():
+            current = json.loads(self.signing_state_path.read_text())
+        current.update(state)
+        self.signing_state_path.write_text(json.dumps(current))
+
+    def signing_state(self) -> dict[str, Any]:
+        if not self.signing_state_path.exists():
+            return {}
+        state: dict[str, Any] = json.loads(self.signing_state_path.read_text())
+        return state
 
     def deployed_values(self) -> dict[str, Any]:
         values: dict[str, Any] = json.loads((self.helm_state / "values.json").read_text())
@@ -461,6 +523,8 @@ class EvalFixture:
             "PS_FEDORA_CA_ANCHOR": str(self.fedora_anchor),
             "PS_TEST_OPENSSL_LOG": str(self.root / "openssl.log"),
             "PS_TEST_SECRET_B64": base64.b64encode(TOKEN.encode()).decode(),
+            "PS_TEST_SIGNING_FAKE": str(self.bin_dir / "ps-signing-revoke"),
+            "PS_TEST_SIGNING_STATE": str(self.signing_state_path),
             "PS_INGRESS_PROBE_ATTEMPTS": "1",
             "PS_TLS_REFRESH_ATTEMPTS": "5",
             "PS_TLS_REFRESH_INTERVAL_SECONDS": "0.05",
@@ -506,6 +570,7 @@ def eval_fixture(tmp_path: Path) -> EvalFixture:
         if found:
             (fixture.bin_dir / tool).symlink_to(found)
     _install_python_fake(FAKES_DIR / "curl", fixture.bin_dir / "curl")
+    _install_python_fake(FAKES_DIR / "ps_signing_revoke", fixture.bin_dir / "ps-signing-revoke")
     _install_text_fake(FAKE_KUBECTL, fixture.bin_dir / "kubectl")
     _install_text_fake(FAKE_HELM, fixture.bin_dir / "helm")
     _install_text_fake(FAKE_OPENSSL, fixture.bin_dir / "openssl")

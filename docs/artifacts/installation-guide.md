@@ -260,7 +260,7 @@ depends on the owner's state:
 | --- | --- |
 | No passkey registered (link expired or unused) | The script gives a fresh link. |
 | A passkey is registered | The script changes nothing and gives no link. |
-| A passkey is registered, but the only device is lost | Remove the device on the owner's user page in the Authentik admin UI. Reach it [by port-forward](#what-is-exposed-production). Then run the script again. |
+| A passkey is registered, but the only device is lost or stolen | Run `scripts/deploy-ps-prod.sh --reset-owner-passkey --owner-email <email>` with `kubectl` access. It removes the lost device's sign-in and signing passkeys and prints a new link; the signing passkey is re-enrolled at the next approval. See [Operations Guide: Resetting the owner's passkeys](./operations-guide.md#resetting-the-owners-passkeys-after-a-lost-or-stolen-device). |
 
 ### 6. Invite users
 

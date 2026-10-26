@@ -52,6 +52,13 @@ Conventions (the audit trail's row-shape contract):
   by authentication, hence `proof='approval_code'` in the details), resource type
   `pending_approval`. A rejected ceremony step writes no row and a signed action writes no
   `passkey.sign` row: the action's own effect row records the signing.
+- `passkey.revoke`. The owner passkey reset clears one principal's signing passkeys and voids
+  their pending approvals. A fail-closed `applied` row is written inside the `ps_signing`
+  transaction before its COMMIT, with the system actor `system:owner-passkey-reset`, resource
+  type `principal` and the principal's subject as `resource_id`; if the row cannot be written
+  nothing changes. If the COMMIT then fails, a best-effort `failed` row with `reason_code`
+  follows. Only when that row also cannot be written does an `applied` row stand without its
+  effect; a re-run completes the reset.
 - `query.cypher`. One best-effort row per `run-cypher` tool call, written by the tool and never by
   the query engine or another in-process caller: outcome `applied`, `rejected` (a write clause) or
   `failed`, details limited to the row count, the truncation flag and an enumerated `reason_code`,

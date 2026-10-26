@@ -1,0 +1,8 @@
+#!/bin/sh
+# Argv-logging shim for the deploy-script harnesses: installed as bin/<tool> in front of the real
+# tool (or fake), it appends "<tool> <args>" to $PS_TEST_ARGV_LOG and then runs the real one with
+# the same arguments, stdin and process id. A test scans the log to prove a secret never reached
+# any command line. The tool name comes from $0 by parameter expansion, because an external
+# `basename` would itself be a shim.
+printf '%s %s\n' "${0##*/}" "$*" >> "$PS_TEST_ARGV_LOG"
+exec @REAL@ "$@"

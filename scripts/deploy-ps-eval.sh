@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploys the evaluator profile of Policy System onto the local kind cluster and creates the
-# first user (issue #165): the bundled Authentik served over locally trusted TLS (passkeys need a
+# first user: the bundled Authentik served over locally trusted TLS (passkeys need a
 # secure context), the owner created as an Authentik admin, and a single-use passkey-enrolment
 # link printed. No password is ever set, prompted for, or logged.
 #
@@ -8,6 +8,7 @@
 #   scripts/deploy-ps-eval.sh [--owner-email <address>] [--hostname <name>] [--lan-address <ip>]
 #                             [--apply-host-setup] [--allow-public-host] [--yes]
 #   scripts/deploy-ps-eval.sh --check-exposure [--allow-public-host]
+#   scripts/deploy-ps-eval.sh --reset-owner-passkey [--owner-email <address>] [--yes]
 #
 #   --owner-email  The first SystemOwner. Prompted for when omitted. The address is both the
 #                  Authentik username and the OIDC `sub` PS Service expects, so the deploy sets
@@ -41,6 +42,12 @@
 #   --check-exposure
 #                  Run only that address check and exit (0 passed, 1 failed), with no cluster
 #                  or tool requirement. Run it before `kind create cluster`.
+#   --reset-owner-passkey
+#                  Lost or stolen device: deletes every Authentik device, session, OAuth and
+#                  app-password/API token of the owner, clears the owner's signing passkeys and
+#                  voids their pending approvals in PS Service, then prints one fresh single-use
+#                  enrolment link. Changes nothing else. Works on the installed release; takes
+#                  only --owner-email and --yes, and --yes needs --owner-email.
 #   --yes          Non-interactive: never prompt (an owner email is then required).
 #
 # Environment: PS_CHART_REF (chart path or OCI ref; default the published OCI chart),
@@ -48,9 +55,10 @@
 # PS_OWNER_LINK_TTL (minutes the enrolment link stays valid; default 30), PS_ROLLOUT_TIMEOUT,
 # PS_HOSTS_FILE (hosts file checked and edited; default /etc/hosts).
 #
-# Re-running is the owner-recovery path (gated by cluster access): an owner with no passkey gets a
-# fresh link, an owner with one is left untouched. Certificate verification is never disabled:
-# every call to Authentik trusts the local CA explicitly.
+# Re-running issues a fresh link to an owner with no passkey; a lost or stolen device is recovered
+# with --reset-owner-passkey. Both need cluster access. A re-run leaves an owner who has a passkey
+# untouched. Certificate verification is never disabled: every call to Authentik trusts the local
+# CA explicitly.
 #
 # Exit codes: 2 usage error, 1 validation/preflight/business failure, 0 success.
 # shellcheck source-path=SCRIPTDIR
@@ -83,7 +91,7 @@ source "${SCRIPT_DIR}/lib/chart-version.sh"
 
 readonly EXIT_USAGE=2
 readonly EXIT_FAILURE=1
-USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--lan-address <ip>] [--apply-host-setup] [--allow-public-host] [--yes] | --check-exposure [--allow-public-host]"
+USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--lan-address <ip>] [--apply-host-setup] [--allow-public-host] [--yes] | --check-exposure [--allow-public-host] | --reset-owner-passkey [--owner-email <address>] [--yes]"
 readonly USAGE
 
 readonly HELM_RELEASE_NAME="policy-system"
@@ -150,25 +158,39 @@ old_ca_still_trusted=false
 OWNER_IGNORE_EXISTING_DEVICES=false
 installed_host=""
 installed_issuer=""
+reset_owner_passkey=false
+# The deploy-only flags given on the command line; --reset-owner-passkey accepts none of them.
+deploy_only_flags=()
 
 # parse_args <args...>: sets OWNER_EMAIL/hostname_arg/SKIP_OWNER_PROMPT from the flags.
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --yes) SKIP_OWNER_PROMPT=true ;;
-      --apply-host-setup) apply_host_setup=true ;;
-      --allow-public-host) allow_public_host=true ;;
-      --check-exposure) check_exposure_only=true ;;
+      --reset-owner-passkey) reset_owner_passkey=true ;;
+      --apply-host-setup)
+        apply_host_setup=true
+        deploy_only_flags+=("$1")
+        ;;
+      --allow-public-host)
+        allow_public_host=true
+        deploy_only_flags+=("$1")
+        ;;
+      --check-exposure)
+        check_exposure_only=true
+        deploy_only_flags+=("$1")
+        ;;
       --owner-email | --hostname | --lan-address)
         if [[ $# -lt 2 || -z "$2" ]]; then
           print_error '%s needs a value\n%s\n' "$1" "$USAGE"
           exit "$EXIT_USAGE"
         fi
         set_value_flag "$1" "$2"
+        [[ "$1" == --owner-email ]] || deploy_only_flags+=("$1")
         shift
         ;;
       -h | --help)
-        printf '%s\n' "$USAGE"
+        printf '%s\n\n%s\n' "$USAGE" "$OWNER_PASSKEY_RESET_HELP"
         exit 0
         ;;
       *)
@@ -178,9 +200,24 @@ parse_args() {
     esac
     shift
   done
+  reject_reset_flag_combinations
   reject_local_suffix_hostname
   local_tls_validate_hostname "$hostname_arg" || exit "$EXIT_USAGE"
   [[ -z "$lan_address" ]] || validate_lan_address_flag "$lan_address"
+}
+
+# reject_reset_flag_combinations: --reset-owner-passkey takes only --owner-email and --yes, and
+# --yes needs the email because nothing is prompted for.
+reject_reset_flag_combinations() {
+  [[ "$reset_owner_passkey" == true ]] || return 0
+  if [[ ${#deploy_only_flags[@]} -gt 0 ]]; then
+    print_error '%s cannot be combined with %s\n%s\n' --reset-owner-passkey "${deploy_only_flags[0]}" "$USAGE"
+    exit "$EXIT_USAGE"
+  fi
+  if [[ "$SKIP_OWNER_PROMPT" == true && -z "$OWNER_EMAIL" ]]; then
+    print_error '%s --yes needs --owner-email <address>\n%s\n' --reset-owner-passkey "$USAGE"
+    exit "$EXIT_USAGE"
+  fi
 }
 
 # set_value_flag <flag> <value>: stores the value of --owner-email, --hostname or --lan-address.
@@ -1022,8 +1059,25 @@ print_closing_summary() {
   print_owner_link_message
 }
 
+# reset_owner_passkey_main: the --reset-owner-passkey mode on the kind cluster of the current
+# context. Changes only the owner's passkeys and what authenticates as the owner, then prints one
+# fresh enrolment link.
+reset_owner_passkey_main() {
+  owner_reset_require_tools || exit "$EXIT_FAILURE"
+  owner_reset_kube_context || exit "$EXIT_FAILURE"
+  require_kind_context
+  trap stop_authentik_port_forward EXIT
+  run_owner_passkey_reset eval "$namespace" "$HELM_RELEASE_NAME" "$API_TOKEN_SECRET_NAME" \
+    "$AUTHENTIK_SERVER_SERVICE" "${HELM_RELEASE_NAME}-ps-service" || exit "$EXIT_FAILURE"
+}
+
 main() {
   parse_args "$@"
+
+  if [[ "$reset_owner_passkey" == true ]]; then
+    reset_owner_passkey_main
+    exit 0
+  fi
 
   check_host_exposure
   [[ "$check_exposure_only" == true ]] && exit 0

@@ -14,8 +14,26 @@ State keys (all optional, tests seed them):
   unreachable       true -> exit 7 (connection refused) for every call
   token_reject_status  HTTP status for a non-matching token (default 403, the recorded real value)
   recovery_flow     true -> recovery links work; false -> 400 "No recovery flow set."
+  token_user_pk     pk of the user `GET /core/users/me/` reports for the token (default: the
+                    recorded akadmin, pk 4); null -> the response carries no pk
   users             {pk: {"pk", "username", "email", "type", "groups", "is_active"}}
-  devices           {pk: [{"pk": ..., "name": ...}]}  WebAuthn devices per user pk
+  devices           {pk: [{"pk": ..., "name": ..., "type": ...}]}  authenticator devices per
+                    user pk; `type` is the device's `meta_model_name` (default: WebAuthn). A
+                    device pk is unique only within its type, as in Authentik.
+  sessions          {uuid: {"user": pk}}  authenticated sessions
+  access_tokens / refresh_tokens  {pk: {"user": pk}}  OAuth2 tokens
+  core_tokens       {identifier: {"user": pk, "intent": ...}}  `/core/tokens/` rows (api,
+                    app_password, recovery, ...); a recovery link adds a `recovery` row
+  ignore_user_filters  list of listings that ignore even their working per-user filter
+                    ("devices": `admin/all/`; "sessions"; "oauth"; "core_tokens"), standing in
+                    for an Authentik version whose filter stopped working
+  stuck_next_page   every paginated list reports this `next` page number (a broken pagination)
+  fail_on           {"<METHOD> <path prefix under /api/v3>": status}: that request answers
+                    `status` with {"detail": "fake failure"} and changes nothing
+  on_request        {"<METHOD> <path prefix under /api/v3>": {<state key>: rows}}: after the
+                    first successful matching request, the rows are added to that state key
+                    (lists per user pk are extended, other entries set) and the trigger is
+                    removed; stands for a credential created while a script runs
   next_pk           counter for new users
   blueprints        list of blueprint instances (default: the bundled and local-TLS ones)
   blueprint_list_empty_calls  the first N blueprint lists return no instance (fresh install)
@@ -39,15 +57,25 @@ a test that copies the fake into a temp `bin/` must copy that directory too or s
 Real-Authentik behaviours the recording revealed and this fake reproduces on purpose:
   - an invalid API token is HTTP 403 (not 401) with {"detail": "Token invalid/expired"};
   - `POST /core/users/` requires `name`;
-  - `GET /authenticators/admin/webauthn/` IGNORES a `user` query and lists every user's devices;
-    the per-user filter is `GET /authenticators/admin/all/?user=<pk>` (a bare JSON array);
-  - a recovery link is built from the request's own scheme and authority.
+  - every per-type device list (`GET /authenticators/admin/<type>/`) IGNORES a `user` or
+    `user__username` query and lists every user's devices of that type; the per-user filter is
+    `GET /authenticators/admin/all/?user=<pk>` (a bare JSON array of every type);
+  - a device is retrieved and deleted at its type's path (`<type path><pk>/`); the retrieve
+    embeds `user.pk`, except the endpoint device (no user) and the Apple Independent Secure
+    Enclave (`user` is a bare pk); a repeated DELETE is 404;
+  - a recovery link is built from the request's own scheme and authority;
+  - sessions and core tokens filter only by `user__username` and IGNORE `user`; the OAuth2
+    access/refresh token lists filter only by `user` (an unknown pk is a 400) and IGNORE
+    `user__username`;
+  - paginated lists take `page_size` (default 20, capped at 100) and `page`; `pagination.next`
+    is the next page number or 0, and a page past the end is a 404 "Invalid page.".
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 import secrets
@@ -177,6 +205,108 @@ def _user_document(body: dict[str, Any], pk: int) -> dict[str, Any]:
     return user
 
 
+# Device types: meta_model_name -> (path under /api/v3, model name in a 404 detail).
+WEBAUTHN_DEVICE = "authentik_stages_authenticator_webauthn.webauthndevice"
+ENDPOINT_DEVICE = "authentik_stages_authenticator_endpoint_gdtc.endpointdevice"
+ISE_DEVICE = "authentik_endpoints_connectors_agent.appleindependentsecureenclave"
+DEVICE_TYPES: dict[str, tuple[str, str]] = {
+    WEBAUTHN_DEVICE: ("/authenticators/admin/webauthn/", "WebAuthnDevice"),
+    "authentik_stages_authenticator_totp.totpdevice": ("/authenticators/admin/totp/", "TOTPDevice"),
+    "authentik_stages_authenticator_static.staticdevice": (
+        "/authenticators/admin/static/",
+        "StaticDevice",
+    ),
+    "authentik_stages_authenticator_duo.duodevice": ("/authenticators/admin/duo/", "DuoDevice"),
+    "authentik_stages_authenticator_sms.smsdevice": ("/authenticators/admin/sms/", "SMSDevice"),
+    "authentik_stages_authenticator_email.emaildevice": (
+        "/authenticators/admin/email/",
+        "EmailDevice",
+    ),
+    ENDPOINT_DEVICE: ("/authenticators/admin/endpoint/", "EndpointDevice"),
+    ISE_DEVICE: ("/endpoints/agents/psso/ise/", "AppleIndependentSecureEnclave"),
+}
+DEVICE_PATH = re.compile(
+    r"/api/v3(/authenticators/admin/(?:webauthn|totp|static|duo|sms|email|endpoint)/"
+    r"|/endpoints/agents/psso/ise/)(?:([^/]+)/)?$"
+)
+
+
+def _device_type(device: dict[str, Any]) -> str:
+    kind: str = device.get("type", WEBAUTHN_DEVICE)
+    return kind
+
+
+def _type_for_path(type_path: str) -> str:
+    return next(kind for kind, (path, _) in DEVICE_TYPES.items() if path == type_path)
+
+
+def _device_retrieve(device: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """A per-type device retrieve in the recorded shape of its type."""
+    kind = _device_type(device)
+    name = device.get("name", "")
+    if kind == ENDPOINT_DEVICE:
+        endpoint: dict[str, Any] = _fixture("device_endpoint_admin_retrieve")
+        endpoint.update(pk=str(device["pk"]), name=name)
+        return endpoint
+    if kind == ISE_DEVICE:
+        enclave: dict[str, Any] = _fixture("device_ise_admin_retrieve")
+        enclave.update(uuid=str(device["pk"]), user=user["pk"])
+        return enclave
+    document: dict[str, Any] = _fixture("device_webauthn_admin_retrieve")
+    pk = device["pk"]
+    document.update(pk=int(pk) if str(pk).isdigit() else pk, name=name)
+    document["user"].update(
+        pk=user["pk"], username=user["username"], name=user["username"], email=user["username"]
+    )
+    return document
+
+
+def _user_or_stub(users: dict[str, dict[str, Any]], pk: str) -> dict[str, Any]:
+    return users.get(pk, {"pk": int(pk), "username": pk})
+
+
+def _find_device(
+    devices: dict[str, list[dict[str, Any]]], kind: str, pk: str
+) -> tuple[str, dict[str, Any]] | None:
+    for user_pk, user_devices in devices.items():
+        for device in user_devices:
+            if _device_type(device) == kind and str(device["pk"]) == pk:
+                return user_pk, device
+    return None
+
+
+def _device_route(
+    method: str,
+    match: re.Match[str],
+    users: dict[str, dict[str, Any]],
+    devices: dict[str, list[dict[str, Any]]],
+) -> tuple[int, Any]:
+    """Per-type device list, retrieve and delete (`<type path>[<pk>/]`)."""
+    kind = _type_for_path(match.group(1))
+    pk = match.group(2)
+    if pk is None and method == "GET":
+        # Real Authentik ignores `user`/`user__username` here and lists every user's devices.
+        found = [
+            _device_retrieve(d, _user_or_stub(users, u))
+            for u, user_devices in devices.items()
+            for d in user_devices
+            if _device_type(d) == kind
+        ]
+        return HTTP_OK, _envelope(found)
+    hit = _find_device(devices, kind, unquote(pk or ""))
+    if hit is None:
+        missing: dict[str, str] = _fixture("device_delete_again_404")
+        missing["detail"] = missing["detail"].replace("WebAuthnDevice", DEVICE_TYPES[kind][1])
+        return HTTP_NOT_FOUND, missing
+    user_pk, device = hit
+    if method == "GET":
+        return HTTP_OK, _device_retrieve(device, _user_or_stub(users, user_pk))
+    if method == "DELETE":
+        devices[user_pk].remove(device)
+        return HTTP_NO_CONTENT, None
+    return HTTP_NOT_FOUND, {"detail": f"fake curl: no route for {method} {match.group(0)}"}
+
+
 def _device_documents(
     users: dict[str, dict[str, Any]], devices: dict[str, list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
@@ -186,6 +316,8 @@ def _device_documents(
     for user_pk, user_devices in devices.items():
         user = users.get(user_pk, {"pk": int(user_pk), "username": user_pk})
         for device in user_devices:
+            if _device_type(device) != WEBAUTHN_DEVICE:
+                continue
             document = copy.deepcopy(template)
             document.update(pk=device["pk"], name=device.get("name", template["name"]))
             document["user"].update(pk=user["pk"], username=user["username"])
@@ -197,16 +329,199 @@ def _devices_all(
     query: dict[str, list[str]],
     users: dict[str, dict[str, Any]],
     devices: dict[str, list[dict[str, Any]]],
+    ignore_user_filters: list[str],
 ) -> tuple[int, Any]:
     """`GET /authenticators/admin/all/?user=<pk>`: the real per-user device filter."""
     pk = query.get("user", [""])[0]
     if pk not in users:
         return HTTP_BAD_REQUEST, {"user": [f'Invalid pk "{pk}" - object does not exist.']}
-    template: dict[str, Any] = _fixture("devices_all_one")[0]
+    rows = {row["meta_model_name"]: row for row in _fixture("devices_all_owner_every_type")}
+    owners = list(devices) if "devices" in ignore_user_filters else [pk]
     found: list[dict[str, Any]] = []
-    for device in devices.get(pk, []):
-        found.append({**template, "pk": str(device["pk"]), "name": device.get("name", "")})
+    for owner in owners:
+        for device in devices.get(owner, []):
+            kind = _device_type(device)
+            template = rows.get(kind, {**rows[WEBAUTHN_DEVICE], "meta_model_name": kind})
+            found.append({**template, "pk": str(device["pk"]), "name": device.get("name", "")})
     return HTTP_OK, found
+
+
+PAGE_SIZE_DEFAULT = 20
+PAGE_SIZE_MAX = 100
+
+
+def _paginate(
+    rows: list[Any], query: dict[str, list[str]], state: dict[str, Any]
+) -> tuple[int, Any]:
+    """One page of `rows` in the recorded paginated envelope, as Authentik pages a list."""
+    size = min(int(query.get("page_size", [PAGE_SIZE_DEFAULT])[0]), PAGE_SIZE_MAX)
+    page = int(query.get("page", ["1"])[0])
+    total_pages = max(1, math.ceil(len(rows) / size))
+    if page > total_pages:
+        return HTTP_NOT_FOUND, {"detail": "Invalid page."}
+    start = (page - 1) * size
+    found = rows[start : start + size]
+    body = _envelope(found)
+    body["pagination"].update(
+        next=state.get("stuck_next_page", page + 1 if page < total_pages else 0),
+        previous=page - 1,
+        current=page,
+        total_pages=total_pages,
+        start_index=start + 1 if found else 0,
+        end_index=start + len(found),
+    )
+    return HTTP_OK, body
+
+
+def _user_pk_by_username(users: dict[str, dict[str, Any]], username: str) -> int | None:
+    return next((int(pk) for pk, u in users.items() if u["username"] == username), None)
+
+
+def _owned_by(
+    rows: dict[str, dict[str, Any]], owner: int | None, *, ignored: bool
+) -> list[tuple[str, dict[str, Any]]]:
+    return [(key, row) for key, row in rows.items() if ignored or row["user"] == owner]
+
+
+def _username_filtered(
+    query: dict[str, list[str]], users: dict[str, dict[str, Any]], *, ignored: bool
+) -> tuple[int | None, bool]:
+    """The owner a `user__username` query names; `user` is ignored. No filter lists everyone."""
+    if "user__username" not in query:
+        return None, True
+    return _user_pk_by_username(users, unquote(query["user__username"][0])), ignored
+
+
+def _embedded_user(users: dict[str, dict[str, Any]], pk: int) -> dict[str, Any]:
+    user = _user_or_stub(users, str(pk))
+    return {
+        "pk": pk,
+        "username": user["username"],
+        "name": user["username"],
+        "email": user["username"],
+    }
+
+
+def _sessions_route(
+    method: str, path: str, query: dict[str, list[str]], state: dict[str, Any]
+) -> tuple[int, Any]:
+    """`/core/authenticated_sessions/`: list (by `user__username`), delete, bulk delete."""
+    users: dict[str, dict[str, Any]] = state.setdefault("users", {})
+    sessions: dict[str, dict[str, Any]] = state.setdefault("sessions", {})
+    key = path.rsplit("/core/authenticated_sessions/", maxsplit=1)[-1].strip("/")
+    if key == "bulk_delete" and method == "DELETE":
+        if "user_pks" not in query:
+            return HTTP_BAD_REQUEST, {"user_pks": ["This field is required."]}
+        pks = {int(pk) for pk in query["user_pks"]}
+        gone = [uuid_ for uuid_, row in sessions.items() if row["user"] in pks]
+        for uuid_ in gone:
+            del sessions[uuid_]
+        return HTTP_OK, {"deleted": len(gone)}
+    if not key and method == "GET":
+        owner, ignored = _username_filtered(
+            query, users, ignored="sessions" in state.get("ignore_user_filters", [])
+        )
+        template: dict[str, Any] = _fixture("sessions_list_owner")["results"][0]
+        rows = [
+            {**copy.deepcopy(template), "uuid": uuid_, "user": row["user"]}
+            for uuid_, row in _owned_by(sessions, owner, ignored=ignored)
+        ]
+        return _paginate(rows, query, state)
+    if key and method == "DELETE":
+        if sessions.pop(unquote(key), None) is None:
+            return HTTP_NOT_FOUND, _fixture("session_delete_again_404")
+        return HTTP_NO_CONTENT, None
+    return HTTP_NOT_FOUND, {"detail": f"fake curl: no route for {method} {path}"}
+
+
+OAUTH_PATH = re.compile(r"/api/v3/oauth2/(access_tokens|refresh_tokens)/(?:([^/]+)/)?$")
+OAUTH_MODELS = {"access_tokens": "AccessToken", "refresh_tokens": "RefreshToken"}
+
+
+def _oauth_route(
+    method: str, match: re.Match[str], query: dict[str, list[str]], state: dict[str, Any]
+) -> tuple[int, Any]:
+    """`/oauth2/{access,refresh}_tokens/`: list (by `user` pk), delete."""
+    users: dict[str, dict[str, Any]] = state.setdefault("users", {})
+    kind, key = match.group(1), match.group(2)
+    tokens: dict[str, dict[str, Any]] = state.setdefault(kind, {})
+    if key is None and method == "GET":
+        ignored = "oauth" in state.get("ignore_user_filters", [])
+        owner: int | None = None
+        if "user" in query:
+            if query["user"][0] not in users:
+                return HTTP_BAD_REQUEST, _fixture("oauth2_access_tokens_list_unknown_user_400")
+            owner = int(query["user"][0])
+        else:
+            ignored = True
+        template: dict[str, Any] = _fixture(f"oauth2_{kind}_list_owner")["results"][0]
+        rows = [
+            {
+                **copy.deepcopy(template),
+                "pk": int(pk),
+                "user": {**template["user"], **_embedded_user(users, row["user"])},
+            }
+            for pk, row in _owned_by(tokens, owner, ignored=ignored)
+        ]
+        return _paginate(rows, query, state)
+    if key is not None and method == "DELETE":
+        if tokens.pop(unquote(key), None) is None:
+            missing: dict[str, str] = _fixture("oauth2_access_token_delete_again_404")
+            missing["detail"] = missing["detail"].replace("AccessToken", OAUTH_MODELS[kind])
+            return HTTP_NOT_FOUND, missing
+        return HTTP_NO_CONTENT, None
+    return HTTP_NOT_FOUND, {"detail": f"fake curl: no route for {method} {match.group(0)}"}
+
+
+def _core_tokens_route(
+    method: str, path: str, query: dict[str, list[str]], state: dict[str, Any]
+) -> tuple[int, Any]:
+    """`/core/tokens/`: list (by `user__username`), delete by identifier."""
+    users: dict[str, dict[str, Any]] = state.setdefault("users", {})
+    tokens: dict[str, dict[str, Any]] = state.setdefault("core_tokens", {})
+    key = path.rsplit("/core/tokens/", maxsplit=1)[-1].strip("/")
+    if not key and method == "GET":
+        owner, ignored = _username_filtered(
+            query, users, ignored="core_tokens" in state.get("ignore_user_filters", [])
+        )
+        template: dict[str, Any] = _fixture("core_tokens_list_owner")["results"][0]
+        rows = [
+            {
+                **copy.deepcopy(template),
+                "pk": str(uuid.uuid5(uuid.NAMESPACE_URL, identifier)),
+                "identifier": identifier,
+                "intent": row.get("intent", "api"),
+                "user": row["user"],
+                "user_obj": {**template["user_obj"], **_embedded_user(users, row["user"])},
+            }
+            for identifier, row in _owned_by(tokens, owner, ignored=ignored)
+        ]
+        return _paginate(rows, query, state)
+    if key and method == "DELETE":
+        if tokens.pop(unquote(key), None) is None:
+            return HTTP_NOT_FOUND, {"detail": "No Token matches the given query."}
+        return HTTP_NO_CONTENT, None
+    return HTTP_NOT_FOUND, {"detail": f"fake curl: no route for {method} {path}"}
+
+
+def _users_me(state: dict[str, Any], users: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """`GET /core/users/me/`: the user the shared token belongs to.
+
+    `token_user_pk` names that user (default: the recorded akadmin); `null` drops the pk, as a
+    response that does not say whose token it is.
+    """
+    body: dict[str, Any] = _fixture("users_me")
+    if "token_user_pk" not in state:
+        return body
+    pk = state["token_user_pk"]
+    if pk is None:
+        body["user"].pop("pk", None)
+        return body
+    body["user"]["pk"] = pk
+    owner = users.get(str(pk))
+    if owner is not None:
+        body["user"]["username"] = owner["username"]
+    return body
 
 
 def _blueprints(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -236,8 +551,13 @@ def _route(state: dict[str, Any], method: str, url: str, body: dict[str, Any]) -
     users: dict[str, dict[str, Any]] = state.setdefault("users", {})
     devices: dict[str, list[dict[str, Any]]] = state.setdefault("devices", {})
 
+    api_path = path.split("/api/v3", maxsplit=1)[-1]
+    for target, status in state.get("fail_on", {}).items():
+        fail_method, _, prefix = target.partition(" ")
+        if method == fail_method and api_path.startswith(prefix):
+            return status, {"detail": "fake failure"}
     if path.endswith("/api/v3/core/users/me/") and method == "GET":
-        return HTTP_OK, _fixture("users_me")
+        return HTTP_OK, _users_me(state, users)
     if path.endswith("/api/v3/core/groups/") and method == "GET":
         name = unquote(query.get("name", [""])[0])
         groups = [g for g in [_admins_group()] if not name or g["name"] == name]
@@ -266,6 +586,12 @@ def _route(state: dict[str, Any], method: str, url: str, body: dict[str, Any]) -
         if not state.get("recovery_flow"):
             return HTTP_BAD_REQUEST, _fixture("recovery_no_flow_400")
         token = secrets.token_hex(16)
+        # Authentik stores a recovery link as a `recovery` core token of that user.
+        identifier = f"ak-recovery-{recovery.group(1)}-{secrets.token_hex(4)}"
+        state.setdefault("core_tokens", {})[identifier] = {
+            "user": int(recovery.group(1)),
+            "intent": "recovery",
+        }
         # Real Authentik builds the link from the request's own scheme, authority and web path
         # prefix (LC1b: `http://127.0.0.1:9000/...` through a port-forward; with
         # AUTHENTIK_WEB__PATH=/auth/ the path carries `/auth`).
@@ -279,7 +605,17 @@ def _route(state: dict[str, Any], method: str, url: str, body: dict[str, Any]) -
         # Real Authentik ignores a `user` query here and lists every device.
         return HTTP_OK, _envelope(_device_documents(users, devices))
     if path.endswith("/api/v3/authenticators/admin/all/") and method == "GET":
-        return _devices_all(query, users, devices)
+        return _devices_all(query, users, devices, state.get("ignore_user_filters", []))
+    device_match = DEVICE_PATH.search(path)
+    if device_match:
+        return _device_route(method, device_match, users, devices)
+    if "/api/v3/core/authenticated_sessions/" in path:
+        return _sessions_route(method, path, query, state)
+    oauth_match = OAUTH_PATH.search(path)
+    if oauth_match:
+        return _oauth_route(method, oauth_match, query, state)
+    if "/api/v3/core/tokens/" in path:
+        return _core_tokens_route(method, path, query, state)
     if path.endswith("/api/v3/stages/invitation/invitations/") and method == "POST":
         invitation: dict[str, Any] = _fixture("invitation_created")
         invitation.update(
@@ -347,6 +683,26 @@ def _ingress_route(state: dict[str, Any], url: str) -> tuple[int, Any, str]:
     return denied, {"detail": f"fake curl: no ingress route for {path}"}, ""
 
 
+def _apply_on_request(state: dict[str, Any], method: str, url: str) -> None:
+    """Add the rows of the first `on_request` trigger matching this request, then drop it."""
+    triggers: dict[str, dict[str, dict[str, Any]]] = state.get("on_request", {})
+    api_path = urlsplit(url).path.split("/api/v3", maxsplit=1)[-1]
+    for target, additions in list(triggers.items()):
+        trigger_method, _, prefix = target.partition(" ")
+        if method != trigger_method or not api_path.startswith(prefix):
+            continue
+        for key, rows in additions.items():
+            current: dict[str, Any] = state.setdefault(key, {})
+            for row_key, value in rows.items():
+                existing = current.get(row_key)
+                if isinstance(existing, list) and isinstance(value, list):
+                    existing.extend(value)
+                else:
+                    current[row_key] = value
+        del triggers[target]
+        return
+
+
 def main() -> int:
     args = _parse_args(sys.argv[1:])
     state_path = Path(os.environ["PS_TEST_CURL_STATE"])
@@ -380,6 +736,8 @@ def main() -> int:
     else:
         body = json.loads(args["data"]) if args["data"] else {}
         status, payload = _route(state, method, args["url"], body)
+        if status < HTTP_BAD_REQUEST:
+            _apply_on_request(state, method, args["url"])
         _save_state(state_path, state)
     if payload is not None:
         sys.stdout.write(json.dumps(payload))

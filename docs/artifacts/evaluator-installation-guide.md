@@ -951,5 +951,6 @@ operations](./operations-guide.md#evaluator-local-test-operations). It covers
 | The browser shows a certificate warning | The client has not trusted `ca.pem`. Do client step 2. |
 | `ps.test` does not resolve | The hosts line is missing, or a different line maps `ps.test` to another address. The script reports a conflicting line and never edits it. Fix the hosts file. |
 | The enrolment link no longer works | It expired or was used. See [Operations Guide: Owner recovery](./operations-guide.md#owner-recovery-certificate-renewal-and-re-running-the-script). |
+| The owner's only passkey device is lost or stolen | On the Server run `scripts/deploy-ps-eval.sh --reset-owner-passkey --owner-email <email>` and open the new link. The signing passkey is re-enrolled at the next approval. See [Operations Guide: Resetting the owner's passkeys](./operations-guide.md#resetting-the-owners-passkeys-after-a-lost-or-stolen-device). |
 | The script cannot choose a LAN address | Run it again with `--lan-address <ip>`. |
 | `/mcp` shows `ps-mcp` as failed with `Missing environment variables: PS_MCP_URL` | Set `PS_MCP_URL` (step 5) and start a new session. |
