@@ -8,8 +8,15 @@
 # whole workspace must be visible to `uv sync`. `.dockerignore` reduces that context to the
 # five files/directories the build actually consumes.
 
+# ---- base ------------------------------------------------------------------------------
+# The one place the interpreter image is named, pinned by its multi-arch index digest (#278), so
+# the builder and runtime stages cannot diverge and a build of one commit is reproducible. The
+# digest is refreshed by Dependabot's docker ecosystem, never by hand. It is a literal `FROM`
+# line rather than an ARG-substituted one because Dependabot does not resolve ARG.
+FROM python:3.14-slim-trixie@sha256:cd89c30eda26ee911a4611b18680086e0ea42e6f5f8cbe653d07fa7958c9cec8 AS base
+
 # ---- builder ---------------------------------------------------------------------------
-FROM python:3.14-slim-trixie AS builder
+FROM base AS builder
 
 # uv is copied in rather than installed, so the builder and the runtime share one interpreter
 # provenance. 0.13.6 is the version pinned in CI (`.github/actions/prep-runner/action.yml`).
@@ -37,7 +44,7 @@ COPY ps-service/src ps-service/src
 RUN uv sync --package ps-service --frozen --no-dev --no-editable
 
 # ---- runtime ---------------------------------------------------------------------------
-FROM python:3.14-slim-trixie
+FROM base
 
 # A static high uid/gid avoids collision with distro users and is stable for a Kubernetes
 # `runAsUser` (#59). `/var/log/ps-service` is not optional: `logging/facade.py`'s

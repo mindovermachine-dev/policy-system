@@ -31,6 +31,8 @@ _PS_SERVICE_MANIFEST = _REPO_ROOT / "ps-service" / "pyproject.toml"
 
 _MINIMUM_BUILD_STAGES = 2
 _VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)")
+_PINNED_PYTHON_REFERENCE = re.compile(r"python:(?P<tag>[^@\s]+)@sha256:(?P<digest>[0-9a-f]{64})")
+_BASE_STAGE = "base"
 
 # The five build inputs `.dockerignore` must re-include after its deny-all line, per the
 # uv workspace layout: the workspace root manifest + lock, the member being synced, its
@@ -176,10 +178,56 @@ def test_dockerfile_base_image_python_version_matches_ps_service_requires_python
 
     assert python_stages, "expected every build stage to be based on a `python:` image"
     for reference in python_stages:
-        _, _, tag = reference.partition(":")
+        tag = reference.partition(":")[2].partition("@")[0]
         assert _minor_version(tag) == expected, (
             f"{reference} does not match requires-python {requires_python!r}"
         )
+
+
+def _stages(dockerfile: str) -> list[tuple[str, str]]:
+    """Return `(image reference, stage name)` for every `FROM`; the name is empty when unnamed."""
+    stages: list[tuple[str, str]] = []
+    for keyword, argument in _instructions(dockerfile):
+        if keyword != "FROM":
+            continue
+        tokens = shlex.split(argument)
+        name = tokens[tokens.index("AS") + 1] if "AS" in tokens else ""
+        stages.append((tokens[0], name))
+    return stages
+
+
+def test_python_base_image_is_pinned_by_a_well_formed_sha256_digest() -> None:
+    """The interpreter image must carry `@sha256:` plus exactly 64 lowercase hex characters.
+
+    A floating tag moves on every upstream rebuild, so two builds of one commit could differ
+    and a shipped image could not be traced or rolled back by commit. A truncated, upper-case
+    or non-sha256 digest is rejected here instead of failing late (or silently) in the build.
+    """
+    (reference,) = [
+        ref for ref, _ in _stages(_read(_DOCKERFILE, "a Dockerfile")) if ref.startswith("python:")
+    ]
+
+    assert _PINNED_PYTHON_REFERENCE.fullmatch(reference), (
+        f"{reference!r} is not python:<tag>@sha256:<64 lowercase hex>"
+    )
+
+
+def test_python_base_image_is_declared_once_and_both_stages_derive_from_it() -> None:
+    """Exactly one `FROM` names a `python:` image; the builder and runtime stages build on it.
+
+    A single named `base` stage means the builder and the runtime cannot disagree on the
+    interpreter image, and a literal `FROM image:tag@sha256:` line is what Dependabot's docker
+    parser reads (it does not resolve `ARG` substitution).
+    """
+    stages = _stages(_read(_DOCKERFILE, "a Dockerfile"))
+
+    python_stages = [(ref, name) for ref, name in stages if ref.startswith("python:")]
+    assert len(python_stages) == 1, f"expected one python: image, got {python_stages}"
+    assert python_stages[0][1] == _BASE_STAGE, f"the python: stage must be named {_BASE_STAGE!r}"
+
+    derived = [(ref, name) for ref, name in stages if ref != python_stages[0][0]]
+    assert len(derived) >= _MINIMUM_BUILD_STAGES - 1
+    assert all(ref == _BASE_STAGE for ref, _ in derived), f"stages not derived from base: {derived}"
 
 
 def test_source_default_host_is_still_loopback(monkeypatch: pytest.MonkeyPatch) -> None:

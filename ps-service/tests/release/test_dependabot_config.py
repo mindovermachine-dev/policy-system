@@ -203,6 +203,22 @@ def test_docker_ignores_the_uv_image_and_python_major_and_minor(repo_root: Path)
     assert isinstance(python_types, list)
     ignored = {str(item) for item in cast("list[object]", python_types)}
     assert {"version-update:semver-major", "version-update:semver-minor"} <= ignored
+    assert not ignored & {"version-update:semver-patch", "version-update:semver-pre-patch"}, (
+        "python patch and digest updates must reach the base stage"
+    )
+
+
+def test_docker_covers_the_root_dockerfile_and_does_not_ignore_python_entirely(
+    repo_root: Path,
+) -> None:
+    update = _by_ecosystem(repo_root)["docker"]
+    assert _directories(update) == ["/"]
+    ignore = cast("list[dict[str, object]]", update["ignore"])
+    python_entries = [item for item in ignore if item["dependency-name"] == "python"]
+    assert len(python_entries) == 1
+    assert "update-types" in python_entries[0], (
+        "ignoring python without update-types blocks digests"
+    )
 
 
 def _dockerfile_pins(repo_root: Path) -> list[str]:

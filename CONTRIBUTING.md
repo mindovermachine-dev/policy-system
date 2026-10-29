@@ -163,6 +163,11 @@ How a Dependabot pull request lands:
    the Authentik chart (a patch release), `build(deps)` for dev Python dependencies and npm,
    `ci(deps)` for Actions (no release). Minor and patch updates are grouped; a major update
    always gets its own pull request.
+4. The Python base image is pinned by its multi-arch digest in the `base` stage of the
+   `Dockerfile` (`FROM python:<tag>@sha256:<digest> AS base`). Dependabot's docker ecosystem
+   refreshes that digest through a `fix(deps)` pull request, which ships as a patch release.
+   Never edit the digest by hand. The interpreter's major and minor version stay ignored, so
+   moving to a new Python minor is a deliberate manual change of the tag.
 
 Dependabot cannot see the following, so update them by hand:
 

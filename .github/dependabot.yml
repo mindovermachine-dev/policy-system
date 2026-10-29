@@ -8,7 +8,7 @@
 #
 # Invisible to Dependabot and updated by hand, see "Dependency updates" in CONTRIBUTING.md:
 #   - the uv version, pinned in six places that must agree:
-#       Dockerfile:16 (and the prose comment at Dockerfile:15)
+#       Dockerfile:23 (and the prose comment at Dockerfile:22)
 #       .github/actions/prep-runner/action.yml
 #       .github/workflows/backup-restore-e2e.yml
 #       .github/workflows/on_semver.yml (two steps)
@@ -58,7 +58,8 @@ updates:
     ignore:
       # The uv image tag is one of six pins kept in step by hand.
       - dependency-name: ghcr.io/astral-sh/uv
-      # The interpreter moves deliberately, not weekly.
+      # The interpreter moves deliberately, not weekly. Patch and digest updates still arrive
+      # for the `base` stage in the Dockerfile.
       - dependency-name: python
         update-types:
           ["version-update:semver-major", "version-update:semver-minor"]
