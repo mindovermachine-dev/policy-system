@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 JOB = "e2e"
 CLUSTER_NAME = "backup-restore-e2e"
-EXACT_ACTION_REF = re.compile(r"@v\d+\.\d+\.\d+$")
+SHA_ACTION_REF = re.compile(r"@[0-9a-f]{40}$")
 TIMEOUT_MINUTES = 15
 
 
@@ -86,7 +86,7 @@ def test_toolchain_and_every_action_are_pinned_to_exact_versions(
     uses = _all_uses(workflow)
     assert uses, "the job uses no actions"
     for ref in uses:
-        assert EXACT_ACTION_REF.search(ref), f"{ref} is not pinned to an exact version"
+        assert SHA_ACTION_REF.search(ref), f"{ref} is not pinned to a full commit SHA"
 
     kind_with = workflow.mapping(workflow.steps_using(job, "helm/kind-action")[0], "with")
     assert re.fullmatch(r"v\d+\.\d+\.\d+", str(kind_with.get("version")))

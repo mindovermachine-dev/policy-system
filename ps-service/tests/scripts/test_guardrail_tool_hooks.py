@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 INSITU_PATH = REPO_ROOT / ".insitu.yml"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 SERVICE_SOURCE_ROOTS = ("ps-service/src", "ps-cli/src", "ps-test-support/src", "scripts")
-EXPECTED_PINS = {"unused-symbols": "vulture==2.16", "import-layering": "import-linter==2.3"}
+EXPECTED_PINS = {"unused-symbols": "vulture==2.16", "import-layering": "import-linter==2.15"}
 EXPECTED_COMMANDS = {"unused-symbols": "uv run vulture", "import-layering": "uv run lint-imports"}
 SUPPRESSION_PATTERN = re.compile(r"# noqa: V10\d - \S")
 BARE_SUPPRESSION_PATTERN = re.compile(r"# noqa: V10\d\s*$")

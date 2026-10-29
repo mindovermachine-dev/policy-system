@@ -51,7 +51,7 @@ inventory:
         dir=/usr/local/bin
         [ -w "$dir" ] || dir="$HOME/.local/bin"
         mkdir -p "$dir"
-        curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
+        curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash \
           | bash -s -- 1.7.12 "$dir"
       fi
 

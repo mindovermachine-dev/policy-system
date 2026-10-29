@@ -45,6 +45,10 @@ ACTION_MAJORS = {
     "azure/setup-helm": 5,
 }
 EXACT_TAG = re.compile(r"^v(?P<major>\d+)\.\d+\.\d+$")
+USES_LINE = re.compile(
+    r"\buses:[ \t]*(?P<name>[^@\s]+)@(?P<ref>[^\s#]+)(?:[ \t]+#[ \t]*(?P<comment>\S+))?"
+)
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 HELM_MAJOR = 4
 HELM_WORKFLOWS = (
@@ -79,33 +83,26 @@ def _is_ci_definition(path: str) -> bool:
     return in_github and path.endswith((".yml", ".yaml"))
 
 
-def _collect_uses(node: object) -> list[str]:
-    """Every `uses:` value found anywhere in a parsed YAML document."""
-    found: list[str] = []
-    if isinstance(node, dict):
-        for key, value in cast("dict[object, object]", node).items():
-            if key == "uses" and isinstance(value, str):
-                found.append(value)
-            else:
-                found.extend(_collect_uses(value))
-    elif isinstance(node, list):
-        for item in cast("list[object]", node):
-            found.extend(_collect_uses(item))
-    return found
-
-
 def _load_yaml(path: str) -> object:
     return yaml.safe_load((REPO_ROOT / path).read_text(encoding="utf-8"))
 
 
-def _action_refs() -> list[tuple[str, str]]:
-    """`(file, uses-value)` for every action reference in CI definitions."""
-    return [
-        (path, ref)
-        for path in _visible_files()
-        if _is_ci_definition(path)
-        for ref in _collect_uses(_load_yaml(path))
-    ]
+def _action_versions() -> list[tuple[str, str, str]]:
+    """`(file, action, version)` for every action reference in CI definitions.
+
+    A SHA-pinned reference carries its version in the trailing `# vX.Y.Z` comment, which YAML
+    parsing drops, so the lines are read directly.
+    """
+    versions: list[tuple[str, str, str]] = []
+    for path in _visible_files():
+        if not _is_ci_definition(path):
+            continue
+        text = (REPO_ROOT / path).read_text(encoding="utf-8")
+        for match in USES_LINE.finditer(text):
+            ref = match["ref"]
+            tag = match["comment"] or "" if FULL_SHA.match(ref) else ref
+            versions.append((path, match["name"], tag))
+    return versions
 
 
 def _setup_node_versions(path: str) -> list[str]:
@@ -156,14 +153,13 @@ def test_prep_runner_sets_up_the_target_node_major_in_both_variants(path: str) -
 def test_bumped_actions_use_the_target_major_with_exact_tags() -> None:
     problems: list[str] = []
     seen: set[str] = set()
-    for path, ref in _action_refs():
-        name, _, tag = ref.partition("@")
+    for path, name, tag in _action_versions():
         if name not in ACTION_MAJORS:
             continue
         seen.add(name)
         match = EXACT_TAG.match(tag)
         if match is None or int(match["major"]) != ACTION_MAJORS[name]:
-            problems.append(f"{path}: {ref} (want exact v{ACTION_MAJORS[name]}.x.y)")
+            problems.append(f"{path}: {name} {tag} (want exact v{ACTION_MAJORS[name]}.x.y)")
     assert problems == []
     assert seen == set(ACTION_MAJORS), "every bumped action must still be in use somewhere"
 

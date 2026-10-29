@@ -134,7 +134,7 @@ def test_dev_group_pins_vulture_and_import_linter() -> None:
     dev = _pyproject()["dependency-groups"]["dev"]
 
     assert "vulture==2.16" in dev
-    assert "import-linter==2.3" in dev
+    assert "import-linter==2.15" in dev
 
 
 @pytest.mark.parametrize(

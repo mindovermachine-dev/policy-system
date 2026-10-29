@@ -186,6 +186,24 @@ An Authentik chart bump is a trigger, not a finished change. The pull request as
 get `charts/policy-system/values-prod.yaml`, `charts/policy-system/templates/_helpers.tpl` and
 `docs/architecture/customer-azure-deployment.md` updated before it is approved.
 
+### Pinned actions
+
+Every non-local `uses:` in `.github/workflows` and `.github/actions` names a full commit SHA with
+the version it stands for in a trailing comment, so a re-pointed upstream tag or branch cannot
+change what the release pipeline runs:
+
+```yaml
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+```
+
+To add an action, resolve the tag to its commit
+(`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`), write the SHA and keep the
+`# vX.Y.Z` comment in that form, because it is what Dependabot reads. Dependabot then proposes
+the SHA and the comment together as a reviewed pull request; do not edit the pins by hand to
+upgrade. The installers in `.insitu.yml` read their scripts from a version tag and install
+helm-unittest with an explicit `--version`.
+`test_workflow_action_pins.py` fails on a tag, a branch or a short SHA, with the file and line.
+
 ## Coding Standards
 
 See [`docs/coding-standards/level2-python-instructions.md`](docs/coding-standards/level2-python-instructions.md)

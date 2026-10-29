@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 JOB = "blueprint"
 CRON = "41 4 * * 1"
-EXACT_ACTION_REF = re.compile(r"@v\d+\.\d+\.\d+$")
+SHA_ACTION_REF = re.compile(r"@[0-9a-f]{40}$")
 TIMEOUT_MINUTES = 15
 GATE = "./scripts/check-authentik-blueprint.sh"
 FORCE_FLAG = "AUTHENTIK_BLUEPRINT_FORCE=1"
@@ -63,7 +63,7 @@ def test_checkout_has_full_history_and_exact_pins(
 
     checkouts = workflow.steps_using(job, "actions/checkout")
     assert len(checkouts) == 1
-    assert EXACT_ACTION_REF.search(str(checkouts[0]["uses"]))
+    assert SHA_ACTION_REF.search(str(checkouts[0]["uses"]))
     assert workflow.mapping(checkouts[0], "with") == {
         "fetch-depth": 0,
         "persist-credentials": False,
@@ -73,7 +73,7 @@ def test_checkout_has_full_history_and_exact_pins(
         for step in workflow.steps(job)
         if "uses" in step and not str(step["uses"]).startswith("./")
     ]
-    assert all(EXACT_ACTION_REF.search(ref) for ref in third_party), third_party
+    assert all(SHA_ACTION_REF.search(ref) for ref in third_party), third_party
 
 
 def test_the_gate_is_run_forced_after_the_runner_is_prepared(

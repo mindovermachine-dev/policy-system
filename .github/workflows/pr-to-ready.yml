@@ -39,7 +39,7 @@ jobs:
           fi
           echo "READY_PUSHER is configured."
 
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.READY_PUSHER }}
@@ -58,4 +58,4 @@ jobs:
           title="$(gh pr view "$PR_NUMBER" --json title -q .title | sed -E 's/^\[WIP\][[:space:]]*//')"
           scripts/release/lint-commit-header.sh --header "$title - resolves #$PR_NUMBER"
 
-      - uses: devx-cafe/takt-actions/pr-to-ready@experimental
+      - uses: devx-cafe/takt-actions/pr-to-ready@d354e40ce1916a4fce4bd30f095e9aecc952adeb # v1
