@@ -279,7 +279,7 @@ reportMissingTypeStubs = false  # falkordb / litellm ship no py.typed. This is a
 #   falkordb (1.7.1)   — no py.typed. Boundary imports carry
 #                        `# pyright: ignore[reportMissingTypeStubs]` in
 #                        ps_service/{ingestion,domain_mapper,query_engine,company_merge}/falkordb_client.py.
-#   litellm (1.98.0)   — untyped. `litellm.completion` / `litellm.embedding`
+#   litellm (1.103.1)   — untyped. `litellm.completion` / `litellm.embedding`
 #                        return Unknown; ps_service/llm_interface casts the result
 #                        to the litellm response type at the boundary (see B13).
 #

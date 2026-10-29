@@ -61,6 +61,7 @@ Every top-level entry in the repository and its purpose. Entries marked untracke
 | Path                       | Purpose                                                                                                                              |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `.agents/`                 | Agent skills used when developing the repo (`init-takt-devcontainer`, `ps-pentest`)                                                  |
+| `astro/`                   | Astro documentation site source and configuration                                                                                    |
 | `charts/`                  | Helm chart `policy-system` and its tests                                                                                             |
 | `.claude-plugin/`          | Plugin marketplace manifest that distributes `ps-skills/ps-plugin`                                                                   |
 | `.claude/`                 | Claude Code project skills (`skills/`); local state files in it are not tracked                                                      |

@@ -14,11 +14,11 @@ repos:
       # Never rely on npm globals: nvm scopes them to one Node minor, so any Node
       # bump silently drops them.
       - id: basedpyright
-        name: basedpyright (strict)
-        entry: uv run basedpyright
+        name: basedpyright (changed Python files; full check runs in CI)
+        entry: bash .githooks/basedpyright-changed.sh
         language: system
-        types: [python]
-        pass_filenames: false # project-wide check, not per-file
+        pass_filenames: false # helper compares the worktree with origin/main
+        always_run: true
       - id: markdownlint
         name: markdownlint-cli2
         entry: npx --no-install markdownlint-cli2 --no-globs
