@@ -37,9 +37,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          version: "0.12.4"
+          version: "0.13.6"
 
       - name: Set up helm
         uses: azure/setup-helm@v4.3.1
@@ -55,7 +55,7 @@ jobs:
         with:
           version: v0.33.0
           node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
-          kubectl_version: v1.37.1
+          kubectl_version: v1.37.2
           cluster_name: backup-restore-e2e
           wait: 180s
           registry: true

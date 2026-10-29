@@ -230,7 +230,7 @@ federate to an upstream IdP" section — and requires no `psService.auth.*` valu
 since federation is configured entirely on Authentik's own side (a Source object).
 
 **Bundled as a real Helm chart dependency**, not flat vendored templates — `Chart.yaml` declares
-`authentik` (chart `authentik`, `https://charts.goauthentik.io`, pinned `2026.8.3`, `condition:
+`authentik` (chart `authentik`, `https://charts.goauthentik.io`, pinned `2026.8.5`, `condition:
 authentik.enabled`), fetched via `helm dependency build` (wired into `.insitu.yml` and
 `on_semver.yml` ahead of every lint/unittest/package step). Authentik's own bundled Bitnami
 Postgres dependency is left off (`authentik.postgresql.enabled: false`, in `values.yaml`); this chart hand-rolls

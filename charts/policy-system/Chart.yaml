@@ -6,6 +6,6 @@ version: 12.1.5
 appVersion: "12.1.5"
 dependencies:
   - name: authentik
-    version: 2026.8.3
+    version: 2026.8.5
     repository: https://charts.goauthentik.io
     condition: authentik.enabled

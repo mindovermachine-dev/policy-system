@@ -80,7 +80,7 @@ authentik:
   # (path-based routing, /auth) rather than its own dedicated hostname. `global.env` is the
   # upstream `authentik` dependency chart's own plain env-var list applied to every one of its
   # Deployments EXCEPT GeoIP (confirmed via `helm show values authentik --repo
-  # https://charts.goauthentik.io --version 2026.8.3`: root-level `global.env: []`, single-nested
+  # https://charts.goauthentik.io --version 2026.8.5`: root-level `global.env: []`, single-nested
   # like `blueprints` in values.yaml, NOT doubled `authentik.authentik.*`) -- deliberately NOT set via the
   # doubled `authentik.authentik.web.path` key: that key is only ever read by the
   # upstream chart's own auto-generated config Secret (templates/secret.yaml), which S3 already

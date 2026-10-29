@@ -174,7 +174,7 @@ issue #159).
 
 Re-implements the same lookup-then-generate idiom the bundled Authentik
 dependency's own, unreferenced Bitnami common library implements at
-charts/authentik-2026.8.3.tgz ->
+charts/authentik-2026.8.5.tgz ->
 authentik/charts/postgresql/charts/common/templates/_secrets.tpl's
 common.secrets.passwords.manage (lines 103-110, 116-138) and
 common.secrets.lookup (lines 164-175) -- NOT `include`-able from this chart's

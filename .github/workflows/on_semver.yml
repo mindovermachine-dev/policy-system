@@ -95,9 +95,9 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          version: "0.12.4"
+          version: "0.13.6"
       - name: Install the dev dependency group
         run: uv sync --group dev
       - name: Smoke-test the built image against FalkorDB
@@ -232,9 +232,9 @@ jobs:
         run: scripts/release/create-github-release.sh "$RELEASE_TAG"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.3.3
         with:
-          version: "0.12.4"
+          version: "0.13.6"
 
       - name: Build the ps-cli wheel
         run: uv build --package ps-cli --out-dir dist

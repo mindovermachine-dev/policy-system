@@ -12,10 +12,10 @@
       "version": "3.14"
     },
     "ghcr.io/va-h/devcontainers-features/uv:1": {
-      "version": "0.12.4"
+      "version": "0.13.6"
     },
     "ghcr.io/devcontainers/features/node:1": {
-      "version": "24"
+      "version": "24.22.2"
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",

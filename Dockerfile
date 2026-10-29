@@ -12,8 +12,8 @@
 FROM python:3.14-slim-trixie AS builder
 
 # uv is copied in rather than installed, so the builder and the runtime share one interpreter
-# provenance. 0.12.4 is the version pinned in CI (`.github/actions/prep-runner/action.yml`).
-COPY --from=ghcr.io/astral-sh/uv:0.12.4 /uv /uvx /bin/
+# provenance. 0.13.6 is the version pinned in CI (`.github/actions/prep-runner/action.yml`).
+COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /uvx /bin/
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_COMPILE_BYTECODE=1 \

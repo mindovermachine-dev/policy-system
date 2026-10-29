@@ -91,6 +91,7 @@ Every top-level entry in the repository and its purpose. Entries marked untracke
 | `package-lock.json`        | Lock file for `package.json`                                                                                                         |
 | `package.json`             | Dev-only pins for prettier, markdownlint-cli2 and cspell used by `trunk-worthy`                                                      |
 | `.prettierignore`          | Paths prettier does not format                                                                                                       |
+| `.python-version`          | Python interpreter uv uses (3.14); stops uv 0.13 choosing a newer runner Python                                                      |
 | `ps-cli/`                  | `ps-cli` command-line client for PS Service                                                                                          |
 | `ps-service/`              | PS Service: the REST API, MCP server and ingestion pipeline                                                                          |
 | `ps-skills/`               | Source of the Claude plugin (`ps-plugin`): skills, rubrics, MCP connector config                                                     |

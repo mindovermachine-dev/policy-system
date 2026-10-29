@@ -196,7 +196,7 @@ inventory:
     # Bump both together.
     command: |
       command -v uv
-      uv --version | grep -q '0\.12\.4'
+      uv --version | grep -q '0\.13\.6'
 
   - id: verify-lint-tools
     name: Verify linting tools are available

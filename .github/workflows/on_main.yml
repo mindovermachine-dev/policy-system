@@ -62,7 +62,7 @@ jobs:
         run: gh extension install devx-cafe/gh-tt --pin dc445201
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Release
         run: scripts/release/release.sh
