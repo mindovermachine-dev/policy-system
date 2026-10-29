@@ -32,7 +32,7 @@ runs:
 
     - name: Set up Node.js (with npm cache)
       if: ${{ steps.npm-lock.outputs.present == 'true' }}
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: 24
         cache: npm
@@ -40,7 +40,7 @@ runs:
 
     - name: Set up Node.js (no npm cache)
       if: ${{ steps.npm-lock.outputs.present != 'true' }}
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: 24
 
