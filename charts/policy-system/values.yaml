@@ -294,7 +294,7 @@ psPostgres:
   # selector, or credential Secrets.
   image:
     repository: postgres
-    tag: "16-alpine"
+    tag: "18"
   # Superuser used only by the Postgres container itself to run the init script;
   # its Secret is never referenced by the ps-service pod.
   admin:
@@ -390,7 +390,7 @@ authentik:
     # controls the StorageClass name and the NetworkPolicy's pod-selector labels.
     image:
       repository: postgres
-      tag: "16-alpine"
+      tag: "18"
     database: authentik
     user: authentik
     # Readiness only: `pg_isready` over TCP (`-h 127.0.0.1`), because first-start initdb runs a
