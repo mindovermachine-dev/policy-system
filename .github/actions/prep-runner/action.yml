@@ -53,7 +53,7 @@ runs:
       #   curl -LsSf https://astral.sh/uv/install.sh | sh   (in a `shell: bash` step)
 
     - name: Cache CI tool binaries (actionlint, Helm, helm-unittest)
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           /usr/local/bin/actionlint
@@ -62,7 +62,7 @@ runs:
         key: tools-actionlint1.7.12-helm3.18.4-${{ runner.os }}-${{ runner.arch }}
 
     - name: Cache Helm chart dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           charts/policy-system/charts
