@@ -5,7 +5,7 @@ members = ["ps-service", "ps-cli", "ps-test-support"]
 dev = [
     "basedpyright==1.40.2",
     "httpx>=0.28.1",
-    "import-linter==2.3",
+    "import-linter==2.15",
     "pytest>=8.0.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.6.1",
