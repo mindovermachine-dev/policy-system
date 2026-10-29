@@ -3,14 +3,14 @@ members = ["ps-service", "ps-cli", "ps-test-support"]
 
 [dependency-groups]
 dev = [
-    "basedpyright==1.39.10",
+    "basedpyright==1.40.2",
     "httpx>=0.28.1",
     "import-linter==2.3",
     "pytest>=8.0.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.6.1",
     "pyyaml>=6.0.3",   # scripts/check_mock_boundaries.py (AC-BI-009): parses docs/coding-standards/approved-mock-boundaries.yaml
-    "ruff==0.16.4",
+    "ruff==0.17.3",
     "vulture==2.16",
 ]
 
@@ -76,7 +76,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100          # AC-BI-001; dissolves ~908 E501 once `ruff format` runs
-target-version = "py314"   # AC-BI-001; matches requires-python of both members (accepted by ruff 0.16.4)
+target-version = "py314"   # AC-BI-001; matches requires-python of both members (accepted by ruff 0.17.3)
 src = ["ps-service/src", "ps-cli/src", "ps-test-support/src"]  # first-party roots for import sorting (I)
 extend-exclude = ["spikes"]  # nested git repo; no .py today; also keeps basedpyright-parity of scope explicit (ruff already skips it via .gitignore)
 

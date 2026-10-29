@@ -11,7 +11,7 @@ case.
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import json
 import ssl
 import sys
@@ -67,15 +67,15 @@ def _key() -> rsa.RSAPrivateKey:
 def _write_ca(directory: Path) -> tuple[rsa.RSAPrivateKey, x509.Certificate, Path]:
     key = _key()
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ps-cli test CA")])
-    now = datetime.datetime.now(datetime.UTC)
+    now = dt.datetime.now(dt.UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=1))
+        .not_valid_before(now - dt.timedelta(days=1))
+        .not_valid_after(now + dt.timedelta(days=1))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256())
     )
@@ -93,15 +93,15 @@ def _write_server_cert(
     expired: bool,
 ) -> tuple[Path, Path]:
     key = _key()
-    now = datetime.datetime.now(datetime.UTC)
-    not_after = now - datetime.timedelta(hours=1) if expired else now + datetime.timedelta(days=1)
+    now = dt.datetime.now(dt.UTC)
+    not_after = now - dt.timedelta(hours=1) if expired else now + dt.timedelta(days=1)
     cert = (
         x509.CertificateBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)]))
         .issuer_name(ca_cert.subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=2))
+        .not_valid_before(now - dt.timedelta(days=2))
         .not_valid_after(not_after)
         .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname)]), critical=False)
         .add_extension(

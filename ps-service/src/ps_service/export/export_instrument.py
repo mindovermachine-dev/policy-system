@@ -13,7 +13,7 @@ instrument's, so a re-export never drops another instrument's catalog entry.
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -190,7 +190,7 @@ def export_instrument(  # noqa: PLR0913 -- the two graphs, the gateway seam and 
         source_type=descriptor.source_type,
         jurisdiction=descriptor.jurisdiction,
         schema_version=DOMAIN_SCHEMA_VERSION,
-        exported_at=datetime.datetime.now(tz=datetime.UTC).isoformat(),
+        exported_at=dt.datetime.now(tz=dt.UTC).isoformat(),
         baseline_sha256=checksum_bytes(baseline_bytes),
         native_sha256=checksum_bytes(native_bytes),
     )
