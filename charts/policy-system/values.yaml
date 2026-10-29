@@ -12,7 +12,7 @@ falkordb:
   image:
     repository: falkordb/falkordb
     # Pinned tag; the bump procedure is in CONTRIBUTING.md.
-    tag: v4.22.1
+    tag: 6.0.3
   # The startup probe holds readiness and liveness off until the first PONG, which bounds
   # the time FalkorDB may take to load its RDB (90 x 10s = 15 min; raise
   # startup.failureThreshold for large datasets). All three probes require a PONG reply,
