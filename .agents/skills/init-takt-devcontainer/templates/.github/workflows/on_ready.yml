@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Set up and verify runner environment
         uses: ./.github/actions/prep-runner
@@ -56,7 +56,7 @@ jobs:
           fi
           echo "READY_PUSHER is configured."
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # Fetch full history to ensure we can merge and push
           token: ${{ secrets.READY_PUSHER }} # PAT with content:write (can not use secrets.GITHUB_TOKEN as it is a special case, it does not trigger other workflows on push)

@@ -25,7 +25,7 @@ Exit codes: `0` after a successful load; `1` if FalkorDB cannot be reached (a me
 goes to stderr).
 
 Requires a running FalkorDB instance, e.g.:
-    podman run --rm -d --name falkordb -p 6379:6379 falkordb/falkordb:v4.22.1
+    podman run --rm -d --name falkordb -p 6379:6379 falkordb/falkordb:6.0.3
 """
 
 from __future__ import annotations

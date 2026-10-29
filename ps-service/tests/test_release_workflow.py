@@ -583,7 +583,7 @@ def test_github_release_job_needs_publish_and_declares_contents_write() -> None:
 
 
 def test_github_release_job_checks_out_full_history_for_the_note_baseline() -> None:
-    """X-02: `actions/checkout@v6` with `fetch-depth: 0` -- `gh tt semver note` needs history."""
+    """X-02: the checkout step with `fetch-depth: 0` -- `gh tt semver note` needs history."""
     checkouts = _steps_using(_job(_GITHUB_RELEASE_JOB), "actions/checkout")
 
     assert len(checkouts) == 1, f"expected exactly one checkout step, found {len(checkouts)}"

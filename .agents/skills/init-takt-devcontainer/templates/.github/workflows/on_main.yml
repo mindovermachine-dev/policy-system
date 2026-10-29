@@ -22,7 +22,7 @@ jobs:
       contents: read # explictly required when repository is private, otherwise optional
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
 
       - name: Placeholder deploy step
         run: echo "Replace this step the appropriate build and deploy action for your stage environment"

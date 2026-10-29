@@ -115,6 +115,7 @@ class _FakeEmbeddingCaller:
 
 
 @pytest.mark.falkordb_live
+@pytest.mark.postgres_live
 def test_engprac_baseline_passes_company_merges_own_baseline_graph_shape_assertions(
     live_falkordb: FalkorDB, engprac_graphs: _EngpracGraphs
 ) -> None:

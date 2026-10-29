@@ -32,7 +32,7 @@ jobs:
       E2E_LOG: /tmp/backup-restore-e2e/e2e.log
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -42,9 +42,9 @@ jobs:
           version: "0.13.6"
 
       - name: Set up helm
-        uses: azure/setup-helm@v4.3.1
+        uses: azure/setup-helm@v5.0.1
         with:
-          version: v3.18.4
+          version: v4.3.1
 
       # The registry is reachable as kind-registry:5000 from the runner and from the nodes; the
       # chart pins imagePullPolicy: Always, so images must come from a registry, not kind load.

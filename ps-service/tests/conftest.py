@@ -159,3 +159,43 @@ def test_only_reviewable_kind(monkeypatch: pytest.MonkeyPatch) -> ReviewableKind
     spec = ReviewableKind("ProbeItem", "name", "per-instrument", "review-only")
     monkeypatch.setitem(REVIEWABLE_KINDS, spec.label, spec)
     return spec
+
+
+_POSTGRES_PROVISIONING_FIXTURES = frozenset(
+    {
+        "provisioned",
+        "fresh_provisioned",
+        "provisioned_graph_log",
+        "provisioned_state",
+        "state_postgres_env",
+        "fresh_state_postgres_env",
+    }
+)
+"""The fixtures that need `PS_TEST_POSTGRES_SUPERUSER_DSN`; a test using one is `postgres_live`."""
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Abort collection when a test provisions Postgres but is not marked `postgres_live`.
+
+    Runs before the `-m` deselection so a missing marker cannot hide behind the expression: a
+    `falkordb_live and not postgres_live` run would otherwise select the test and error on the
+    absent superuser DSN. The fixture closure includes indirect use (a fixture that itself
+    requests a provisioning fixture). A test that also carries `llm_live` is exempt: it is
+    selected only by the conjunction of every service marker it needs (see
+    `test_live_marker_selection.py`), never by `postgres_live` alone.
+
+    Raises:
+        pytest.UsageError: Listing every offending test id.
+    """
+    offenders = [
+        item.nodeid
+        for item in items
+        if _POSTGRES_PROVISIONING_FIXTURES.intersection(getattr(item, "fixturenames", ()))
+        and item.get_closest_marker("postgres_live") is None
+        and item.get_closest_marker("llm_live") is None
+    ]
+    if offenders:
+        listing = "\n  ".join(offenders)
+        message = f"tests using a Postgres fixture need @pytest.mark.postgres_live:\n  {listing}"
+        raise pytest.UsageError(message)

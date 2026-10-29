@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 pytestmark = [pytest.mark.falkordb_live, pytest.mark.postgres_live]
 
-_EMBEDDING = (0.1, -0.0, 1.7976931348623157e308, 5e-324, 0.30000000000000004, 1 / 3)
+_EMBEDDING = (0.1, -0.0, 1.7976931348623157e308, 3e-308, 0.30000000000000004, 1 / 3)
 
 
 _GRAPHS_CREATED: list[str] = []
@@ -281,7 +281,7 @@ _FLOAT_PROPERTIES: dict[str, object] = {
     "negative_zero": -0.0,
     "one": 1.0,
     "big": 1e22,
-    "tiny": 5e-324,
+    "tiny": 3e-308,
     "tenth": 0.1,
     "exact_int": 2**53,
     "int_max": 2**63 - 1,

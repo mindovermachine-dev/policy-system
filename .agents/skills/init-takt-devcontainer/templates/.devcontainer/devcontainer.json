@@ -9,7 +9,7 @@
       "version": "3.14"
     },
     "ghcr.io/devcontainers/features/node:1": {
-      "version": "24"
+      "version": "26"
     },
     "ghcr.io/devcontainers-extra/features/npm-packages:1": {
       "packages": [

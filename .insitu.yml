@@ -66,14 +66,14 @@ inventory:
   - id: install-helm
     name: Install Helm + helm-unittest plugin
     command: |
-      if ! command -v helm >/dev/null 2>&1; then
+      if ! command -v helm >/dev/null 2>&1 || ! helm version --template '{{.Version}}' | grep -q '^v4\.'; then
         dir=/usr/local/bin
         [ -w "$dir" ] || dir="$HOME/.local/bin"
         mkdir -p "$dir"
-        curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
-          | DESIRED_VERSION=v3.18.4 HELM_INSTALL_DIR="$dir" USE_SUDO=false bash
+        curl -sSL https://raw.githubusercontent.com/helm/helm/v4.3.1/scripts/get-helm-4 \
+          | DESIRED_VERSION=v4.3.1 HELM_INSTALL_DIR="$dir" USE_SUDO=false bash
       fi
-      helm plugin list | grep -q unittest || helm plugin install https://github.com/helm-unittest/helm-unittest
+      helm plugin list | grep -q 'unittest.*1\.2\.1' || { helm plugin uninstall unittest 2>/dev/null; helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.2.1 --verify=false; }
 
   - id: markdownlint
     name: Run markdownlint

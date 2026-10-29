@@ -85,9 +85,10 @@ def read_tracked_text(paths: Iterable[str], root: Path) -> dict[str, str]:
     return files
 
 
-def _tracked_paths() -> list[str]:
+def _visible_paths() -> list[str]:
+    """List tracked paths plus untracked paths that are not ignored."""
     out = subprocess.run(
-        ["git", "ls-files", "-z"],  # noqa: S607
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],  # noqa: S607
         cwd=_REPO_ROOT,
         capture_output=True,
         timeout=_GIT_TIMEOUT_SECONDS,
@@ -152,7 +153,21 @@ def test_prod_values_do_not_override_the_falkordb_image() -> None:
 
 
 def test_every_tracked_falkordb_image_reference_matches_the_chart_tag() -> None:
-    files = read_tracked_text(_tracked_paths(), _REPO_ROOT)
+    files = read_tracked_text(_visible_paths(), _REPO_ROOT)
 
     assert set(_MUST_BE_SCANNED) <= files.keys()
     assert find_violations(files, falkordb_image_tag()) == []
+
+
+def test_chart_tag_is_a_bare_three_part_version() -> None:
+    tag = falkordb_image_tag()
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+", tag), tag
+    assert int(tag.split(".")[0]) >= 6
+
+
+def test_bare_version_reference_is_parsed_as_the_tag() -> None:
+    files = {"a.md": f"run {_IMAGE}:6.0.3"}
+
+    assert find_violations(files, "6.0.3") == []
+    assert find_violations(files, "6.0.4") == ["a.md:1: found 6.0.3, chart pins 6.0.4"]

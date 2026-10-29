@@ -32,7 +32,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: falkordb/falkordb:v4.22.1
+          value: falkordb/falkordb:6.0.3
   - it: falkordb browser service does not render under prod values
     template: falkordb-browser-service.yaml
     asserts:

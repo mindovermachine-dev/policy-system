@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import uuid
+from itertools import pairwise
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -157,6 +158,31 @@ def test_a_write_to_a_watched_key_after_the_watch_began_refuses_the_swap(keys: _
     assert keys.exists(staged)
 
 
+def _is_torn_read(states: Sequence[bool]) -> bool:
+    """Whether per-graph "holds the new content" flags, read in order, cannot come from one swap.
+
+    The three keys change in one atomic rename, but a reader asks for them one after another, so
+    "old, old, new" is a legitimate read straddling the swap. A leg read as new while a LATER leg
+    is still old cannot happen.
+    """
+    return any(earlier and not later for earlier, later in pairwise(states))
+
+
+def test_a_read_straddling_the_swap_is_not_torn() -> None:
+    assert not _is_torn_read([False, False, True])
+    assert not _is_torn_read([False, True, True])
+
+
+def test_a_new_leg_followed_by_an_old_leg_is_torn() -> None:
+    assert _is_torn_read([True, False, False])
+    assert _is_torn_read([True, True, False])
+
+
+def test_a_read_wholly_before_or_after_the_swap_is_not_torn() -> None:
+    assert not _is_torn_read([False, False, False])
+    assert not _is_torn_read([True, True, True])
+
+
 def _group(graphs: Sequence[str], suffix: str) -> MultiGraphGroup:
     return MultiGraphGroup(
         audit_event_id=_AUDIT_EVENT_ID,
@@ -189,7 +215,7 @@ def test_a_reader_polling_the_three_graphs_across_a_real_swap_sees_none_or_all(
     def reader() -> None:
         while not stop.is_set():
             states = [keys.ids(graph) == {f"{graph}-new"} for graph in graphs]
-            if any(states) and not all(states) and states != sorted(states, reverse=True):
+            if _is_torn_read(states):
                 seen_new_then_old.append(str(states))
             stop.wait(_POLL_SECONDS)
 

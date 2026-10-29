@@ -67,7 +67,7 @@ The devcontainer (`.devcontainer/`) is a Docker Compose setup with two
 services:
 
 - `app` — the dev/backend container VS Code attaches to.
-- `falkordb` — the community-maintained `falkordb/falkordb:v4.22.1` image
+- `falkordb` — the community-maintained `falkordb/falkordb:6.0.3` image
   (pinned in `charts/policy-system/values.yaml` as `falkordb.image.tag`),
   started automatically alongside `app`.
 
@@ -76,7 +76,9 @@ services start together.
 
 ### Bumping the FalkorDB image
 
-Never use `latest`; tags are `vMAJOR.MINOR.PATCH`. To move to a new tag:
+Never use `latest`. Tags are exact versions as the registry publishes them: the 4.x line carries a
+`v` prefix (`v4.22.3`) and the 6.x line does not (`6.0.3`); `falkordb_image_tag()` and the pin
+guard accept both. To move to a new tag:
 
 1. Change `falkordb.image.tag` in `charts/policy-system/values.yaml`. It is the
    only source the chart and the Python tests read.
@@ -85,16 +87,47 @@ Never use `latest`; tags are `vMAJOR.MINOR.PATCH`. To move to a new tag:
    `falkordb.image.tag` row in `docs/artifacts/helm-chart-values-reference.md`,
    and the image tag and observation date in the docstring of
    `ps-service/tests/query_engine/test_ro_query_rejects_write_live.py`.
-3. Start a throwaway container of the new tag and run the live read-only test:
-   `PS_TEST_FALKORDB_PORT=<port> uv run pytest ps-service/tests/query_engine/test_ro_query_rejects_write_live.py -m falkordb_live -p no:xdist -o addopts=""`.
+3. Start a throwaway container of the new tag on a spare port and run every FalkorDB-only live
+   test against it. The marker expression overrides the default deselection while the repository
+   `addopts` stay in place, which the live-marker serialisation needs:
+   `PS_TEST_FALKORDB_PORT=<port> PS_FALKORDB_PORT=<port> uv run pytest ps-service/tests -m "falkordb_live and not postgres_live and not llm_live and not cellar_live and not integration" -rA`.
+   The run must end in `N passed` with `N` equal to the `--collect-only` count and no skipped
+   tests. Run it on the previous tag first, so a failure on the new tag is a comparison.
 4. Run the smoke tests:
-   `uv run pytest ps-service/tests/test_container_image.py -m container_image -p no:xdist -o addopts=""`.
+   `uv run pytest ps-service/tests/test_container_image.py -m container_image -rA`.
 5. Re-check that `redis-cli` (FalkorDB) and `pg_isready` (authentik Postgres) exist in
    the new image: the chart probes call them.
-6. Run `helm unittest charts/policy-system` and
+6. Prove the data survives the change on a real volume:
+   `tools/falkordb-upgrade-proof/run_on_kind.sh --from-tag <previous-tag>` seeds a known graph
+   with the previous image on a PersistentVolumeClaim of the local kind cluster, opens it with the
+   chart's image, then opens it again with the previous image. It exits 1 unless the per label
+   node counts, per type edge counts, graph list and index definitions are identical in all three
+   legs. Without a cluster, repeat the same three legs with `podman run -v <dir>:/var/lib/falkordb/data`
+   on `<previous-tag>`, the new tag and `<previous-tag>` again (running `SAVE` before each stop)
+   and compare the same queries by hand.
+7. Run `helm unittest charts/policy-system` and
    `uv run pytest ps-service/tests/test_falkordb_image_pin.py`.
-7. Record the new tag and the evidence from steps 3 to 6 on the GitHub issue for the
+8. Record the new tag and the evidence from steps 3 to 7 on the GitHub issue for the
    bump (or in the wrapup commit message).
+
+Since 6.0.2 the image starts as root, hands the data directory to uid 999 and runs the server as
+that user. This only happens when the directory holds nothing but `*.rdb`, `nodes*.conf` and
+the append-only file directory; otherwise the server keeps running as root. The chart needs no change: an existing
+volume keeps loading, and the previous image reads a volume the new one has written because it runs
+as root. In the devcontainer the bind-mounted `.falkordb-data` directory can be re-owned by the first
+start of a 6.x image; under rootless podman that uid maps to a sub-uid, so the host user may then
+need `podman unshare rm -rf .falkordb-data` to reset it. The image has a documented switch that keeps
+the server running as root; set it on the compose service if the reset is not acceptable.
+
+### Rolling back a FalkorDB image
+
+On a deployed cluster, take a backup before the upgrade (operations guide, Backup). To roll back:
+
+1. Set `falkordb.image.tag` back to the previous tag and `helm upgrade`. The previous image opens
+   the volume the newer image wrote; `run_on_kind.sh` (step 6 above) exercises exactly this leg.
+2. If the graph is empty or damaged afterwards, PS Service rebuilds it from the graph mutation log
+   when it starts (operations guide, Graph replay at startup). If PS Postgres is lost as well,
+   restore from the backup taken before the upgrade (operations guide, Restore).
 
 `devx-cafe/gh-tt` must be installed as part of the devcontainer setup. Once the devcontainer is up you must run the following:
 

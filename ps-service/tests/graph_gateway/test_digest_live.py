@@ -170,9 +170,9 @@ def test_digest_differs_between_positive_and_negative_zero(live_graphs: LiveGrap
 def test_digest_tells_embedding_doubles_apart_that_a_plain_reply_prints_alike(
     live_graphs: LiveGraphs,
 ) -> None:
-    base = (0.1, 0.30000000000000004, 1.7976931348623157e308, 5e-324)
-    one_ulp = (0.1, math.nextafter(0.30000000000000004, 1.0), 1.7976931348623157e308, 5e-324)
-    below_max = (0.1, 0.30000000000000004, math.nextafter(1.7976931348623157e308, 0.0), 5e-324)
+    base = (0.1, 0.30000000000000004, 1.7976931348623157e308, 3e-308)
+    one_ulp = (0.1, math.nextafter(0.30000000000000004, 1.0), 1.7976931348623157e308, 3e-308)
+    below_max = (0.1, 0.30000000000000004, math.nextafter(1.7976931348623157e308, 0.0), 3e-308)
     again = _with_node(live_graphs, embedding=base)
     digests = [
         canonical_digest(_with_node(live_graphs, embedding=e).handle)

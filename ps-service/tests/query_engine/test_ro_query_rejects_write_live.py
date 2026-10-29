@@ -1,12 +1,16 @@
 r"""Live: FalkorDB itself rejects a write that evades the textual guard.
 
-Observed behaviour (image `falkordb/falkordb:v4.22.1`, observed 2026-10-18):
+Observed behaviour (image `falkordb/falkordb:6.0.3`, observed 2026-10-29):
 
-- The chosen write is `CALL db.idx.fulltext.createNodeIndex('Spike','name')`. The Query Engine's
+- The chosen write is `CALL db.idx.fulltext.createNodeIndex('Spike')`. The Query Engine's
   textual guard (`\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|FOREACH)\b`) lets it through, because
-  `createNodeIndex` is not the word CREATE.
-- Through `GRAPH.QUERY` it SUCCEEDS and creates an index: it truly evades the guard and mutates.
-- Through `GRAPH.RO_QUERY` the server rejects it with
+  `createNodeIndex` is not the word CREATE. The procedure takes at most one argument on this image
+  (two or more fail with an arity error), and a call is classified as a write: the server answers
+  it with the read-only rejection below on both `GRAPH.QUERY` and `GRAPH.RO_QUERY`.
+- A write that does run through `GRAPH.QUERY` is the index DDL `CREATE INDEX FOR (n:Spike) ON
+  (n.id)`: the writable handle creates the index and the read-only handle is rejected by the server
+  without creating one.
+- Through `GRAPH.RO_QUERY` the server rejects every write with
   `graph.RO_QUERY is to be executed only on read-only queries`.
 - `GRAPH.RO_QUERY` on a graph key that does not exist raises `Invalid graph operation on empty
   key` where `GRAPH.QUERY` answers `[[0]]` and creates the key; `ReadOnlyGraph` maps exactly that
@@ -37,7 +41,8 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.falkordb_live
 
-_EVADING_WRITE = "CALL db.idx.fulltext.createNodeIndex('Spike','name')"
+_EVADING_WRITE = "CALL db.idx.fulltext.createNodeIndex('Spike')"
+_INDEX_DDL = "CREATE INDEX FOR (n:Spike) ON (n.id)"
 _SERVER_REJECTION = "graph.RO_QUERY is to be executed only on read-only queries"
 
 
@@ -71,14 +76,26 @@ def test_the_evading_write_passes_the_textual_guard() -> None:
     assert is_write_clause(_EVADING_WRITE) is False
 
 
-def test_the_writable_handle_would_create_the_index(
-    database: FalkorDB, seeded_graph_name: str
-) -> None:
+def test_the_writable_handle_creates_the_index(database: FalkorDB, seeded_graph_name: str) -> None:
     graph = select_writable(database, seeded_graph_name)
 
-    graph.query(_EVADING_WRITE)
+    graph.query(_INDEX_DDL)
 
     assert _index_count(graph) == 1
+
+
+def test_the_read_only_handle_rejects_index_ddl_and_creates_no_index(
+    database: FalkorDB, seeded_graph_name: str
+) -> None:
+    host, port = falkordb_endpoint()
+    read_only = open_read_only_database(host, port, **FALKORDB_TEST_TIMEOUTS).select_graph(
+        seeded_graph_name
+    )
+
+    with pytest.raises(Exception, match=_SERVER_REJECTION):
+        read_only.query(_INDEX_DDL)
+
+    assert _index_count(select_writable(database, seeded_graph_name)) == 0
 
 
 def test_the_read_only_path_rejects_the_evading_write_and_creates_no_index(

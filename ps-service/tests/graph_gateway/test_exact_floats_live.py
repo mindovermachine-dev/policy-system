@@ -9,10 +9,12 @@ from __future__ import annotations
 import math
 import random
 import struct
+import sys
 import time
 from typing import TYPE_CHECKING, cast
 
 import pytest
+import redis.exceptions
 
 from graph_gateway._fakes import property_columns
 from ps_service.graph_gateway.exact_floats import PROPERTY_COLUMNS, restore_properties
@@ -27,8 +29,8 @@ _HARD = (
     -0.0,
     1.7976931348623157e308,
     -1.7976931348623157e308,
-    5e-324,
-    -5e-324,
+    3e-308,
+    -3e-308,
     2.2250738585072014e-308,
     0.30000000000000004,
     1 / 3,
@@ -44,11 +46,12 @@ _READ = (
 
 
 def _random_doubles(count: int) -> list[float]:
+    """Finite doubles that are zero or normal: the server refuses a subnormal parameter value."""
     generator = random.Random(207)  # noqa: S311 -- reproducible test data, not security
     values: list[float] = []
     while len(values) < count:
         (value,) = struct.unpack(">d", generator.getrandbits(64).to_bytes(8, "big"))
-        if math.isfinite(value):
+        if math.isfinite(value) and (value == 0.0 or abs(value) >= sys.float_info.min):
             values.append(value)
     return values
 
@@ -152,3 +155,14 @@ def test_exact_list_columns_of_embedding_nodes_cost_time_linear_in_the_list_leng
 
     assert len(rows) == _EMBEDDING_NODES
     assert seconds < _EXACT_LIST_BUDGET_SECONDS
+
+
+def test_a_subnormal_parameter_is_refused_loudly_and_stores_nothing(
+    live_graphs: LiveGraphs,
+) -> None:
+    graph = live_graphs.new()
+
+    with pytest.raises(redis.exceptions.ResponseError, match="Failed to parse the value"):
+        graph.rows("CREATE (:Probe {id: 's', weight: $weight})", {"weight": 5e-324})
+
+    assert graph.rows("MATCH (n:Probe) RETURN count(n)") == [[0]]

@@ -3,7 +3,7 @@
 These tests exercise the raw `redis`/`falkordb` primitives, not `ps_service` code. FalkorDB
 graph-module builds up to at least 4.20.4 double the node count of both the source key and the
 destination key when a `DUMP` blob is `RESTORE`d into a different key; the image pinned in
-`charts/policy-system/values.yaml` (`falkordb/falkordb:v4.22.1`) restores the graph unchanged.
+`charts/policy-system/values.yaml` (`falkordb/falkordb:6.0.3`) restores the graph unchanged.
 The `DUMP`/`RESTORE` test passes on the pinned image and fails on an image with the doubling
 defect, so moving the pin to such an image is caught here.
 

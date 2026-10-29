@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Loads CRA, GDPR, NIS2, and Engineering Practices into FalkorDB via load_graph.py.
 # Requires a running FalkorDB instance, e.g.:
-#   podman run --rm -d --name falkordb -p 6379:6379 falkordb/falkordb:v4.22.1
+#   podman run --rm -d --name falkordb -p 6379:6379 falkordb/falkordb:6.0.3
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
