@@ -56,7 +56,8 @@ GUARDRAIL_CHECKS = [
     "verify-domain-schema-freshness",
 ]
 CI_VERIFY = "gh insitu run trunk-worthy test audit"
-CI_WORKFLOWS = ("on_dev.yml", "on_ready.yml")
+CI_DEV_VERIFY = "gh insitu run trunk-worthy"
+CI_VERIFY_BY_WORKFLOW = {"on_dev.yml": CI_DEV_VERIFY, "on_ready.yml": CI_VERIFY}
 LEGACY_RUNNER = "pre" + "-commit"
 SELECTION_FLAGS = ("--changed" + "-since", "--all-files", "PYTHONPATH")
 
@@ -179,25 +180,32 @@ def test_guardrail_checks_run_in_trunk_worthy_and_never_in_fix_all(check_id: str
     assert check_id not in _wave_checks("fix-all")
 
 
-@pytest.mark.parametrize("workflow", CI_WORKFLOWS)
-def test_ci_workflow_verifies_with_all_three_waves(workflow: str) -> None:
-    text = (WORKFLOWS_DIR / workflow).read_text(encoding="utf-8")
+def test_on_dev_workflow_verifies_with_the_short_wave_only() -> None:
+    text = (WORKFLOWS_DIR / "on_dev.yml").read_text(encoding="utf-8")
+
+    assert f"verify: {CI_DEV_VERIFY}\n" in text
+    assert "test audit" not in text
+
+
+def test_on_ready_workflow_verifies_with_all_three_waves() -> None:
+    text = (WORKFLOWS_DIR / "on_ready.yml").read_text(encoding="utf-8")
 
     assert f"verify: {CI_VERIFY}" in text
-    assert "verify: gh insitu run trunk-worthy\n" not in text
+    assert f"verify: {CI_DEV_VERIFY}\n" not in text
 
 
-@pytest.mark.parametrize("workflow", CI_WORKFLOWS)
-def test_ci_workflow_job_can_post_commit_statuses(workflow: str) -> None:
+@pytest.mark.parametrize(("workflow", "verify"), CI_VERIFY_BY_WORKFLOW.items())
+def test_ci_workflow_job_can_post_commit_statuses(workflow: str, verify: str) -> None:
     document = _yaml(WORKFLOWS_DIR / workflow)
     jobs = [
         job
         for job in document["jobs"].values()
-        if CI_VERIFY in yaml.safe_dump(job, default_flow_style=False)
+        if any(step.get("uses") == "./.github/actions/prep-runner" for step in job.get("steps", []))
     ]
 
     assert len(jobs) == 1
     job = jobs[0]
+    assert f"verify: {verify}" in (WORKFLOWS_DIR / workflow).read_text(encoding="utf-8")
     assert job["permissions"]["statuses"] == "write"
     assert "GH_TOKEN" in yaml.safe_dump(job)
 

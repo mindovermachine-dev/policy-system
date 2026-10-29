@@ -54,7 +54,7 @@ The workflow is as follows:
    ```
 
    Pushing a `ready/*` branch triggers `on_ready.yml`: it runs the
-   `trunk-worthy` check suite, then auto-merges to `main` -- no manual Pull
+   full `trunk-worthy test audit` gate, then auto-merges to `main` -- no manual Pull
    Request needed. Once merged, `ps-service`, `policy-service plugin` and `ps-cli`
    releases are cut automatically -- see [Releasing](#releasing) below.
 
@@ -119,8 +119,8 @@ and [`docs/coding-standards/level1-coding-principles.md`](docs/coding-standards/
 Python code is linted with **ruff** (`select = ["ALL"]` minus a documented opt-out
 list), formatted with **ruff format**, type-checked with **basedpyright** in strict
 mode, and its dependencies audited with **pip-audit**. Config lives in the root
-`pyproject.toml`. CI runs `gh insitu run trunk-worthy test audit`: ruff check and ruff format
-run in the `trunk-worthy` wave, which is also the git commit hook; basedpyright runs in the
+`pyproject.toml`. `on_ready.yml` runs `gh insitu run trunk-worthy test audit` and `on_dev.yml` runs
+`gh insitu run trunk-worthy`: ruff check and ruff format run in the `trunk-worthy` wave, which is also the git commit hook; basedpyright runs in the
 `test` wave and pip-audit in the `audit` wave. A violation blocks the commit or fails CI.
 
 ## Testing
@@ -203,9 +203,10 @@ holds pip-audit and the action-reference check.
 
 Mechanical rules from the audits in [`docs/audits/`](docs/audits/) are checked automatically so
 the cleanup does not regress. Each check is defined once in `.insitu.yml` and runs over the whole
-tree in the `trunk-worthy` wave: in the git commit hook (`.githooks/pre-commit`) and first in CI. The
+tree in the `trunk-worthy` wave: in the git commit hook (`.githooks/pre-commit`) and on every push to an issue branch (`on_dev.yml`). The
 hook checks the working tree, not the index, so a commit passes or fails on what CI will see.
-There is no push-time hook; CI runs all three waves. A failure prints
+There is no push-time hook; `on_dev.yml` runs only `trunk-worthy` and `on_ready.yml` runs all three
+waves before the merge, so run `gh insitu run trunk-worthy test audit` locally before `gh tt deliver`. A failure prints
 `RULE <rule-id>: <file>:<line>: <what>. How to fix: <one line>` for the scripts, and the tool's
 own message for the third-party checks.
 

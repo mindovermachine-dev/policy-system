@@ -43,7 +43,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.divergence.outputs.has_commits == 'true'
         uses: ./.github/actions/prep-runner
         with:
-          verify: gh insitu run trunk-worthy test audit
+          verify: gh insitu run trunk-worthy
 
   authentik-blueprint:
     name: Authentik blueprint
