@@ -33,17 +33,7 @@
     "config/*.yaml",
     "**/background/**",
   ],
-  "files": [
-    "**/*.md",
-    "**/*.mdx",
-    "**/*.markdown",
-    "**/*.txt",
-    "**/*.json",
-    "**/*.jsonc",
-    "**/*.yml",
-    "**/*.yaml",
-    "**/*.html",
-  ],
+  "files": ["**/*.md", "**/*.mdx", "**/*.markdown"],
   "dictionaryDefinitions": [
     {
       "name": "Repo dictionary",

@@ -7,7 +7,7 @@ This repository supports the TakT skill and is initialized with a devcontainer a
 ## Quality Gates
 
 - Git hooks are configured via `.githooks`
-- pre-commit runs `trunk-worthy` wave from `gh insitu`
+- the git commit hook runs the `trunk-worthy` wave from `gh insitu`
 - After file edits, run:
   - `gh insitu run fix-all`
 

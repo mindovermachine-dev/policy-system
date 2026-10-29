@@ -1,9 +1,9 @@
-"""Tests that the pinned third-party guardrail hooks are declared and run in CI.
+"""Tests that the pinned third-party guardrail tools are declared and run in `trunk-worthy`.
 
-The unused-symbol and import-layering checks are third-party tools run through pre-commit with
-pinned versions, so they need no network access in this test tier: the tests read the hook
-declarations, the CI inventory and the tool configuration, and fail when a pin, a hook, a CI
-command or a suppression justification drifts.
+The unused-symbol and import-layering checks are third-party tools pinned in the uv dev group,
+so they need no network access in this test tier: the tests read `pyproject.toml`, the
+`.insitu.yml` inventory and the tool configuration, and fail when a pin, a command or a
+suppression justification drifts.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PRECOMMIT_PATH = REPO_ROOT / ".pre-commit-config.yaml"
 INSITU_PATH = REPO_ROOT / ".insitu.yml"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 SERVICE_SOURCE_ROOTS = ("ps-service/src", "ps-cli/src", "ps-test-support/src", "scripts")
 EXPECTED_PINS = {"unused-symbols": "vulture==2.16", "import-layering": "import-linter==2.3"}
+EXPECTED_COMMANDS = {"unused-symbols": "uv run vulture", "import-layering": "uv run lint-imports"}
 SUPPRESSION_PATTERN = re.compile(r"# noqa: V10\d - \S")
 BARE_SUPPRESSION_PATTERN = re.compile(r"# noqa: V10\d\s*$")
 
@@ -32,17 +32,6 @@ def _yaml(path: Path) -> dict[str, Any]:
 
 def _pyproject() -> dict[str, Any]:
     return tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
-
-
-def _hook(hook_id: str) -> dict[str, Any]:
-    hooks = [
-        hook
-        for repo in _yaml(PRECOMMIT_PATH)["repos"]
-        for hook in repo["hooks"]
-        if hook["id"] == hook_id
-    ]
-    assert len(hooks) == 1, f"hook {hook_id} must be declared exactly once"
-    return cast("dict[str, Any]", hooks[0])
 
 
 def _insitu_check(check_id: str) -> dict[str, Any]:
@@ -57,46 +46,20 @@ def _wave_checks(wave_id: str) -> list[str]:
     return cast("list[str]", waves[0]["checks"])
 
 
-@pytest.mark.parametrize(("hook_id", "pin"), sorted(EXPECTED_PINS.items()))
-def test_tool_hook_builds_a_pinned_environment_without_staged_file_arguments(
-    hook_id: str, pin: str
-) -> None:
-    hook = _hook(hook_id)
-
-    assert hook["language"] == "python"
-    assert hook["additional_dependencies"] == [pin]
-    assert hook["pass_filenames"] is False
+@pytest.mark.parametrize(("check_id", "pin"), sorted(EXPECTED_PINS.items()))
+def test_dev_group_pins_the_tool(check_id: str, pin: str) -> None:
+    assert pin in _pyproject()["dependency-groups"]["dev"], check_id
 
 
-@pytest.mark.parametrize("hook_id", sorted(EXPECTED_PINS))
-def test_ci_runs_the_same_hook_over_all_files(hook_id: str) -> None:
-    command = _insitu_check(hook_id)["command"]
-
-    assert command.strip() == f"uv run pre-commit run {hook_id} --all-files"
+@pytest.mark.parametrize("check_id", sorted(EXPECTED_COMMANDS))
+def test_ci_runs_the_tool_directly_over_the_whole_tree(check_id: str) -> None:
+    assert _insitu_check(check_id)["command"].strip() == EXPECTED_COMMANDS[check_id]
 
 
-@pytest.mark.parametrize("hook_id", sorted(EXPECTED_PINS))
-def test_trunk_worthy_wave_lists_the_tool_check_and_fix_all_does_not(hook_id: str) -> None:
-    assert hook_id in _wave_checks("trunk-worthy")
-    assert hook_id not in _wave_checks("fix-all")
-
-
-@pytest.mark.parametrize(
-    ("hook_id", "staged", "expected"),
-    [
-        ("unused-symbols", "ps-service/src/ps_service/api/app.py", True),
-        ("unused-symbols", "scripts/check_doc_links.py", True),
-        ("unused-symbols", "pyproject.toml", True),
-        ("unused-symbols", "ps-service/tests/api/test_app.py", False),
-        ("import-layering", "ps-cli/src/ps_cli/main.py", True),
-        ("import-layering", "pyproject.toml", True),
-        ("import-layering", "README.md", False),
-    ],
-)
-def test_hook_file_filter_selects_only_files_that_can_change_the_result(
-    hook_id: str, staged: str, *, expected: bool
-) -> None:
-    assert bool(re.search(_hook(hook_id)["files"], staged)) is expected
+@pytest.mark.parametrize("check_id", sorted(EXPECTED_PINS))
+def test_trunk_worthy_wave_lists_the_tool_check_and_fix_all_does_not(check_id: str) -> None:
+    assert check_id in _wave_checks("trunk-worthy")
+    assert check_id not in _wave_checks("fix-all")
 
 
 def test_vulture_config_gates_at_high_confidence_with_no_global_name_ignore() -> None:
@@ -147,11 +110,3 @@ def test_import_layering_baseline_only_ignores_edges_into_the_api_package() -> N
         assert re.fullmatch(r"ps_service\.\w+(\.\w+)* -> ps_service\.api\.\w+", edge), edge
     for other in ("cli-not-service", "service-not-cli", "leaf-foundations"):
         assert "ignore_imports" not in contracts[other]
-
-
-def test_import_layering_hook_sets_source_roots_and_leaves_no_cache_or_bytecode() -> None:
-    entry = _hook("import-layering")["entry"]
-
-    assert "PYTHONPATH=ps-service/src:ps-cli/src:ps-test-support/src" in entry
-    assert "PYTHONDONTWRITEBYTECODE=1" in entry
-    assert "--no-cache" in entry

@@ -10,18 +10,15 @@ compiles or executes a scanned file. Only docstrings (including bare string stat
 comments are inspected; ordinary string literals, external URLs and identifiers that merely
 contain a banned word are ignored.
 
-Usage: `uv run python scripts/check_docstring_provenance.py [paths...] [--changed-since REF]
-[--tracked]`
+Usage: `uv run python scripts/check_docstring_provenance.py [paths...] [--tracked]`
 
 Modes:
     paths: explicit files or directories (recursive); every finding is reported.
-    --changed-since REF: files that differ from the merge base of REF and HEAD, including
-        staged, unstaged and untracked files; only findings on added lines are reported.
-    --tracked: every file tracked by git; every finding is reported. CI runs this mode over
-        the whole tree; the pre-commit hook runs --changed-since HEAD on the lines being changed.
+    --tracked: every file tracked by git; every finding is reported. The `trunk-worthy` wave
+        runs this mode over the whole tree.
 
 Exit codes: 0 clean, 1 at least one finding, 2 usage or environment error (including an
-unparsable file or an unresolvable git reference).
+unparsable file or a failed git call).
 """
 
 from __future__ import annotations
@@ -50,7 +47,6 @@ EXCLUDED_DIRS = frozenset({"spikes", ".venv", "node_modules", ".orchestrator"})
 PYTHON_SUFFIX = ".py"
 
 _URL_PATTERN = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
-_HUNK_PATTERN = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,14 +146,10 @@ class ScanError:
 
 @dataclass(frozen=True, slots=True)
 class Target:
-    """A file to scan and the lines on which findings count.
-
-    `added_lines` is `None` when every finding is reported.
-    """
+    """A file to scan and the name reported for it."""
 
     path: Path
     display: str
-    added_lines: frozenset[int] | None
 
 
 class GitError(Exception):
@@ -300,23 +292,6 @@ def scan_source(source: str, relative_path: str) -> list[Finding]:
     return sorted(findings, key=lambda f: (f.line, f.pattern_id, f.text))
 
 
-def parse_added_lines(diff_text: str) -> frozenset[int]:
-    """Collect the new-side line numbers added by a zero-context unified diff.
-
-    Args:
-        diff_text: Output of `git diff -U0` for one file.
-
-    Returns:
-        The set of added or changed line numbers; deletion-only hunks contribute none.
-    """
-    added: set[int] = set()
-    for match in _HUNK_PATTERN.finditer(diff_text):
-        start = int(match.group(1))
-        count = 1 if match.group(2) is None else int(match.group(2))
-        added.update(range(start, start + count))
-    return frozenset(added)
-
-
 def _read_source(path: Path) -> str:
     """Read a Python file honouring its declared encoding.
 
@@ -338,27 +313,24 @@ def _read_source(path: Path) -> str:
 
 
 def _scan_target(target: Target) -> list[Finding]:
-    """Scan one target and apply its added-line filter.
+    """Scan one target.
 
     Args:
         target: File to scan.
 
     Returns:
-        The findings that count for this target.
+        Every finding in the file.
 
     Raises:
         ScanFailure: If the file cannot be read, decoded or parsed.
     """
     source = _read_source(target.path)
     try:
-        findings = scan_source(source, target.display)
+        return scan_source(source, target.display)
     except SyntaxError as exc:
         raise ScanFailure(exc.lineno or 1, f"cannot parse file: {exc.msg}") from exc
     except (tokenize.TokenError, ValueError) as exc:
         raise ScanFailure(1, f"cannot tokenize file: {exc}") from exc
-    if target.added_lines is None:
-        return findings
-    return [f for f in findings if f.line in target.added_lines]
 
 
 # --- target selection -------------------------------------------------------------------------
@@ -461,49 +433,10 @@ def tracked_targets(root: Path, timeout: float = GIT_TIMEOUT_SECONDS) -> list[Ta
     """
     listing = run_git(["ls-files", "-z", "--", "*.py"], root, timeout)
     return [
-        Target(root / entry, entry, None)
+        Target(root / entry, entry)
         for entry in _python_entries(_split_nul(listing))
         if (root / entry).is_file()
     ]
-
-
-def changed_targets(ref: str, root: Path, timeout: float = GIT_TIMEOUT_SECONDS) -> list[Target]:
-    """List Python files changed since the merge base, with their added lines.
-
-    Args:
-        ref: Base reference, compared through its merge base with HEAD.
-        root: Repository root.
-        timeout: Per-git-call timeout in seconds.
-
-    Returns:
-        Targets for changed tracked files (filtered to added lines) and untracked,
-        non-ignored files (unfiltered).
-
-    Raises:
-        GitError: If the reference cannot be resolved or a git call fails.
-    """
-    try:
-        base = run_git(["merge-base", ref, "HEAD"], root, timeout).strip()
-    except GitError as exc:
-        message = f"cannot resolve base reference {ref!r}: {exc}"
-        raise GitError(message) from exc
-    changed = run_git(
-        ["diff", "--name-only", "-z", "--diff-filter=ACMR", base, "--"], root, timeout
-    )
-    targets: list[Target] = []
-    for entry in _python_entries(_split_nul(changed)):
-        diff = run_git(
-            ["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", entry], root, timeout
-        )
-        if (root / entry).is_file():
-            targets.append(Target(root / entry, entry, parse_added_lines(diff)))
-    untracked = run_git(["ls-files", "--others", "--exclude-standard", "-z"], root, timeout)
-    targets.extend(
-        Target(root / entry, entry, None)
-        for entry in _python_entries(_split_nul(untracked))
-        if (root / entry).is_file()
-    )
-    return targets
 
 
 def _explicit_targets(raw_paths: Iterable[str]) -> list[Target]:
@@ -523,10 +456,10 @@ def _explicit_targets(raw_paths: Iterable[str]) -> list[Target]:
     for raw in raw_paths:
         path = Path(raw)
         if path.is_file():
-            targets.append(Target(path, raw, None))
+            targets.append(Target(path, raw))
         elif path.is_dir():
             targets.extend(
-                Target(file, str(file), None)
+                Target(file, str(file))
                 for file in sorted(path.rglob(f"*{PYTHON_SUFFIX}"))
                 if not _is_excluded(file.relative_to(path).parts)
             )
@@ -547,23 +480,17 @@ def _build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("paths", nargs="*", help="files or directories to scan")
-    parser.add_argument(
-        "--changed-since",
-        metavar="REF",
-        help="scan files changed since the merge base of REF and HEAD; added lines only",
-    )
     parser.add_argument("--tracked", action="store_true", help="scan every tracked Python file")
     return parser
 
 
-def _collect_targets(paths: list[str], changed_since: str | None, *, tracked: bool) -> list[Target]:
+def _collect_targets(paths: list[str], *, tracked: bool) -> list[Target]:
     """Resolve the selected modes into one target per file.
 
     Explicit paths take precedence over git-derived targets for the same file.
 
     Args:
         paths: Explicit file or directory arguments.
-        changed_since: Base reference for changed-lines mode, if requested.
         tracked: Whether to include every tracked file.
 
     Returns:
@@ -574,13 +501,9 @@ def _collect_targets(paths: list[str], changed_since: str | None, *, tracked: bo
         FileNotFoundError: If an explicit path does not exist.
     """
     by_display: dict[str, Target] = {}
-    if changed_since is not None or tracked:
+    if tracked:
         root = Path(run_git(["rev-parse", "--show-toplevel"], Path.cwd()).strip())
-        if tracked:
-            by_display.update({t.display: t for t in tracked_targets(root)})
-        if changed_since is not None:
-            for target in changed_targets(changed_since, root):
-                by_display.setdefault(target.display, target)
+        by_display.update({t.display: t for t in tracked_targets(root)})
     by_display.update({t.display: t for t in _explicit_targets(paths)})
     return [by_display[key] for key in sorted(by_display)]
 
@@ -618,13 +541,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     args = _build_parser().parse_args(argv)
     paths = cast("list[str]", args.paths)
-    changed_since = cast("str | None", args.changed_since)
     tracked = cast("bool", args.tracked)
-    if not (paths or changed_since is not None or tracked):
-        sys.stderr.write("error: give paths, --changed-since REF or --tracked\n")
+    if not (paths or tracked):
+        sys.stderr.write("error: give paths or --tracked\n")
         return EXIT_ERROR
     try:
-        targets = _collect_targets(paths, changed_since, tracked=tracked)
+        targets = _collect_targets(paths, tracked=tracked)
     except (GitError, FileNotFoundError) as exc:
         sys.stderr.write(f"error: {exc}\n")
         return EXIT_ERROR

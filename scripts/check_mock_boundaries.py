@@ -15,7 +15,7 @@ Paths may be files or directories (searched recursively); with none given it sca
 `ps-service/tests` and `ps-cli/tests`. `--boundary-file` overrides the approved-boundary YAML.
 Each violation prints as `<file>:<line>: <message>`; the exit status is 1 when any violation is
 found and 0 otherwise. The check runs over the whole tree in the `.insitu.yml` `trunk-worthy`
-wave and over staged files as a local hook in `.pre-commit-config.yaml`; run it by hand with
+wave; run it by hand with
 `uv run python scripts/check_mock_boundaries.py [paths...]`.
 """
 

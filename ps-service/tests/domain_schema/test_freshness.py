@@ -19,13 +19,8 @@ _INTAKE_COPIES = (
     "ps-cli/src/ps_cli/schemas/internal_regulation_intake_v1.schema.json",
 )
 _ARTIFACTS = (CANONICAL_DOC, PACKAGED_DOC, *_INTAKE_COPIES)
-_HOOK_ID = "domain-schema-freshness"
 _CHECK_ID = "verify-domain-schema-freshness"
 _EXPECTED_SUBCOMMANDS = {"check", "write-docs", "print-intake", "measure"}
-_SOURCE_PATHS = (
-    "ps-service/src/ps_service/domain_schema/definition.py",
-    "ps-service/src/ps_service/domain_schema/render_doc.py",
-)
 
 
 @pytest.fixture
@@ -142,28 +137,6 @@ def test_subcommand_set_is_exactly_check_write_docs_print_intake_measure() -> No
     [action] = [a for a in parser._actions if a.dest == "command"]  # pyright: ignore[reportPrivateUsage]  # argparse exposes its subcommands only through the private action list
 
     assert set(action.choices or ()) == _EXPECTED_SUBCOMMANDS
-
-
-def _precommit_hook() -> dict[str, object]:
-    config = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text("utf-8"))
-    hooks = [hook for repo in config["repos"] for hook in repo["hooks"]]
-    [hook] = [hook for hook in hooks if hook["id"] == _HOOK_ID]
-    return hook
-
-
-@pytest.mark.parametrize("relative", [*_ARTIFACTS, *_SOURCE_PATHS])
-def test_precommit_hook_triggers_on_every_artifact_and_source_path(relative: str) -> None:
-    """The hook's `files` regex matches each artifact the check compares."""
-    pattern = str(_precommit_hook()["files"])
-
-    assert re.search(pattern, relative)
-
-
-def test_precommit_hook_runs_the_check_without_filenames() -> None:
-    hook = _precommit_hook()
-
-    assert str(hook["entry"]).endswith(" check")
-    assert hook["pass_filenames"] is False
 
 
 def test_ci_defines_the_check_and_lists_it_in_trunk_worthy() -> None:

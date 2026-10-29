@@ -23,10 +23,8 @@ MCP + REST interfaces) and **FalkorDB** (graph database). Clients: `ps-cli`, the
 - Types: `basedpyright` in strict mode.
 - Dependencies: `pip-audit` against the resolved `uv.lock`.
 - Tests: `pytest` (`uv run pytest -m "not integration and not llm_live and not cellar_live and not falkordb_live and not container_image and not authentik_blueprint"` for the default fast suite).
-- All four run in CI (`trunk-worthy` wave, via `gh insitu run trunk-worthy`) and in the
-  pre-commit hook (`.githooks/pre-commit`, installed via `uv run pre-commit
-install-hooks` — never `pre-commit install`, which refuses since `core.hooksPath` is
-  set).
+- `trunk-worthy` runs in the git commit hook (`.githooks/pre-commit`); CI runs
+  `gh insitu run trunk-worthy test audit`.
 - After AI-driven edits, run `gh insitu run fix-all` — required because AI edits
   bypass editor format-on-save.
 

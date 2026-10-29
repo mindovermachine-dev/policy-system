@@ -64,9 +64,8 @@ _BUILD_TIMEOUT_SECONDS = 1800.0
 _RUN_TIMEOUT_SECONDS = 180.0
 _INSPECT_TIMEOUT_SECONDS = 60.0
 
-# The dev group (`pyproject.toml:4-11`) minus the two that are not importable modules
-# (`pre-commit` installs a `pre_commit` module but is a hook runner, `httpx` is a genuine
-# transitive runtime concern). These three are the dev-only modules absent from the runtime image.
+# The dev group minus `httpx`, which is a genuine transitive runtime concern. These three are the
+# dev-only modules absent from the runtime image.
 _DEV_ONLY_MODULES = ("pytest", "ruff", "basedpyright")
 
 # Probes the installed package's own tree plus the two build-context paths that would betray a

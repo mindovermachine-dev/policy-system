@@ -1,8 +1,9 @@
-"""`.insitu.yml` runs the default pytest suite in the `trunk-worthy` wave.
+"""`.insitu.yml` runs the default pytest suite in the CI-only `test` wave.
 
 The classifier's unit tests must "pass in CI". The default suite is
 hermetic, so the whole of
-`uv run pytest -q` -- not only `ps-service/tests/release` -- becomes a trunk-worthy check.
+`uv run pytest -q` -- not only `ps-service/tests/release` -- is a CI check. It runs after
+`trunk-worthy`, so the commit gate stays fast.
 
 The xdist flags (`-n`, `--dist`) moved out of that command into `addopts` in the root
 `pyproject.toml`, the single source of truth shared with a bare local `pytest`. The command no
@@ -26,6 +27,7 @@ PYTEST_CHECK_ID = "pytest"
 PYTEST_COMMAND = "uv run pytest -q"
 PYPROJECT_FILE = "pyproject.toml"
 TRUNK_WORTHY_WAVE = "trunk-worthy"
+TEST_WAVE = "test"
 POST_CREATE_WAVE = "post-create"
 PREP_RUNNER_WAVE = "prep-runner"
 INSTALL_HELM_CHECK_ID = "install-helm"
@@ -51,16 +53,18 @@ def _entries(document: dict[str, object], key: str) -> dict[str, dict[str, objec
     }
 
 
-def test_trunk_worthy_wave_runs_the_default_pytest_suite(repo_root: Path) -> None:
+def test_test_wave_runs_the_default_pytest_suite_and_trunk_worthy_does_not(
+    repo_root: Path,
+) -> None:
     document = _insitu_document(repo_root)
     checks = _entries(document, "inventory")
     waves = _entries(document, "waves")
 
     assert PYTEST_CHECK_ID in checks, f"no `{PYTEST_CHECK_ID}` check in {INSITU_FILE}"
     assert str(checks[PYTEST_CHECK_ID]["command"]).strip() == PYTEST_COMMAND
-    assert TRUNK_WORTHY_WAVE in waves, f"no `{TRUNK_WORTHY_WAVE}` wave in {INSITU_FILE}"
-    wave_checks = cast("list[str]", waves[TRUNK_WORTHY_WAVE]["checks"])
-    assert PYTEST_CHECK_ID in wave_checks, f"`{TRUNK_WORTHY_WAVE}` does not run `{PYTEST_CHECK_ID}`"
+    assert TEST_WAVE in waves, f"no `{TEST_WAVE}` wave in {INSITU_FILE}"
+    assert PYTEST_CHECK_ID in cast("list[str]", waves[TEST_WAVE]["checks"])
+    assert PYTEST_CHECK_ID not in cast("list[str]", waves[TRUNK_WORTHY_WAVE]["checks"])
 
 
 def test_root_pytest_addopts_enables_xdist_so_the_gate_and_a_bare_run_stay_parallel(

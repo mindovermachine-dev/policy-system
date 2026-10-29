@@ -44,7 +44,8 @@ If you want to try Policy System and evaluate it on your own computer this is do
 ### Contributing to Policy Systems codebase
 
 If you want to help develop and evolve Policy System we welcome your contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for
-development setup, coding standards, testing, and the contribution workflow.
+development setup, coding standards, testing, and the contribution workflow. Every check is defined in `.insitu.yml`;
+run them all with `gh insitu run trunk-worthy test audit`.
 
 ### Understanding the architecture
 
@@ -65,7 +66,7 @@ Every top-level entry in the repository and its purpose. Entries marked untracke
 | `.claude-plugin/`          | Plugin marketplace manifest that distributes `ps-skills/ps-plugin`                                                                   |
 | `.claude/`                 | Claude Code project skills (`skills/`); local state files in it are not tracked                                                      |
 | `CONTRIBUTING.md`          | Development setup, coding standards, testing and release workflow                                                                    |
-| `.cspell.jsonc`            | Spell-check configuration (pre-commit)                                                                                               |
+| `.cspell.jsonc`            | Spell-check configuration (`trunk-worthy`)                                                                                           |
 | `curated-content/`         | Curated, restorable instrument artifacts and `catalog.json`; see its README                                                          |
 | `default.code-workspace`   | VS Code workspace file produced by the `init-takt-devcontainer` skill                                                                |
 | `deploy/`                  | Local kind cluster definition used by `scripts/deploy-ps-eval.sh`                                                                    |
@@ -79,17 +80,16 @@ Every top-level entry in the repository and its purpose. Entries marked untracke
 | `.git-blame-ignore-revs`   | Revisions skipped by `git blame` (currently only a placeholder entry)                                                                |
 | `.gitattributes`           | Line-ending normalisation (`eol=lf`)                                                                                                 |
 | `.gitconfig`               | Repository git settings (hooks path, aliases); include it from your local git config                                                 |
-| `.githooks/`               | Git hooks: pre-commit and pre-push                                                                                                   |
+| `.githooks/`               | Git commit hook; runs `gh insitu run trunk-worthy`                                                                                   |
 | `.github/`                 | GitHub workflows, composite action, issue template, Copilot instructions and skills                                                  |
 | `.gitignore`               | Ignore rules for caches, virtual environments, build output, logs and local state                                                    |
 | `.insitu.yml`              | `gh insitu` task definitions for local checks and fixes                                                                              |
 | `internal-sources/`        | Source documents and seed data for the internal Engineering Practices instrument                                                     |
 | `logs/`                    | Local service logs (untracked, ignored; only `.gitkeep` is tracked)                                                                  |
-| `.markdownlint-cli2.jsonc` | Markdown lint configuration (pre-commit)                                                                                             |
-| `node_modules/`            | Pinned pre-commit tool packages installed by `npm ci` (untracked, ignored)                                                           |
+| `.markdownlint-cli2.jsonc` | Markdown lint configuration (`trunk-worthy`)                                                                                         |
+| `node_modules/`            | Pinned tool packages for `trunk-worthy` installed by `npm ci` (untracked, ignored)                                                   |
 | `package-lock.json`        | Lock file for `package.json`                                                                                                         |
-| `package.json`             | Dev-only pins for prettier, markdownlint-cli2 and cspell used by pre-commit                                                          |
-| `.pre-commit-config.yaml`  | Pre-commit hooks: formatting, lint, type check, spelling, repository checks                                                          |
+| `package.json`             | Dev-only pins for prettier, markdownlint-cli2 and cspell used by `trunk-worthy`                                                      |
 | `.prettierignore`          | Paths prettier does not format                                                                                                       |
 | `ps-cli/`                  | `ps-cli` command-line client for PS Service                                                                                          |
 | `ps-service/`              | PS Service: the REST API, MCP server and ingestion pipeline                                                                          |

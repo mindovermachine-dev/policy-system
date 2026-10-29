@@ -31,7 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          verify: gh insitu run trunk-worthy
+          verify: gh insitu run trunk-worthy test audit
 
   lint-commit-header:
     name: Lint the ready HEAD commit header

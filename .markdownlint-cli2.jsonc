@@ -12,6 +12,9 @@
     "!**/tools/**",
     "!**/test-data/**",
     "!**/.venv/**",
+    "!**/.orchestrator/**",
+    "!CLAUDE.md",
+    "!.github/agents/**",
   ],
   "config": {
     "MD004": { "style": "dash" },

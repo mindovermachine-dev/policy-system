@@ -1,9 +1,9 @@
-"""Tests that the guardrail section of CONTRIBUTING.md lists commands that really exist.
+"""Tests that the guardrail documentation matches the `.insitu.yml` definitions.
 
-Every `uv run pre-commit run <id> --all-files` line must name a declared hook, every
-`uv run python scripts/<name>.py` line must name a script that exists and is wired into a hook or
-a CI check, and the structural pytest guards listed must match the guard test files on disk, so
-the documentation cannot drift from the configuration.
+Every command in the guardrails table of CONTRIBUTING.md must equal the command of the check it
+names in `.insitu.yml`, the three docs that describe the gate must name the wave command, and the
+structural pytest guards listed must match the guard test files on disk, so the documentation
+cannot drift from the configuration.
 """
 
 from __future__ import annotations
@@ -12,20 +12,38 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CONTRIBUTING = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 SECTION_PATTERN = re.compile(r"^## Automated guardrails\n(.*?)^## ", re.DOTALL | re.MULTILINE)
-HOOK_COMMAND = re.compile(r"uv run pre-commit run ([\w-]+) --all-files")
-SCRIPT_COMMAND = re.compile(r"uv run python (scripts/[\w./-]+\.py)")
-CI_REPLICA = "scripts/run_ci_guardrails.py"
+TABLE_ROW = re.compile(r"^\| `([\w-]+)`[^|]*\|[^|]*\| `([^`]+)` +\|$", re.MULTILINE)
 GUARD_DIR = "ps-service/tests/guardrails"
 GUARD_TEST_PATH = re.compile(rf"{re.escape(GUARD_DIR)}/test_\w+\.py")
+GATE_COMMAND = "gh insitu run trunk-worthy"
+FULL_GATE_COMMAND = "gh insitu run trunk-worthy test audit"
+GATE_DOCS = ("CONTRIBUTING.md", "README.md", ".github/copilot-instructions.md")
 
 
-def _yaml(name: str) -> dict[str, Any]:
-    return cast("dict[str, Any]", yaml.safe_load((REPO_ROOT / name).read_text(encoding="utf-8")))
+def _n(*parts: str) -> str:
+    return "".join(parts)
+
+
+FORBIDDEN = "|".join(
+    [
+        _n("pre-commit", " run"),
+        _n("pre-commit", "-config"),
+        _n("pre", "_commit"),
+        _n("pre", "-push"),
+        _n("basedpyright", "-changed"),
+        _n("run_ci", "_guardrails"),
+    ]
+)
+
+
+def _text(name: str) -> str:
+    return (REPO_ROOT / name).read_text(encoding="utf-8")
 
 
 def _section() -> str:
@@ -34,36 +52,35 @@ def _section() -> str:
     return match.group(1)
 
 
-def _hook_ids() -> set[str]:
-    config = _yaml(".pre-commit-config.yaml")
-    return {hook["id"] for repo in config["repos"] for hook in repo["hooks"]}
-
-
-def _ci_commands() -> str:
-    return "\n".join(c.get("command", "") for c in _yaml(".insitu.yml")["inventory"])
+def _insitu_commands() -> dict[str, str]:
+    inventory = cast("list[dict[str, Any]]", yaml.safe_load(_text(".insitu.yml"))["inventory"])
+    return {check["id"]: check.get("command", "") for check in inventory}
 
 
 def test_section_is_listed_in_the_table_of_contents() -> None:
     assert "- [Automated guardrails](#automated-guardrails)" in CONTRIBUTING
 
 
-def test_every_pre_commit_command_names_a_declared_hook() -> None:
-    named = HOOK_COMMAND.findall(_section())
+def test_every_table_command_equals_the_insitu_command_of_its_check() -> None:
+    rows = TABLE_ROW.findall(_section())
+    commands = _insitu_commands()
 
-    assert named
-    assert set(named) <= _hook_ids()
+    assert rows
+    for check_id, command in rows:
+        assert commands.get(check_id) == command, check_id
 
 
-def test_every_script_command_names_an_existing_script_that_is_wired() -> None:
-    scripts = set(SCRIPT_COMMAND.findall(_section())) - {CI_REPLICA}
-    hooks = (REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    ci = _ci_commands()
+@pytest.mark.parametrize("name", GATE_DOCS)
+def test_gate_docs_name_the_wave_command_and_the_other_waves(name: str) -> None:
+    text = " ".join(_text(name).split())
 
-    assert scripts
-    for script in scripts:
-        assert (REPO_ROOT / script).is_file(), script
-        assert script in hooks or script in ci, script
-    assert (REPO_ROOT / CI_REPLICA).is_file()
+    assert GATE_COMMAND in text
+    assert FULL_GATE_COMMAND in text
+
+
+@pytest.mark.parametrize("name", GATE_DOCS)
+def test_gate_docs_name_no_retired_tooling(name: str) -> None:
+    assert re.search(FORBIDDEN, _text(name)) is None
 
 
 def test_every_check_run_in_ci_for_the_guardrails_is_listed() -> None:

@@ -119,8 +119,9 @@ and [`docs/coding-standards/level1-coding-principles.md`](docs/coding-standards/
 Python code is linted with **ruff** (`select = ["ALL"]` minus a documented opt-out
 list), formatted with **ruff format**, type-checked with **basedpyright** in strict
 mode, and its dependencies audited with **pip-audit**. Config lives in the root
-`pyproject.toml`. All four run in CI (`trunk-worthy` wave) and in the pre-commit
-hook; a violation blocks the commit and fails CI.
+`pyproject.toml`. CI runs `gh insitu run trunk-worthy test audit`: ruff check and ruff format
+run in the `trunk-worthy` wave, which is also the git commit hook; basedpyright runs in the
+`test` wave and pip-audit in the `audit` wave. A violation blocks the commit or fails CI.
 
 ## Testing
 
@@ -191,39 +192,37 @@ Run the full local gate exactly as CI does:
 
 ```bash
 uv sync --group dev
-uv run ruff check . && uv run ruff format --check . && uv run basedpyright && \
-  uv export --no-emit-workspace --format requirements-txt --no-hashes | uvx pip-audit@2.10.1 -r /dev/stdin
+gh insitu run trunk-worthy test audit
 ```
 
-(or `uv run pre-commit run --all-files`).
+The waves run in order and a failing wave stops the later ones. `trunk-worthy` is the short
+wave that also runs in the git commit hook; `test` holds pytest and basedpyright; `audit`
+holds pip-audit and the action-reference check.
 
 ## Automated guardrails
 
 Mechanical rules from the audits in [`docs/audits/`](docs/audits/) are checked automatically so
-the cleanup does not regress. Each check runs as a pre-commit hook on the files it watches and
-again in CI (`trunk-worthy` wave) over the whole tree. A failure prints
+the cleanup does not regress. Each check is defined once in `.insitu.yml` and runs over the whole
+tree in the `trunk-worthy` wave: in the git commit hook (`.githooks/pre-commit`) and first in CI. The
+hook checks the working tree, not the index, so a commit passes or fails on what CI will see.
+There is no push-time hook; CI runs all three waves. A failure prints
 `RULE <rule-id>: <file>:<line>: <what>. How to fix: <one line>` for the scripts, and the tool's
 own message for the third-party checks.
 
-| Check (hook and CI id)     | Rules it enforces                                                                                                             | Run it locally                                                                 |
+| Check (`.insitu.yml` id)   | Rules it enforces                                                                                                             | Run it locally                                                                 |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `unused-symbols`           | unused functions, variables, arguments and imports in production code (vulture, confidence 80)                                | `uv run pre-commit run unused-symbols --all-files`                             |
-| `import-layering`          | package layering contracts in `[tool.importlinter]` (import-linter)                                                           | `uv run pre-commit run import-layering --all-files`                            |
+| `unused-symbols`           | unused functions, variables, arguments and imports in production code (vulture, confidence 80)                                | `uv run vulture`                                                               |
+| `import-layering`          | package layering contracts in `[tool.importlinter]` (import-linter)                                                           | `uv run lint-imports`                                                          |
 | `config-drift`             | `env-var-unlisted`, `helm-value-unused`, `helm-prod-orphan`, `helm-value-undocumented`                                        | `uv run python scripts/check_config_drift.py`                                  |
 | `doc-links`                | `doc-link-missing`, `doc-link-anchor`, `doc-path-missing`                                                                     | `uv run python scripts/check_doc_links.py --tracked`                           |
 | `repo-hygiene`             | `tracked-backup-file`, `exec-without-shebang`, `tracked-but-ignored`, `duplicate-gitignore-rule`, `readme-layout-missing-row` | `uv run python scripts/check_repo_hygiene.py`                                  |
 | `docstring-provenance`     | no issue, AC or plan references in Python docstrings and comments                                                             | `uv run python scripts/check_docstring_provenance.py --tracked`                |
 | `mock-boundary-guardrail`  | mocks only at the boundaries listed for the tests                                                                             | `uv run python scripts/check_mock_boundaries.py ps-service/tests ps-cli/tests` |
-| `ruff-check` (rule `T201`) | no `print` in service code                                                                                                    | `uv run ruff check`                                                            |
+| `ruff-check` (rule `T201`) | no `print` in service code                                                                                                    | `uv run ruff check .`                                                          |
 
-Run the whole set the way CI does, against an export of your working tree, with:
-
-```bash
-UV_NO_SYNC=1 uv run python scripts/run_ci_guardrails.py
-```
-
-Use it before delivering. A hook sees only staged files, so deleting or renaming a file that
-others link to trips `doc-links` only in CI and in this command.
+Run the whole set the way the commit hook does with `gh insitu run trunk-worthy`. Because it
+checks the whole working tree, deleting or renaming a file that others link to trips `doc-links`
+at commit time.
 
 ### Structural tests in the default `pytest` run
 
@@ -284,8 +283,8 @@ issue for the cleanup.
 ### Cost of the checks
 
 All five new checks together take about 1 second warm on a development host, against a stated
-budget of 15 seconds for the added CI time and 5 seconds for a typical commit. The first run of
-a pre-commit hook builds its pinned tool environment once and needs network access.
+budget of 15 seconds for the added CI time and 5 seconds for a typical commit. The commit hook
+checks the working tree, so changes left unstaged with `git add -p` are checked too.
 
 ## Releasing
 

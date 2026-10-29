@@ -1,7 +1,7 @@
-"""Tests that the provenance check is wired into the commit hook and the CI gate.
+"""Tests that the provenance check is wired into the `trunk-worthy` wave.
 
-The hook entry and the CI command are read from their configuration files and executed against
-real temporary git repositories, so a drift in either file fails here. The task runner and the
+The check's command is read from `.insitu.yml` and executed against real temporary git
+repositories, so a drift in the file fails here. The task runner and the
 package manager are replaced by a small shell shim that runs the current interpreter; nothing is
 mocked and no network is used (the "remote" is a local bare repository).
 """
@@ -9,7 +9,6 @@ mocked and no network is used (the "remote" is a local bare repository).
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import stat
 import subprocess
@@ -22,7 +21,6 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_docstring_provenance.py"
-PRECOMMIT_PATH = REPO_ROOT / ".pre-commit-config.yaml"
 INSITU_PATH = REPO_ROOT / ".insitu.yml"
 HOOK_ID = "docstring-provenance"
 SUBPROCESS_TIMEOUT_SECONDS = 60
@@ -41,13 +39,6 @@ VIOLATING = (
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     return cast("dict[str, Any]", yaml.safe_load(path.read_text(encoding="utf-8")))
-
-
-def _hook() -> dict[str, Any]:
-    config = _load_yaml(PRECOMMIT_PATH)
-    hooks = [hook for repo in config["repos"] for hook in repo["hooks"] if hook["id"] == HOOK_ID]
-    assert len(hooks) == 1, "the provenance hook must be declared exactly once"
-    return cast("dict[str, Any]", hooks[0])
 
 
 def _insitu_check() -> dict[str, Any]:
@@ -120,77 +111,6 @@ def _install_script(repo: Path) -> None:
     target = repo / "scripts" / "check_docstring_provenance.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(SCRIPT_PATH, target)
-
-
-# --- local hook -------------------------------------------------------------------------------
-
-
-def test_precommit_declares_docstring_provenance_hook() -> None:
-    hook = _hook()
-
-    assert "scripts/check_docstring_provenance.py" in hook["entry"]
-    assert "--changed-since HEAD" in hook["entry"]
-    assert hook["pass_filenames"] is False
-    assert "python" in hook["types"]
-
-
-def test_precommit_hook_excludes_spikes_venv_node_modules_and_orchestrator() -> None:
-    import re
-
-    exclude = re.compile(_hook()["exclude"])
-
-    for excluded in ("spikes/a.py", "pkg/.venv/b.py", "node_modules/c.py", ".orchestrator/d.py"):
-        assert exclude.search(excluded), excluded
-    assert not exclude.search("scripts/check_docstring_provenance.py")
-
-
-@pytest.fixture
-def hook_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "hook_repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _install_script(repo)
-    _write(repo / "pkg" / "mod.py", CLEAN)
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "base")
-    return repo
-
-
-def _run_hook(repo: Path, shim: Path) -> subprocess.CompletedProcess[str]:
-    argv = shlex.split(_hook()["entry"])
-    return _run(argv, repo, _env(shim), check=False)
-
-
-def test_hook_entry_fails_for_staged_python_file_with_provenance(
-    hook_repo: Path, shim_dir: Path
-) -> None:
-    _write(hook_repo / "pkg" / "mod.py", VIOLATING)
-    _git(hook_repo, "add", "pkg/mod.py")
-
-    result = _run_hook(hook_repo, shim_dir)
-
-    assert result.returncode == 1, result.stderr
-    assert "pkg/mod.py:" in result.stdout
-    assert "ac-id" in result.stdout
-
-
-def test_hook_entry_passes_for_staged_clean_python_file(hook_repo: Path, shim_dir: Path) -> None:
-    _write(hook_repo / "pkg" / "mod.py", CLEAN + "\n\nVALUE = 1\n")
-    _git(hook_repo, "add", "pkg/mod.py")
-
-    result = _run_hook(hook_repo, shim_dir)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_hook_entry_ignores_untouched_legacy_violation(hook_repo: Path, shim_dir: Path) -> None:
-    _write(hook_repo / "legacy.py", VIOLATING)
-    _git(hook_repo, "add", "-A")
-    _git(hook_repo, "commit", "-q", "-m", "legacy")
-    _write(hook_repo / "pkg" / "mod.py", CLEAN + "\n\nVALUE = 1\n")
-    _git(hook_repo, "add", "pkg/mod.py")
-
-    assert _run_hook(hook_repo, shim_dir).returncode == 0
 
 
 # --- CI gate ----------------------------------------------------------------------------------
