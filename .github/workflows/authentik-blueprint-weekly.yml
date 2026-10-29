@@ -29,7 +29,7 @@ jobs:
     steps:
       # Full history: the gate compares against origin/main when it is not forced.
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false

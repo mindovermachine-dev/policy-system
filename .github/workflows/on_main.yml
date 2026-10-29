@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -50,7 +50,7 @@ jobs:
           fi
           echo "READY_PUSHER is configured."
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
