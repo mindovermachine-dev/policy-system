@@ -2,14 +2,13 @@
   "name": "policy-system",
   "private": true,
   "devDependencies": {
-    "cspell": "10.2.0",
-    "@cspell/dict-da-dk": "4.1.2",
-    "markdownlint-cli2": "0.23.3",
-    "prettier": "3.9.6"
+    "cspell": "10.4.0",
+    "@cspell/dict-da-dk": "4.1.3",
+    "markdownlint-cli2": "0.24.0",
+    "prettier": "3.9.10"
   },
   "overrides": {
-    "markdown-it": "15.0.3",
-    "smol-toml": "1.9.0",
-    "katex": "0.18.2"
+    "katex": "0.18.2",
+    "re2js": "2.8.7"
   }
 }
