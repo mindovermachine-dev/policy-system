@@ -1,0 +1,85 @@
+# Dependabot version updates. Pull requests only propose; nothing here merges. A human approval
+# triggers `pr-to-ready.yml`, which lands the change like any other branch.
+#
+# Commit prefixes follow what ships: `fix(deps)` for runtime Python dependencies, the Docker
+# image and the Authentik chart (a patch release), `build(deps)` for dev Python dependencies
+# and npm, `ci(deps)` for Actions. Every prefix must pass `scripts/release/lint-commit-header.sh`.
+# Groups hold minor and patch updates only; a major update always gets its own pull request.
+#
+# Invisible to Dependabot and updated by hand, see "Dependency updates" in CONTRIBUTING.md:
+#   - the uv version, pinned in six places that must agree:
+#       Dockerfile:16 (and the prose comment at Dockerfile:15)
+#       .github/actions/prep-runner/action.yml
+#       .github/workflows/backup-restore-e2e.yml
+#       .github/workflows/on_semver.yml (two steps)
+#       .devcontainer/devcontainer.json
+#   - kubectl and the devcontainer Node version
+#   - the FalkorDB tag in charts/policy-system/values.yaml
+#   - the npm `overrides` block in package.json (katex, re2js)
+# An Authentik chart bump also needs values-prod.yaml, templates/_helpers.tpl and
+# docs/architecture/customer-azure-deployment.md updated, so that pull request is a trigger and
+# not merge-ready as opened.
+version: 2
+
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "fix(deps)"
+      prefix-development: "build(deps)"
+    groups:
+      python-runtime:
+        dependency-type: production
+        update-types: [minor, patch]
+      python-dev:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+      prefix-development: "build(deps)"
+    groups:
+      npm-dev:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "fix(deps)"
+    ignore:
+      # The uv image tag is one of six pins kept in step by hand.
+      - dependency-name: ghcr.io/astral-sh/uv
+      # The interpreter moves deliberately, not weekly.
+      - dependency-name: python
+        update-types:
+          ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: helm
+    directory: /charts/policy-system
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "fix(deps)"
+
+  - package-ecosystem: github-actions
+    # The composite action is not scanned from `/`.
+    directories:
+      - /
+      - /.github/actions/prep-runner
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

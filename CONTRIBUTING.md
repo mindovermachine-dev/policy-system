@@ -6,6 +6,7 @@ Thank you for considering contributing to this project!
 
 - [Workflow](#workflow)
 - [Development Setup](#development-setup)
+- [Dependency updates](#dependency-updates)
 - [Coding Standards](#coding-standards)
 - [Testing](#testing)
 - [Automated guardrails](#automated-guardrails)
@@ -110,6 +111,42 @@ closed until you run `python -m ps_service.graph_gateway.provision` once with ad
 `PS_STATE_POSTGRES_*`). The same command first applies the ordinary `ps_state` migrations as the
 application role, so it also works against an empty database. The admin role must be able to
 `SET ROLE` to the application role. See the [Operations Guide](docs/artifacts/operations-guide.md#upgrading-to-the-graph-mutation-log).
+
+## Dependency updates
+
+[`.github/dependabot.yml`](.github/dependabot.yml) proposes weekly updates for uv, npm, Docker,
+Helm and GitHub Actions. Dependabot only opens pull requests; nothing merges automatically.
+
+How a Dependabot pull request lands:
+
+1. Review the pull request and approve it. The approving review triggers `pr-to-ready.yml`, which
+   squashes it onto a `ready/*` branch, and `on_ready.yml` then runs the full gate and merges to
+   `main`, as for any other branch. `pr-to-ready.yml` needs the `READY_PUSHER` secret, which for
+   Dependabot-triggered runs must be set as a Dependabot secret.
+2. The pull request title must pass `scripts/release/lint-commit-header.sh`, or `pr-to-ready`
+   stops it. The `commit-message` prefixes in the config guarantee that for version updates and
+   security updates alike.
+3. The prefix says what ships: `fix(deps)` for runtime Python dependencies, the Docker image and
+   the Authentik chart (a patch release), `build(deps)` for dev Python dependencies and npm,
+   `ci(deps)` for Actions (no release). Minor and patch updates are grouped; a major update
+   always gets its own pull request.
+
+Dependabot cannot see the following, so update them by hand:
+
+- **The uv version.** It is pinned in six places that must agree, plus one comment: `Dockerfile`
+  (the `COPY --from=ghcr.io/astral-sh/uv:` line and the comment above it),
+  `.github/actions/prep-runner/action.yml`, `.github/workflows/backup-restore-e2e.yml`,
+  `.github/workflows/on_semver.yml` (two steps) and `.devcontainer/devcontainer.json`.
+  `test_dependabot_config.py` fails when they disagree. The uv image is excluded from Docker
+  updates for this reason.
+- **The npm `overrides` block** in `package.json` (katex and re2js). Dependabot does not update it.
+- **kubectl and the devcontainer Node version.**
+- **The FalkorDB tag** in `charts/policy-system/values.yaml`; follow
+  [Bumping the FalkorDB image](#bumping-the-falkordb-image).
+
+An Authentik chart bump is a trigger, not a finished change. The pull request as opened must also
+get `charts/policy-system/values-prod.yaml`, `charts/policy-system/templates/_helpers.tpl` and
+`docs/architecture/customer-azure-deployment.md` updated before it is approved.
 
 ## Coding Standards
 
