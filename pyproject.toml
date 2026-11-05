@@ -6,7 +6,7 @@ dev = [
     "basedpyright==1.40.2",
     "httpx>=0.28.1",
     "import-linter==2.15",
-    "pytest>=8.0.0",
+    "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.6.1",
     "pyyaml>=6.0.3",   # scripts/check_mock_boundaries.py (AC-BI-009): parses docs/coding-standards/approved-mock-boundaries.yaml
