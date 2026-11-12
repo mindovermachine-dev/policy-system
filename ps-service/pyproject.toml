@@ -6,7 +6,7 @@ requires-python = ">=3.14"
 dependencies = [
     "defusedxml==0.7.1",
     "falkordb==1.8.1",
-    "fastapi==0.162.0",
+    "fastapi==0.162.2",
     "hiredis==3.5.0",
     "jsonschema==4.26.0",
     "litellm==1.103.10",
