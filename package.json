@@ -2,7 +2,7 @@
   "name": "policy-system",
   "private": true,
   "devDependencies": {
-    "cspell": "10.4.0",
+    "cspell": "10.4.1",
     "@cspell/dict-da-dk": "4.1.3",
     "markdownlint-cli2": "0.24.0",
     "prettier": "3.9.10"
