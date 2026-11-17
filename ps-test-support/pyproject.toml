@@ -5,7 +5,7 @@ description = "Policy System shared test-support fixtures: mock OIDC provider us
 requires-python = ">=3.14"
 dependencies = [
     "pyjwt[crypto]==2.15.1",
-    "pytest>=8.0.0",
+    "pytest>=9.2.0",
 ]
 
 [build-system]
