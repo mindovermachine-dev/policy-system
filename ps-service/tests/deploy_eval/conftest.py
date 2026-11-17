@@ -4,7 +4,7 @@
 Same pattern as `deploy_ps/conftest.py`: the real script and the real `scripts/lib/*.sh` files are
 copied into an isolated `tmp_path/scripts` tree and run there; only the process boundary is faked.
 `curl` is the stateful Authentik API fake from `tests/fixtures/fakes/`; `kubectl`, `helm`,
-`podman`/`docker`, `ip`/`route`/`ipconfig`, `uname`, `security` and `openssl` (network `s_client`;
+`ip`/`route`/`ipconfig`, `uname`, `security` and `openssl` (network `s_client`;
 certificate generation and parsing run the real binary) are small recording fakes written below
 and put first on a minimal `PATH` that contains nothing else but the coreutils the script needs,
 so "tool missing" is real.
@@ -31,7 +31,7 @@ FAKES_DIR = REPO_ROOT / "ps-service" / "tests" / "fixtures" / "fakes"
 SCRIPT_TIMEOUT_SECONDS = 60
 TOKEN = "s3cr3t-authentik-token-value"
 OWNER_EMAIL = "owner@example.com"
-NODE_IP = "10.89.0.7"
+INGRESS_ALIAS_IP = "10.96.0.42"
 
 COPIED_FILES = (
     Path("scripts/deploy-ps-eval.sh"),
@@ -40,8 +40,8 @@ COPIED_FILES = (
     Path("scripts/lib/local-tls.sh"),
 )
 
-# Coreutils and friends the scripts and libs call. Everything else (kubectl, helm, jq, podman,
-# docker, openssl, curl) is placed explicitly so a test can leave one out.
+# Coreutils and friends the scripts and libs call. Everything else (kubectl, helm, jq,
+# openssl, curl) is placed explicitly so a test can leave one out.
 SYSTEM_TOOLS = (
     "bash",
     "sh",
@@ -105,6 +105,9 @@ case "$line" in
     [[ -z "${PS_TEST_APPLY_FAIL:-}" ]] || { echo 'error: apply failed' >&2; exit 1; }
     cat >> "$PS_TEST_KUBECTL_APPLIED"
     printf 'secret/applied configured\n'
+    ;;
+  "get service policy-system-ingress-alias -o jsonpath={.spec.clusterIP}")
+    printf '%s' "${PS_TEST_INGRESS_ALIAS_IP-10.96.0.42}"
     ;;
   "get service policy-system-proxy -o name")
     [[ -n "${PS_TEST_PROXY_SERVICE:-}" ]] || { echo 'NotFound' >&2; exit 1; }
@@ -605,9 +608,7 @@ def eval_fixture(tmp_path: Path) -> EvalFixture:
     _install_text_fake(FAKE_KUBECTL, fixture.bin_dir / "kubectl")
     _install_text_fake(FAKE_HELM, fixture.bin_dir / "helm")
     _install_text_fake(FAKE_OPENSSL, fixture.bin_dir / "openssl")
-    fixture.add_container_engine("podman")
     fixture.set_addresses(*DEFAULT_HOST_ADDRESSES)
     fixture.seed_curl()
     fixture.use_real_openssl()
-    fixture.env_extra["PS_TEST_PODMAN_NODE_IP"] = NODE_IP
     return fixture

@@ -108,6 +108,9 @@ readonly AUTHENTIK_SERVER_SERVICE="${HELM_RELEASE_NAME}-authentik-server"
 readonly INGRESS_PORT=30443
 readonly INGRESS_NAMESPACE="ingress-nginx"
 readonly INGRESS_CONTROLLER_MANIFEST="deploy/kind/ingress-nginx.yaml"
+# ClusterIP Service in front of the ingress controller on INGRESS_PORT; PS Service resolves the
+# Authentik hostname to its cluster IP (see ensure_ingress_alias).
+readonly INGRESS_ALIAS_SERVICE="policy-system-ingress-alias"
 readonly INGRESS_CLASS_NAME="nginx"
 # Authentik serves every page under this path (the chart's AUTHENTIK_WEB__PATH), so the issuer,
 # the API base, the enrolment link and the admin UI all sit below it.
@@ -145,7 +148,7 @@ chart_version_args=()
 hostname_arg="$EVALUATOR_HOSTNAME"
 kind_context=""
 namespace="default"
-node_ip=""
+ingress_alias_ip=""
 apply_host_setup=false
 allow_public_host=false
 check_exposure_only=false
@@ -416,9 +419,6 @@ check_required_tools() {
   for tool in kubectl helm openssl jq curl; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
-  if ! command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
-    missing+=("podman (or docker)")
-  fi
   if [[ ${#missing[@]} -gt 0 ]]; then
     local joined="" item
     for item in "${missing[@]}"; do
@@ -482,21 +482,43 @@ require_llm_secret() {
   fi
 }
 
-# detect_node_ip: the kind node container's own IP on the `kind` network (PS Service's pod must
-# resolve the Authentik hostname to it). Works under podman and docker; the node's name follows
-# the cluster name (context kind-<name> -> <name>-control-plane).
-detect_node_ip() {
-  local node="${kind_context#kind-}-control-plane" engine
-  node_ip=""
-  for engine in podman docker; do
-    command -v "$engine" >/dev/null 2>&1 || continue
-    node_ip="$("$engine" inspect "$node" \
-      --format '{{ (index .NetworkSettings.Networks "kind").IPAddress }}' 2>/dev/null || true)"
-    [[ -n "$node_ip" ]] && break
-  done
-  if [[ -z "$node_ip" ]]; then
-    print_error 'Cannot find the kind node container "%s". Fix: check the cluster is running (kind get clusters, podman ps) and that kubectl points at it, then re-run.\n' \
-      "$node"
+# ensure_ingress_alias: applies a ClusterIP Service in front of the ingress controller that listens
+# on the ingress port, and sets ingress_alias_ip to its cluster IP. PS Service's pod resolves the
+# Authentik hostname to this address, so its OIDC calls reach the same ingress (and the same
+# https://<host>:<port> issuer) a browser reaches on the node's host port. A cluster IP is kept
+# in the cluster's own state for the life of the Service; the kind node container's IP is not,
+# and can change when the node restarts.
+ensure_ingress_alias() {
+  if ! kubectl apply -f - >/dev/null <<EOF; then
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${INGRESS_ALIAS_SERVICE}
+  namespace: ${INGRESS_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/part-of: policy-system-eval
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: ingress-nginx
+    app.kubernetes.io/name: ingress-nginx
+  ports:
+    - name: https
+      protocol: TCP
+      port: ${INGRESS_PORT}
+      targetPort: https
+EOF
+    print_error 'Cannot create the Service %s in namespace %s. Fix: check kubectl can reach the cluster and create Services there, then re-run.\n' \
+      "$INGRESS_ALIAS_SERVICE" "$INGRESS_NAMESPACE"
+    exit "$EXIT_FAILURE"
+  fi
+  ingress_alias_ip="$(kubectl -n "$INGRESS_NAMESPACE" get service "$INGRESS_ALIAS_SERVICE" \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  if [[ ! "$ingress_alias_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    print_error 'The Service %s in namespace %s has no cluster IP. Fix: check it with kubectl -n %s get service %s, then re-run.\n' \
+      "$INGRESS_ALIAS_SERVICE" "$INGRESS_NAMESPACE" "$INGRESS_NAMESPACE" "$INGRESS_ALIAS_SERVICE"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -699,7 +721,7 @@ authentik_issuer() {
 release_values_json() {
   local host="$1" issuer="$2"
   jq -n --arg llm "$LLM_SECRET_NAME" --arg tls "$TLS_SECRET_NAME" --arg ca "$CA_SECRET_NAME" \
-    --arg host "$host" --arg ip "$node_ip" --arg issuer "$issuer" --arg app "$AUTHENTIK_APP_SLUG" \
+    --arg host "$host" --arg ip "$ingress_alias_ip" --arg issuer "$issuer" --arg app "$AUTHENTIK_APP_SLUG" \
     --arg scopes "$AUTHENTIK_SCOPES" --arg owner "$OWNER_EMAIL" \
     --arg base "$(authentik_cluster_base_url)" --arg public "$(authentik_base_url "$host")" \
     --arg origin "$(ps_service_url "$host")" --arg class "$INGRESS_CLASS_NAME" \
@@ -1096,7 +1118,6 @@ main() {
   require_ingress_controller
   require_llm_secret
   prompt_owner_email || exit "$EXIT_FAILURE"
-  detect_node_ip
 
   trap stop_authentik_port_forward EXIT
 
@@ -1105,6 +1126,7 @@ main() {
   log_step "Preparing local TLS for ${hostname_arg}"
   ensure_local_leaf "$hostname_arg" || exit "$EXIT_FAILURE"
   announce_migration "$hostname_arg" "$issuer" "$(local_tls_state_dir)/ca.pem"
+  ensure_ingress_alias
   apply_local_tls_secret "$namespace" "$TLS_SECRET_NAME" "$CA_SECRET_NAME"
 
   log_step "Reconciling the Helm release"

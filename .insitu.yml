@@ -147,7 +147,7 @@ inventory:
     timeout: 10m
     command: |
       uv export --no-emit-workspace --format requirements-txt --no-hashes \
-        | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off
+        | uvx --python "$(cat .python-version)" pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off
 
   - id: helm-dependency-build
     name: Fetch the Helm chart's dependencies (e.g. Authentik)

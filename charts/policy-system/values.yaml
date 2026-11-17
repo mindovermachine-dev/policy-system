@@ -226,12 +226,15 @@ psService:
   # entry so pods can resolve host.containers.internal when llm.provider is
   # ollama. Empty by default — the chart can't know this statically.
   ollamaHostGatewayIP: ""
-  # Hostname PS Service's own pod must resolve to the kind node's container IP so its
-  # OIDC issuer validation (PS_AUTH_ISSUER, issue #58) reaches the SAME bundled Authentik
-  # instance a LAN client reaches -- via the ingress controller's fixed NodePort mapped in
-  # deploy/kind/cluster.yaml, never a Service DNS name (a browser/ps-cli off-cluster cannot
-  # resolve cluster-internal DNS). The Ingress host is this hostname. Both empty by default --
-  # the chart can't know either statically, same posture as ollamaHostGatewayIP above.
+  # Hostname PS Service's own pod must resolve to authentikHostAliasIP so its OIDC issuer
+  # validation (PS_AUTH_ISSUER, issue #58) reaches the SAME bundled Authentik instance a LAN
+  # client reaches -- through the ingress controller on the same https://<host>:30443 issuer,
+  # never a Service DNS name (a browser/ps-cli off-cluster cannot resolve cluster-internal
+  # DNS). The evaluator script sets authentikHostAliasIP to the cluster IP of a ClusterIP
+  # Service it creates in front of the ingress controller on port 30443, not to the kind node
+  # container's IP: the node's IP can change when the node restarts, a cluster IP does not.
+  # The Ingress host is this hostname. Both empty by default -- the chart can't know either
+  # statically, same posture as ollamaHostGatewayIP above.
   # A human/ps-cli client on the evaluator's own machine adds the same hostname to their own
   # /etc/hosts pointing at 127.0.0.1; a colleague on the same LAN points it at the
   # evaluator's laptop's LAN IP instead. See docs/artifacts/evaluator-installation-guide.md.

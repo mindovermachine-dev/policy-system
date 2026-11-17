@@ -1,17 +1,19 @@
 """Tests for `scripts/deploy-ps-eval.sh`.
 
 The real script and libs run in a temp tree; only the process boundary is faked (kubectl, helm,
-podman/docker, openssl network calls and, here, certificate generation, and the stateful
+openssl network calls and, here, certificate generation, and the stateful
 Authentik-API `curl`).
 """
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
+import yaml
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,7 +23,7 @@ if TYPE_CHECKING:
 
 # Mirror deploy_eval/conftest.py's own constants (hardcoded, same precedent as deploy_ps).
 OWNER_EMAIL = "owner@example.com"
-NODE_IP = "10.89.0.7"
+INGRESS_ALIAS_IP = "10.96.0.42"
 TOKEN = "s3cr3t-authentik-token-value"
 HOST = "ps.test"
 LAN = "192.168.1.5"
@@ -98,7 +100,7 @@ def test_fresh_run_deploys_once_with_owner_subject_issuer_and_base_url(
     assert ps["authzBootstrapOwner"] == {"subject": OWNER_EMAIL, "issuer": ISSUER}
     assert ps["authentik"] == {"baseUrl": IN_CLUSTER_AUTH, "publicUrl": AUTH_BASE}
     assert ps["authentikHostname"] == HOST
-    assert ps["authentikHostAliasIP"] == NODE_IP
+    assert ps["authentikHostAliasIP"] == INGRESS_ALIAS_IP
     assert ps["publicUrl"] == f"https://{HOST}:30443"
     assert ps["localTestBypass"] == {"enabled": False}
     assert values["authentik"]["enabled"] is True
@@ -485,42 +487,64 @@ def test_help_still_works_with_the_hostname_check(eval_fixture: EvalFixture) -> 
     assert "usage:" in run.stdout
 
 
-def test_a_container_engine_is_required(eval_fixture: EvalFixture) -> None:
-    eval_fixture.remove_tool("podman")
-
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, expect=1)
-
-    assert "podman" in run.stderr
-    assert "docker" in run.stderr
-    assert _mutations(eval_fixture) == []
-
-
-def test_docker_is_used_for_the_node_ip_when_podman_is_absent(eval_fixture: EvalFixture) -> None:
-    eval_fixture.remove_tool("podman")
-    eval_fixture.add_container_engine("docker")
-
-    eval_fixture.run("--owner-email", OWNER_EMAIL)
-
-    assert eval_fixture.deployed_values()["psService"]["authentikHostAliasIP"] == NODE_IP
+def _applied_alias_service(fixture: EvalFixture) -> dict[str, Any]:
+    # The fake kubectl appends each applied manifest as-is, without a `---` separator.
+    applied = (fixture.root / "kubectl-applied.yaml").read_text()
+    chunks = re.split(r"(?m)^(?=apiVersion:)", applied)
+    docs = [d for d in map(yaml.safe_load, chunks) if d and d.get("kind") == "Service"]
+    assert len({d["metadata"]["name"] for d in docs}) == 1
+    return docs[-1]
 
 
-def test_the_node_container_name_follows_the_kind_context(eval_fixture: EvalFixture) -> None:
+def test_no_container_engine_is_needed_or_called(eval_fixture: EvalFixture) -> None:
+    eval_fixture.add_container_engine("podman")
     eval_fixture.env_extra["PS_TEST_PODMAN_LOG"] = str(eval_fixture.root / "podman.log")
 
-    eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_KUBE_CONTEXT="kind-ps-165-lc2")
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+    eval_fixture.remove_tool("podman")
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
 
-    calls = [
-        json.loads(line) for line in (eval_fixture.root / "podman.log").read_text().splitlines()
+    assert not (eval_fixture.root / "podman.log").exists()
+
+
+def test_the_alias_service_fronts_the_ingress_https_port(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    service = _applied_alias_service(eval_fixture)
+    assert service["metadata"]["name"] == "policy-system-ingress-alias"
+    assert service["metadata"]["namespace"] == "ingress-nginx"
+    assert service["spec"]["type"] == "ClusterIP"
+    assert service["spec"]["selector"] == {
+        "app.kubernetes.io/component": "controller",
+        "app.kubernetes.io/instance": "ingress-nginx",
+        "app.kubernetes.io/name": "ingress-nginx",
+    }
+    assert service["spec"]["ports"] == [
+        {"name": "https", "protocol": "TCP", "port": 30443, "targetPort": "https"}
     ]
-    inspect = next(c for c in calls if c[0] == "inspect")
-    assert "ps-165-lc2-control-plane" in inspect
+    assert "nodePort" not in json.dumps(service)
 
 
-def test_an_unresolvable_node_ip_fails_with_a_fix(eval_fixture: EvalFixture) -> None:
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_PODMAN_INSPECT_EXIT="1", expect=1)
+def test_the_host_alias_is_the_alias_service_cluster_ip(eval_fixture: EvalFixture) -> None:
+    eval_fixture.run("--owner-email", OWNER_EMAIL, PS_TEST_INGRESS_ALIAS_IP="10.96.7.7")
 
-    assert "kind node" in run.stderr
-    assert _mutations(eval_fixture) == []
+    ps = eval_fixture.deployed_values()["psService"]
+    assert ps["authentikHostname"] == HOST
+    assert ps["authentikHostAliasIP"] == "10.96.7.7"
+
+
+@pytest.mark.parametrize("cluster_ip", ["", "None"])
+def test_an_alias_service_without_a_cluster_ip_fails_before_helm(
+    eval_fixture: EvalFixture, cluster_ip: str
+) -> None:
+    run = eval_fixture.run(
+        "--owner-email", OWNER_EMAIL, PS_TEST_INGRESS_ALIAS_IP=cluster_ip, expect=1
+    )
+
+    assert "policy-system-ingress-alias" in run.stderr
+    assert "no cluster IP" in run.stderr
+    assert eval_fixture.helm_upgrades() == []
+    assert _api_calls(eval_fixture) == []
 
 
 def test_a_non_kind_context_is_refused_before_any_change(eval_fixture: EvalFixture) -> None:
@@ -2038,7 +2062,7 @@ def test_addresses_inside_the_private_ranges_pass(eval_fixture: EvalFixture, add
 def test_check_exposure_mode_exits_after_the_check_without_tool_checks(
     eval_fixture: EvalFixture,
 ) -> None:
-    for tool in ("kubectl", "helm", "openssl", "curl", "jq", "podman"):
+    for tool in ("kubectl", "helm", "openssl", "curl", "jq"):
         eval_fixture.remove_tool(tool)
 
     run = eval_fixture.run("--check-exposure")
