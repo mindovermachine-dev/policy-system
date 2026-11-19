@@ -42,7 +42,7 @@ jobs:
           version: "0.13.6"
 
       - name: Set up helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           version: v4.3.1
 
@@ -51,7 +51,7 @@ jobs:
       # Port 5000 on purpose: registry v3 serves its debug endpoint on 5001 and exits when the
       # API is told to listen there too.
       - name: Create the kind cluster and local registry
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           version: v0.33.0
           node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
