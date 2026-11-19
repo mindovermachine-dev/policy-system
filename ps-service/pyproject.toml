@@ -5,7 +5,7 @@ description = "Policy System backend service: EU regulation ingestion, complianc
 requires-python = ">=3.14"
 dependencies = [
     "defusedxml==0.7.1",
-    "falkordb==1.8.1",
+    "falkordb==1.8.2",
     "fastapi==0.162.0",
     "hiredis==3.5.0",
     "jsonschema==4.26.0",
